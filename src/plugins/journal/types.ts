@@ -4,7 +4,8 @@
 import type { SqliteDriver } from "./driver/types";
 
 /**
- *
+ * Journal core plugin configuration: durable file path, checkpoint cadence,
+ * and SQLite busy-timeout tuning.
  */
 export type Config = {
   /** Path to the journal database file. */
@@ -16,7 +17,8 @@ export type Config = {
 };
 
 /**
- *
+ * Journal core plugin mutable state: the open driver connection and the
+ * writer-side checkpoint timer handle, both null until `onStart`.
  */
 export type State = {
   /** Open driver connection; null until onStart. */
@@ -26,15 +28,15 @@ export type State = {
 };
 
 /**
- *
+ * Lifecycle status of a `runs` row — one row per invocation.
  */
 export type RunStatus = "active" | "done" | "failed" | "paused" | "budget-stopped";
 /**
- *
+ * State-machine status of an `items` row: `queued → dispatching → done | failed | flagged`.
  */
 export type ItemStatus = "queued" | "dispatching" | "done" | "failed" | "flagged";
 /**
- *
+ * Classification of a failed provider attempt, recorded on the `attempts` row.
  */
 export type ErrorClass =
   | "http-5xx"
@@ -44,12 +46,12 @@ export type ErrorClass =
   | "http-4xx"
   | "content-policy";
 /**
- *
+ * Terminal outcome of a single provider attempt.
  */
 export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged";
 
 /**
- *
+ * One `runs` row — the single durable record for an invocation.
  */
 export type RunRow = {
   id: string;
@@ -61,7 +63,7 @@ export type RunRow = {
 };
 
 /**
- *
+ * Planning-time intent for one item, as submitted to `insertItems`.
  */
 export type ItemIntent = {
   planningKey: string;
@@ -73,7 +75,7 @@ export type ItemIntent = {
 };
 
 /**
- *
+ * One `items` row — an `ItemIntent` plus durable state-machine and identity fields.
  */
 export type ItemRow = ItemIntent & {
   id: string;
@@ -87,12 +89,13 @@ export type ItemRow = ItemIntent & {
 };
 
 /**
- *
+ * Result of `gateToDispatching` — a discriminated union that narrows on `ok`.
  */
 export type GateResult = { ok: true } | { ok: false; reason: "budget" | "duplicate" };
 
 /**
- *
+ * Aggregate item counts and spend for one run, used for progress events,
+ * budget math, and `moku status`.
  */
 export type RunTotals = {
   total: number;
@@ -106,11 +109,11 @@ export type RunTotals = {
 };
 
 /**
- *
+ * Fields recorded when a provider attempt begins, passed to `recordAttempt`.
  */
 export type AttemptStart = { provider: string; account: string; startedAt: number };
 /**
- *
+ * Fields recorded when a provider attempt ends, passed to `finishAttempt`.
  */
 export type AttemptEnd = {
   endedAt: number;
@@ -119,16 +122,19 @@ export type AttemptEnd = {
   costUsd?: number;
 };
 /**
- *
+ * Point-in-time read of a run: the run row, its aggregate totals, and its
+ * most recently updated items. Returned by `readSnapshot`.
  */
 export type RunSnapshot = { run: RunRow; totals: RunTotals; recentItems: ItemRow[] };
 /**
- *
+ * Optional filter for `listItems`: narrow by status, cap the row count, or
+ * page by `updated_at`.
  */
 export type ItemFilter = { status?: ItemStatus; limit?: number; afterUpdatedAt?: number };
 
 /**
- *
+ * The journal's public API surface, injected as `ctx.journal` on every
+ * regular plugin's context.
  */
 export type JournalApi = {
   openRun(opts: { glob: string; maxCostUsd?: number }): RunRow;

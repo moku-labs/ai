@@ -6,6 +6,7 @@
  */
 import { createCorePlugin } from "@moku-labs/core";
 import { createJournalApi } from "./api";
+import { closeDriver, openDriver } from "./driver";
 import { createJournalState } from "./state";
 import type { Config } from "./types";
 
@@ -25,31 +26,6 @@ export const journalPlugin = createCorePlugin("journal", {
   config: defaultConfig,
   createState: createJournalState,
   api: createJournalApi,
-  /**
-   * Opens the driver, applies the durability pragma set
-   * (WAL/FULL/fullfsync/busy_timeout), creates the schema, and starts the
-   * checkpoint timer.
-   *
-   * @param _ctx - Core plugin lifecycle context.
-   * @example
-   * ```ts
-   * await app.start();
-   * ```
-   */
-  onStart: async _ctx => {
-    throw new Error("not implemented");
-  },
-  /**
-   * Stops the checkpoint timer, runs a final wal_checkpoint(TRUNCATE), and
-   * closes the driver.
-   *
-   * @param _ctx - Core plugin lifecycle context.
-   * @example
-   * ```ts
-   * await app.stop();
-   * ```
-   */
-  onStop: async _ctx => {
-    throw new Error("not implemented");
-  }
+  onStart: openDriver,
+  onStop: closeDriver
 });
