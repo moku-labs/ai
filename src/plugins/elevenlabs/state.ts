@@ -1,10 +1,10 @@
 /**
- * @file elevenlabs provider plugin — state factory skeleton.
+ * @file elevenlabs provider plugin — state factory.
  */
 import type { State } from "./types";
 
 /**
- * Creates initial elevenlabs state (price table computed at first use).
+ * Creates initial elevenlabs state (price table not yet computed).
  *
  * @returns Initial elevenlabs state.
  * @example
