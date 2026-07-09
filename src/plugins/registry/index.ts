@@ -1,9 +1,10 @@
 /**
  * Nano tier — dumb task→provider→handler transport (registry).
  *
- * CONSTRAINT: must NEVER become a core plugin — providers register from
- * onInit via ctx.require(registryPlugin), which core-plugin context cannot
- * provide (spec/11 §1.15–1.16).
+ * PERMANENT CONSTRAINT: must NEVER become a core plugin — providers register
+ * from onInit via `ctx.require(registryPlugin)`, and `require`/`depends` are
+ * structurally unavailable in core-plugin context (spec/11 §1.15–1.16). The
+ * registry itself never inspects, wraps, or types what it transports.
  *
  * @see README.md
  */
@@ -29,63 +30,74 @@ export const registryPlugin = createPlugin("registry", {
   /**
    * Builds the registry API surface.
    *
-   * @param _ctx - Plugin context (unused in skeleton).
+   * @param ctx - Plugin context; only `ctx.state` is read/mutated.
    * @returns Registry API methods.
    * @example
    * ```ts
    * const providers = app.registry.providers("voiceover");
    * ```
    */
-  api: _ctx => ({
+  api: ctx => ({
     /**
      * Registers a handler for (task, provider). Throws on duplicates.
      *
-     * @param _task - Task key, e.g. "voiceover".
-     * @param _provider - Provider name, e.g. "elevenlabs".
-     * @param _handler - Opaque handler (narrowed by the owning task plugin).
+     * @param task - Task key, e.g. "voiceover".
+     * @param provider - Provider name, e.g. "elevenlabs".
+     * @param handler - Opaque handler (narrowed by the owning task plugin).
+     * @throws {Error} When (task, provider) is already registered.
      * @example
      * ```ts
      * ctx.require(registryPlugin).register("voiceover", "elevenlabs", handler);
      * ```
      */
-    register(_task: string, _provider: string, _handler: unknown): void {
-      throw new Error("not implemented");
+    register(task: string, provider: string, handler: unknown): void {
+      const taskProviders = ctx.state.handlers.get(task) ?? new Map<string, unknown>();
+      if (taskProviders.has(provider)) {
+        throw new Error(
+          `[ai] Provider "${provider}" is already registered for task "${task}".\n  Register each task/provider pair exactly once.`
+        );
+      }
+      taskProviders.set(provider, handler);
+      ctx.state.handlers.set(task, taskProviders);
     },
     /**
      * Resolves a registered handler or undefined.
      *
-     * @param _task - Task key.
-     * @param _provider - Provider name.
+     * @param task - Task key.
+     * @param provider - Provider name.
+     * @returns The registered handler, or undefined when unregistered.
      * @example
      * ```ts
      * const handler = registry.resolve("voiceover", "elevenlabs");
      * ```
      */
-    resolve(_task: string, _provider: string): unknown {
-      throw new Error("not implemented");
+    resolve(task: string, provider: string): unknown {
+      return ctx.state.handlers.get(task)?.get(provider);
     },
     /**
      * Provider names registered for a task, in registration order.
      *
-     * @param _task - Task key.
+     * @param task - Task key.
+     * @returns Provider names, first-registered first (the task default).
      * @example
      * ```ts
      * registry.providers("voiceover");
      * ```
      */
-    providers(_task: string): string[] {
-      throw new Error("not implemented");
+    providers(task: string): string[] {
+      return [...(ctx.state.handlers.get(task)?.keys() ?? [])];
     },
     /**
      * All registered task names.
      *
+     * @returns Task names in registration order.
      * @example
      * ```ts
      * registry.tasks();
      * ```
      */
     tasks(): string[] {
-      throw new Error("not implemented");
+      return [...ctx.state.handlers.keys()];
     }
   })
 });
