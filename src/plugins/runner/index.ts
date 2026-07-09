@@ -23,7 +23,6 @@ export const runnerPlugin = createPlugin("runner", {
   depends: [registryPlugin, buildfilePlugin],
   config: defaultConfig,
   createState: createRunnerState,
-  api: createRunnerApi,
   /**
    * Declares the runner's five bus events with typed payloads.
    *
@@ -44,5 +43,16 @@ export const runnerPlugin = createPlugin("runner", {
     "run:paused": register<RunnerEvents["run:paused"]>(
       "Clean pause completed (signal abort drained)"
     )
-  })
+  }),
+  /**
+   * Wires the runner's domain context into `createRunnerApi`.
+   *
+   * @param ctx - Full plugin context (config, state, emit, require, core APIs).
+   * @returns The runner's public API.
+   * @example
+   * ```ts
+   * app.runner.run({ files: "voice/*.moku.yaml" });
+   * ```
+   */
+  api: ctx => createRunnerApi(ctx)
 });

@@ -1,10 +1,19 @@
 /**
  * @file runner plugin — type definitions (incl. RunnerEvents payload shapes).
  */
-import type { ErrorClass, RunTotals } from "../journal/types";
+
+import type { LogApi } from "@moku-labs/common";
+import type { PluginCtx } from "@moku-labs/core";
+import type { buildfilePlugin } from "../buildfile";
+import type { BuildfileApi } from "../buildfile/types";
+import type { ErrorClass, ItemIntent, JournalApi, RunTotals } from "../journal/types";
+import type { LimitsApi } from "../limits/types";
+import type { registryPlugin } from "../registry";
+import type { StoreApi } from "../store/types";
 
 /**
- *
+ * Runner plugin configuration: per-item retry ceiling, retry backoff base,
+ * and the `events()` per-consumer backpressure buffer size.
  */
 export type Config = {
   /** Default max attempts per item. */
@@ -15,31 +24,19 @@ export type Config = {
   eventBufferSize: number;
 };
 
-/**
- *
- */
+/** Options accepted by {@link RunnerApi.run}. */
 export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean };
-/**
- *
- */
+/** Terminal (or paused) status of one `run()`/`resume()` invocation. */
 export type RunResultStatus = "done" | "failed" | "paused" | "budget-stopped";
-/**
- *
- */
+/** Settlement value returned by {@link RunnerApi.run} and {@link RunnerApi.resume}. */
 export type RunResult = { runId: string; status: RunResultStatus; totals: RunTotals };
 
-/**
- *
- */
+/** One task/provider line of an {@link EstimateResult} cost breakdown. */
 export type EstimateLine = { task: string; provider: string; items: number; usd: number };
-/**
- *
- */
+/** Per-task/provider cost breakdown plus its total, returned by {@link RunnerApi.estimate}. */
 export type EstimateResult = { lines: EstimateLine[]; totalUsd: number };
 
-/**
- *
- */
+/** Read-only status snapshot returned by {@link RunnerApi.status}. */
 export type RunStatusReport = {
   runId: string;
   status: string;
@@ -85,13 +82,107 @@ export type ExecutableHandler = {
 };
 
 /**
- *
+ * The request payload the runner passes to {@link ExecutableHandler.estimate}
+ * and {@link ExecutableHandler.execute} — the item's resolved input/params.
+ * Never persisted to `ctx.journal` (redaction boundary; spec/06).
  */
-export type EventQueue = { push(event: RunEvent): void; close(): void };
+export type HandlerRequest = { input: Record<string, unknown>; params: Record<string, unknown> };
 
 /**
- *
+ * Structural hint a provider handler may attach to a thrown error so the
+ * retry taxonomy (`classifyError`/backoff in retry.ts) can classify it
+ * without depending on a concrete HTTP client. All fields optional; an
+ * error with none of them classifies as `"network"`.
  */
+export type ProviderErrorHint = {
+  /** HTTP status code, when the failure came from an HTTP response. */
+  status?: number;
+  /** Explicit classification hint that overrides status-based inference. */
+  kind?: "timeout" | "network" | "content-policy";
+  /** Provider-supplied Retry-After delay, ms (honored when larger than computed backoff). */
+  retryAfterMs?: number;
+};
+
+/**
+ * One planned build item: its durable {@link ItemIntent}, the in-memory
+ * request (input/params — never journaled), and the effective per-item
+ * retry ceiling resolved from the owning build file's `defaults.maxAttempts`.
+ */
+export type PlannedItem = {
+  intent: ItemIntent;
+  request: HandlerRequest;
+  maxAttempts: number;
+};
+
+/**
+ * Public surface of the `registry` plugin (`app.registry`), redeclared here
+ * because `registry` is Nano tier and ships no `types.ts` of its own. This
+ * mirrors its real inferred API exactly, so `ctx.require(registryPlugin)`
+ * can be typed inside this plugin's domain files instead of widening to
+ * `unknown` (spec/09 R9 — the shape is derivable from a known, documented
+ * dependency contract). Matches the redeclaration in translate/promptGen/
+ * voiceover's `types.ts` (the same Nano `registry` dependency).
+ */
+export type RegistryApi = {
+  /**
+   * Registers a handler for a (task, provider) pair.
+   *
+   * @param task - Task key, e.g. "voiceover".
+   * @param provider - Provider name, e.g. "elevenlabs".
+   * @param handler - Opaque handler; narrowed by the owning task plugin.
+   */
+  register(task: string, provider: string, handler: unknown): void;
+  /**
+   * Resolves a registered handler.
+   *
+   * @param task - Task key.
+   * @param provider - Provider name.
+   * @returns The registered handler, or undefined when unregistered.
+   */
+  resolve(task: string, provider: string): unknown;
+  /**
+   * Provider names registered for a task, in registration order.
+   *
+   * @param task - Task key.
+   * @returns Provider names, first-registered first (the task default).
+   */
+  providers(task: string): string[];
+  /**
+   * All registered task names.
+   *
+   * @returns Task names in registration order.
+   */
+  tasks(): string[];
+};
+
+/**
+ * `ctx.require` narrowed to the runner's two declared dependencies
+ * (registry, buildfile), each resolving to its real API type. An
+ * intersection of two concrete call signatures — the kernel's own generic
+ * `require` satisfies both.
+ */
+export type RunnerRequire = ((plugin: typeof registryPlugin) => RegistryApi) &
+  ((plugin: typeof buildfilePlugin) => BuildfileApi);
+
+/**
+ * Domain context type for the runner's extracted files (api.ts, pipeline.ts,
+ * plan.ts). The framework's exported `PluginCtx` helper gives `config`/
+ * `state`/`emit`; the runner also needs `require` (narrowed above) plus the
+ * journal/store/limits/log core APIs, which `PluginCtx` intentionally omits
+ * (mock with matching structural APIs per moku-testing conventions).
+ */
+export type RunnerContext = PluginCtx<Config, State, RunnerEvents> & {
+  require: RunnerRequire;
+  journal: JournalApi;
+  store: StoreApi;
+  limits: LimitsApi;
+  log: LogApi;
+};
+
+/** A bounded per-consumer sink for {@link RunEvent} records (see stream.ts). */
+export type EventQueue = { push(event: RunEvent): void; close(): void };
+
+/** Live bookkeeping for the single in-process active run (M0). */
 export type ActiveRun = {
   runId: string;
   signal: AbortSignal | undefined;
@@ -100,13 +191,20 @@ export type ActiveRun = {
 };
 
 /**
- *
+ * Coordinates a clean drain: a merged abort signal (external `opts.signal`
+ * OR an internal budget-stop trigger) plus a `budgetStopped` flag the
+ * caller reads to pick the run's final status.
  */
+export type DrainController = {
+  readonly signal: AbortSignal;
+  readonly budgetStopped: boolean;
+  triggerBudgetStop(): void;
+};
+
+/** Runner plugin state: at most one active run per process (M0). */
 export type State = { active: ActiveRun | null };
 
-/**
- *
- */
+/** Public API surface of the runner plugin, exposed as `app.runner`. */
 export type RunnerApi = {
   run(options: RunOptions, opts?: { signal?: AbortSignal }): Promise<RunResult>;
   resume(opts?: { runId?: string; signal?: AbortSignal }): Promise<RunResult>;
