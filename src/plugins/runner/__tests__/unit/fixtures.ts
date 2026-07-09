@@ -237,7 +237,9 @@ export function createFakeRunnerContext(
       totals: ZERO_TOTALS,
       recentItems: []
     }),
-    checkpoint: (): void => {},
+    checkpoint: (): void => {
+      log.push("journal.checkpoint");
+    },
     ...overrides.journal
   };
 
