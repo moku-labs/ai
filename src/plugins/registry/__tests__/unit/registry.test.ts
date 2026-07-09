@@ -14,6 +14,9 @@ function createTestApp() {
 /** Reference handler used to prove resolve() returns the exact registered value. */
 const elevenlabsHandler = (): string => "elevenlabs-handler";
 
+/** Opaque filler handler — the registry transports handlers without ever invoking them. */
+const opaqueHandler = (): string => "opaque";
+
 describe("nano tier: registry plugin", () => {
   // -------------------------------------------------------------------------
   // Runtime: register/resolve
@@ -30,23 +33,23 @@ describe("nano tier: registry plugin", () => {
 
     it("throws the exact two-line duplicate-registration error", () => {
       const app = createTestApp();
-      app.registry.register("voiceover", "elevenlabs", () => {});
+      app.registry.register("voiceover", "elevenlabs", opaqueHandler);
 
-      expect(() => app.registry.register("voiceover", "elevenlabs", () => {})).toThrowError(
+      expect(() => app.registry.register("voiceover", "elevenlabs", opaqueHandler)).toThrowError(
         '[ai] Provider "elevenlabs" is already registered for task "voiceover".\n  Register each task/provider pair exactly once.'
       );
     });
 
     it("allows the same provider name to register under a different task", () => {
       const app = createTestApp();
-      app.registry.register("voiceover", "elevenlabs", () => {});
+      app.registry.register("voiceover", "elevenlabs", opaqueHandler);
 
-      expect(() => app.registry.register("translate", "elevenlabs", () => {})).not.toThrow();
+      expect(() => app.registry.register("translate", "elevenlabs", opaqueHandler)).not.toThrow();
     });
 
     it("resolve returns undefined for an unregistered provider on a known task", () => {
       const app = createTestApp();
-      app.registry.register("voiceover", "elevenlabs", () => {});
+      app.registry.register("voiceover", "elevenlabs", opaqueHandler);
 
       expect(app.registry.resolve("voiceover", "openai")).toBeUndefined();
     });
@@ -65,8 +68,8 @@ describe("nano tier: registry plugin", () => {
   describe("runtime: providers/tasks introspection", () => {
     it("providers() lists provider names in registration order", () => {
       const app = createTestApp();
-      app.registry.register("voiceover", "openai", () => {});
-      app.registry.register("voiceover", "elevenlabs", () => {});
+      app.registry.register("voiceover", "openai", opaqueHandler);
+      app.registry.register("voiceover", "elevenlabs", opaqueHandler);
 
       expect(app.registry.providers("voiceover")).toEqual(["openai", "elevenlabs"]);
     });
@@ -79,8 +82,8 @@ describe("nano tier: registry plugin", () => {
 
     it("tasks() lists every task that has at least one registration", () => {
       const app = createTestApp();
-      app.registry.register("voiceover", "elevenlabs", () => {});
-      app.registry.register("translate", "openai", () => {});
+      app.registry.register("voiceover", "elevenlabs", opaqueHandler);
+      app.registry.register("translate", "openai", opaqueHandler);
 
       expect(app.registry.tasks()).toEqual(["voiceover", "translate"]);
     });

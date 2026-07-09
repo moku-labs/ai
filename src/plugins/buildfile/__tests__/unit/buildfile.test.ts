@@ -17,7 +17,8 @@ function createTestCtx(overrides?: Partial<Config>): BuildfileContext {
     schemaPath: ".moku/build.schema.json",
     ...overrides
   };
-  return { config, state: {}, emit: () => {} };
+  // buildfile declares no events — emit is a typed no-op returning undefined.
+  return { config, state: {}, emit: () => undefined };
 }
 
 describe("buildfile unit", () => {

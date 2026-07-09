@@ -97,7 +97,8 @@ describe("registry plugin integration", () => {
     await app.start();
 
     expect(app.registry.tasks()).toEqual([]);
-    app.registry.register("translate", "openai", () => {});
+    // Opaque filler handler — the registry transports handlers without invoking them.
+    app.registry.register("translate", "openai", (): string => "opaque");
     expect(app.registry.tasks()).toEqual(["translate"]);
 
     await app.stop();
