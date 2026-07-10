@@ -1,0 +1,1258 @@
+# @moku-labs/ai — full LLM reference
+
+> A build system for AI-generated assets — declarative build files in, artifacts out.
+> Any task × any provider × any account pool. Resumable always, incremental by default,
+> never loses a byte of progress. Built on @moku-labs/core (Layer 2 of the three-layer
+> Moku model). Version 0.1.0. Bun exclusively; Node >= 24, Bun >= 1.3.14.
+
+Contents:
+1. Architecture & factory chain
+2. Public package surface
+3. Core plugins: journal, store, limits (full types + APIs)
+4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
+   elevenlabs, openai, compose, cli (full types + APIs)
+5. Complete event catalog
+6. Config schema (every field, type, default)
+7. Complete usage examples
+8. Error handling patterns
+9. Plugin dependency graph + initialization order
+10. Extension patterns (custom plugins)
+
+================================================================================
+1. ARCHITECTURE & FACTORY CHAIN
+================================================================================
+
+Layer 1 — src/config.ts:
+
+```ts
+export type Config = {};   // empty by ratified decision — all configuration is per-plugin
+export type Events = {};   // empty — the runner declares its own events (register-callback pattern)
+
+export const coreConfig = createCoreConfig<Config, Events, [
+  typeof logPlugin, typeof envPlugin, typeof journalPlugin,
+  typeof storePlugin, typeof limitsPlugin
+]>("ai", {
+  config: {},
+  plugins: [logPlugin, envPlugin, journalPlugin, storePlugin, limitsPlugin]
+});
+
+export const createPlugin = coreConfig.createPlugin; // framework-scoped plugin factory
+export const createCore = coreConfig.createCore;     // framework assembler
+```
+
+Layer 2 — src/index.ts:
+
+```ts
+const framework = createCore(coreConfig, {
+  plugins: [
+    registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, translatePlugin,
+    promptGenPlugin, elevenlabsPlugin, openaiPlugin, composePlugin, cliPlugin
+  ],
+  pluginConfigs: {}
+});
+export * from "./plugins";                    // plugin instances + type namespaces
+export const createApp = framework.createApp; // Layer-3 app factory
+export const createPlugin = framework.createPlugin;
+export { defineBuild } from "./plugins/buildfile";
+```
+
+Layer 3 — consumer apps (and src/bin.ts, the `moku` bin):
+
+```ts
+import { createApp } from "@moku-labs/ai";
+const app = createApp({});           // options: { plugins?, config?, pluginConfigs?, onReady?, onError?, onStart?, onStop? }
+await app.start();
+// ... app.runner / app.voiceover / app.cli / app.limits ...
+await app.stop();
+```
+
+Key facts:
+- Regular plugin APIs mount on the app BY NAME: app.registry, app.buildfile,
+  app.runner, app.voiceover, app.translate, app.promptGen, app.elevenlabs, app.openai,
+  app.compose, app.cli. Core APIs mount too (app.limits, ...). There is NO
+  `app.plugins.<name>` indirection.
+- App base methods: start(), stop(), emit(), require(), has(). There is NO `app.on` —
+  bus-event subscription is a plugin concern (see §5, §10).
+- Every regular plugin's ctx carries the injected core APIs: ctx.journal, ctx.store,
+  ctx.limits, ctx.log, ctx.env.
+- createApp's `pluginConfigs` is typed to REGULAR plugins only. Core-plugin config
+  (journal/store/limits) can only be overridden where createCore is called; the
+  framework passes `pluginConfigs: {}`, so those defaults are fixed for Layer-3
+  consumers at M0.
+
+================================================================================
+2. PUBLIC PACKAGE SURFACE (@moku-labs/ai)
+================================================================================
+
+Value exports:
+- createApp, createPlugin, defineBuild
+- Plugin instances: buildfilePlugin, cliPlugin, composePlugin, elevenlabsPlugin,
+  journalPlugin, limitsPlugin, openaiPlugin, promptGenPlugin, registryPlugin,
+  runnerPlugin, storePlugin, translatePlugin, voiceoverPlugin
+- Error classes (values, via namespaces): Elevenlabs.RetryableProviderError,
+  Elevenlabs.TerminalProviderError, Elevenlabs.FlaggedProviderError, and the same three
+  names under Openai.*
+- Cli.EXIT_CODES (const object)
+
+Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
+- Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
+  Elevenlabs, Openai, Compose, Cli
+(registry is Nano tier and ships no types.ts — its 4-method surface is redeclared as
+`RegistryApi` inside the types.ts of each plugin that depends on it.)
+
+Package entry: ESM + CJS with bundled .d.ts. Bin: `"moku": "./dist/bin.mjs"`.
+Dependencies: @moku-labs/common 0.3.0, @moku-labs/core 1.5.0, better-sqlite3, openai,
+yaml, zod.
+
+================================================================================
+3. CORE PLUGINS
+================================================================================
+
+Core plugins are registered in createCoreConfig (Layer 1). They declare no events, no
+dependencies, and expose their APIs as ctx.* on every regular plugin's context and on
+the app.
+
+--------------------------------------------------------------------------------
+3.1 journal — ctx.journal (Complex tier)
+--------------------------------------------------------------------------------
+Durable SQLite WAL ledger: one `runs` row per invocation, one `items` row per asset
+(state machine queued → dispatching → done | failed | flagged), one `attempts` row per
+provider call. Pragmas: journal_mode=WAL, synchronous=FULL, fullfsync=1, busy_timeout;
+every write inside BEGIN IMMEDIATE. Driver seam: bun:sqlite on Bun, better-sqlite3 on
+Node (selected via `typeof Bun`). Metadata only — no payload columns exist, so prompts
+and bodies are structurally impossible to journal. Lifecycle: onStart opens driver +
+schema + checkpoint timer; onStop checkpoints and closes. API methods throw
+"[ai] Journal is not open.\n  Call app.start() before using the journal." pre-start.
+
+Types (src/plugins/journal/types.ts):
+
+```ts
+export type Config = {
+  path: string;                 // default ".moku/journal.db"
+  checkpointIntervalMs: number; // default 30_000 (wal_checkpoint(TRUNCATE) cadence; unref()'d timer)
+  busyTimeoutMs: number;        // default 5000
+};
+
+export type State = {
+  driver: SqliteDriver | null;                          // open connection; null until onStart
+  checkpointTimer: ReturnType<typeof setInterval> | null;
+};
+
+export type RunStatus = "active" | "done" | "failed" | "paused" | "budget-stopped";
+export type ItemStatus = "queued" | "dispatching" | "done" | "failed" | "flagged";
+export type ErrorClass =
+  | "http-5xx" | "http-429" | "timeout" | "network" | "http-4xx" | "content-policy";
+export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged";
+
+export type RunRow = {
+  id: string;
+  createdAt: number;
+  status: RunStatus;
+  glob: string;
+  maxCostUsd: number | null;   // null = uncapped
+  finishedAt: number | null;
+};
+
+export type ItemIntent = {
+  planningKey: string;         // sha256(canonicalJson({ task, input, params }))
+  buildFile: string;
+  task: string;
+  provider: string;
+  packVersion: string | null;
+  estimatedCostUsd: number;
+};
+
+export type ItemRow = ItemIntent & {
+  id: string;
+  runId: string;
+  status: ItemStatus;
+  artifactKey: string | null;
+  contentHash: string | null;
+  actualCostUsd: number | null;
+  attemptCount: number;
+  updatedAt: number;
+};
+
+export type GateResult = { ok: true } | { ok: false; reason: "budget" | "duplicate" };
+
+export type RunTotals = {
+  total: number; queued: number; dispatching: number; done: number;
+  failed: number; flagged: number;
+  spendUsd: number;               // sum of done items' actual cost
+  estimatedRemainingUsd: number;  // sum of queued+dispatching estimates
+};
+
+export type AttemptStart = { provider: string; account: string; startedAt: number };
+export type AttemptEnd = {
+  endedAt: number; outcome: AttemptOutcome; errorClass?: ErrorClass; costUsd?: number;
+};
+export type RunSnapshot = { run: RunRow; totals: RunTotals; recentItems: ItemRow[] };
+export type ItemFilter = { status?: ItemStatus; limit?: number; afterUpdatedAt?: number };
+
+export type JournalApi = {
+  openRun(opts: { glob: string; maxCostUsd?: number }): RunRow;
+  getRun(runId: string): RunRow | undefined;
+  latestResumableRun(): RunRow | undefined;   // latest "active" | "paused" | "budget-stopped"
+  insertItems(runId: string, items: ItemIntent[]): ItemRow[];  // idempotent per (runId, planningKey)
+  requeueDispatching(runId: string): number;  // crash-resume: dispatching → queued, returns count
+  gateToDispatching(itemId: string): GateResult; // THE atomic budget+dedup gate (one transaction)
+  recordAttempt(itemId: string, attempt: AttemptStart): number;
+  finishAttempt(attemptId: number, end: AttemptEnd): void;
+  commitDone(itemId: string,
+    result: { actualCostUsd: number; artifactKey: string; contentHash: string }): void;
+  markFailed(itemId: string, result: { errorClass: ErrorClass; terminal: boolean }): void;
+    // terminal:true → failed; terminal:false → back to queued, attemptCount++
+  markFlagged(itemId: string): void;          // content-policy terminal, never re-queued
+  setRunStatus(runId: string, status: RunStatus): void; // terminal statuses record finishedAt
+  totals(runId: string): RunTotals;
+  listItems(runId: string, filter?: ItemFilter): ItemRow[]; // oldest-updated first
+  readSnapshot(runId: string): RunSnapshot;   // own short-lived connection — safe from a 2nd process
+  checkpoint(): void;                          // manual PRAGMA wal_checkpoint(TRUNCATE)
+};
+```
+
+Schema (schema.ts): tables `runs`, `items` (UNIQUE (run_id, planning_key); index
+(run_id, status)), `attempts`. Created idempotently on onStart.
+
+--------------------------------------------------------------------------------
+3.2 store — ctx.store (Standard tier)
+--------------------------------------------------------------------------------
+Content-addressed store on the local filesystem. Objects at {dir}/{hash[0..2]}/{hash}.
+Write protocol: unique tmp file in the shard dir → fsync(file) → rename(tmp, final) →
+fsync(parent dir). First-committer-wins dedup (existing hash = no-op success; EEXIST on
+rename = success). Reads recompute the hash and throw on mismatch. Hashes are validated
+64-char lowercase sha256 hex (blocks path traversal). No lifecycle hooks; root dir is
+created lazily on first put. The store dir is gitignored (may embed prompts/PII).
+
+Types (src/plugins/store/types.ts):
+
+```ts
+export type Config = {
+  dir: string;      // default ".moku/store"
+  algo: "sha256";   // fixed at M0; forward-compat option
+};
+export type State = { rootEnsured: boolean };
+export type PutResult = { hash: string; path: string; existed: boolean };
+export type GcResult = { removed: number; bytesFreed: number };
+
+export type StoreApi = {
+  put(content: Uint8Array): Promise<PutResult>;   // durable when resolved
+  has(hash: string): Promise<boolean>;
+  pathOf(hash: string): string;                    // sync; throws not-found
+  read(hash: string): Promise<Uint8Array>;         // integrity re-verified on every read
+  hashOf(content: Uint8Array): string;             // hash without writing (planning-time identity)
+  gc(keep: ReadonlySet<string>): Promise<GcResult>; // sweep everything not in keep; skips .tmp-*
+};
+```
+
+Pinned errors: "[ai] Store object not found for hash <hash>." and
+"[ai] Store integrity check failed for <hash>." (corrupt object — delete + re-run).
+
+--------------------------------------------------------------------------------
+3.3 limits — ctx.limits (Standard tier)
+--------------------------------------------------------------------------------
+Per-lane admission control; lane key "{task}/{provider}/{account}" (account is always
+"default" at M0). Three independent guards per lane: token bucket (rpm), FIFO
+concurrency gate, circuit breaker (opens after breakerThreshold consecutive retryable
+failures; half-open single-probe after breakerCooldownMs; any outcome settles the
+probe). Timer-free: refill/breaker transitions are lazy timestamp math. Lane state is
+created lazily on first acquire/reportOutcome. Pending waiters die with the process —
+safe because gated work stays journal-queued/dispatching and resumes.
+
+Types (src/plugins/limits/types.ts):
+
+```ts
+export type LaneConfig = {
+  rpm: number;               // default 60 (also bucket capacity)
+  concurrency: number;       // default 4
+  breakerThreshold: number;  // default 5
+  breakerCooldownMs: number; // default 30_000
+};
+export type Config = {
+  defaults: LaneConfig;
+  lanes: Record<string, Partial<LaneConfig>>; // keys: exact lane OR "{task}/{provider}" prefix
+};
+export type LaneState = {
+  tokens: number; lastRefillAt: number; inFlight: number;
+  waiters: Array<() => void>; consecutiveFailures: number;
+  openUntil: number; probing: boolean;
+};
+export type State = { lanes: Map<string, LaneState> };
+export type LaneSnapshot = {
+  lane: string; tokens: number; inFlight: number; waiting: number;
+  breaker: "closed" | "open" | "half-open";
+};
+
+export type LimitsApi = {
+  acquire(lane: string, opts?: { signal?: AbortSignal }): Promise<{ release: () => void }>;
+    // waits: breaker closed (or probe slot) → token → concurrency slot (FIFO).
+    // release() must be called exactly once (no-op after the first).
+    // Rejects IMMEDIATELY with an Error tagged `reason: "breaker-open"` when open.
+    // Abort during the wait rejects with signal.reason; nothing leaks (token refunded,
+    // waiter dequeued, probe slot released).
+  reportOutcome(lane: string, outcome: "ok" | "retryable-error"): void;
+    // "ok" closes/resets; "retryable-error" advances toward open.
+    // Do NOT report terminal 4xx — deterministic, not a health signal. Never throws.
+  laneConfig(lane: string): LaneConfig;   // exact > prefix > defaults; pure lookup
+  snapshot(lane: string): LaneSnapshot;   // lazily refills before reading; untouched lane = pristine
+  lanes(): string[];                       // lanes touched by at least one acquire/reportOutcome
+};
+```
+
+================================================================================
+4. REGULAR PLUGINS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 registry — app.registry (Nano tier; no config, no events, no types.ts)
+--------------------------------------------------------------------------------
+Dumb two-level map: task → provider → handler, stored/returned as `unknown` — the
+registry never inspects what it transports. Provider plugins register in onInit via
+ctx.require(registryPlugin); task plugins resolve + guard + perform their ONE audited
+cast. PERMANENT CONSTRAINT: must stay a regular plugin (core-plugin ctx has no
+require/depends, and providers need `depends: [registryPlugin]`).
+
+```ts
+// API (inferred; redeclared as RegistryApi in dependents' types.ts)
+register(task: string, provider: string, handler: unknown): void;
+  // throws on duplicate: `[ai] Provider "<provider>" is already registered for task "<task>".
+  //   Register each task/provider pair exactly once.`
+resolve(task: string, provider: string): unknown;   // undefined when unregistered; never throws
+providers(task: string): string[];  // registration order; [0] is the task's default provider
+tasks(): string[];                  // registration order
+```
+
+--------------------------------------------------------------------------------
+4.2 buildfile — app.buildfile (Standard tier; stateless pure compiler; no deps)
+--------------------------------------------------------------------------------
+The build-file front door: parses *.moku.yaml and defineBuild() TS modules through ONE
+zod schema (schema.ts). BuildSpec/BuildItem are z.infer of the zod objects; the JSON
+Schema is z.toJSONSchema of the same objects — validator, static types, and editor
+autocomplete can never drift. Deliberately does NOT consult registry (provider
+existence is checked by the runner at dispatch) — `moku validate` works offline.
+
+Types (src/plugins/buildfile/types.ts):
+
+```ts
+export type BuildItem = z.infer<typeof buildItemSchema>;
+// = { task: string; id?: string; provider?: string; input: Record<string, unknown>;
+//     params?: Record<string, unknown>; pack?: { name: string; version: string } }
+export type BuildSpec = z.infer<typeof buildSpecSchema>;
+// = { version: 1; name: string; defaults?: { provider?: string; maxAttempts?: number };
+//     items: BuildItem[]; itemsFrom?: string }
+export type Config = {
+  defaultGlob: string;  // default "**/*.moku.yaml"
+  schemaPath: string;   // default ".moku/build.schema.json"
+};
+export type CompiledBuild = { file: string; spec: BuildSpec }; // file = path or "<inline>"
+export type BuildfileSource = { path: string } | { text: string; lang: "yaml" };
+
+export type BuildfileApi = {
+  compile(source: BuildfileSource): Promise<CompiledBuild>;
+    // .ts path → dynamic import, default export must be a defineBuild() result;
+    // other paths → YAML. itemsFrom NDJSON (resolved relative to the build file) is
+    // appended to spec.items at compile time.
+    // throws: `[ai] Build file "<label>" is invalid.\n  <zod path>: <message>.`
+  loadGlob(pattern?: string): Promise<CompiledBuild[]>;  // sorted path order
+    // empty match throws: `[ai] No build files matched "<pattern>".\n  Run "moku new" to create one.`
+  jsonSchema(): Record<string, unknown>;
+  template(opts: { name: string }): string;
+    // modeline + $schema: key + minimal valid spec + one commented example per M0 task
+};
+```
+
+Standalone helper (also re-exported from "@moku-labs/ai"):
+
+```ts
+export function defineBuild(spec: BuildSpec): BuildSpec;
+// pure factory; validates through the exact schema the YAML loader uses
+```
+
+--------------------------------------------------------------------------------
+4.3 runner — app.runner (Complex tier; depends: [registryPlugin, buildfilePlugin])
+--------------------------------------------------------------------------------
+The durable orchestrator. Per-item pipeline:
+1. Plan — buildfile.loadGlob(files); resolve provider (item.provider →
+   defaults.provider → registry.providers(task)[0]); planning key =
+   sha256(canonicalJson({ task, input, params })) (provider excluded); estimate via
+   handler.estimate(); journal.insertItems as queued (idempotent → incremental).
+2. Admit — limits.acquire("{task}/{provider}/default", { signal }); abort/breaker-open
+   exits cleanly (item stays queued).
+3. Gate — journal.gateToDispatching(itemId): budget + dedup + transition in ONE
+   transaction. "budget" → graceful budget-stop drain; "duplicate" → release slot.
+4. Execute — registry.resolve(task, provider) narrowed by isExecutableHandler() (the
+   runner's single audited cast); journal.recordAttempt; handler.execute(request, { signal }).
+5. Classify — classifyError maps thrown errors onto the taxonomy;
+   limits.reportOutcome("ok" | "retryable-error").
+6. Persist — store.put(result.body) THEN journal.commitDone(itemId, { actualCostUsd,
+   artifactKey, contentHash }). Artifact key = sha256(canonicalJson({ planningKey,
+   provider, packVersion })).
+7. Report — item record to events() subscribers; coalesced run:progress on the bus.
+
+Named constraints: per-item events NEVER on the bus; redaction boundary (raw
+prompts/bodies never reach ctx.journal — HandlerRequest is never journaled); single
+active run per process at M0 (second run()/resume() throws).
+
+Types (src/plugins/runner/types.ts):
+
+```ts
+export type Config = {
+  maxAttempts: number;     // default 3 (per build file overridable via defaults.maxAttempts)
+  retryBaseMs: number;     // default 1000 (exponential, jittered 50–100%; Retry-After honored when larger)
+  eventBufferSize: number; // default 10_000 (events() per-consumer buffer)
+};
+
+export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean };
+export type RunResultStatus = "done" | "failed" | "paused" | "budget-stopped";
+export type RunResult = { runId: string; status: RunResultStatus; totals: RunTotals };
+export type EstimateLine = { task: string; provider: string; items: number; usd: number };
+export type EstimateResult = { lines: EstimateLine[]; totalUsd: number };
+export type RunStatusReport = { runId: string; status: string; totals: RunTotals; updatedAt: number };
+
+export type RunEvent =
+  | { type: "item:queued"; itemId: string; task: string; provider: string }
+  | { type: "item:dispatching"; itemId: string }
+  | { type: "item:done"; itemId: string; costUsd: number; contentHash: string }
+  | { type: "item:retry"; itemId: string; errorClass: ErrorClass; attempt: number }
+  | { type: "item:failed"; itemId: string; errorClass: ErrorClass }
+  | { type: "item:flagged"; itemId: string }
+  | { type: "overflow"; dropped: number }
+  | { type: "progress"; totals: RunTotals }
+  | { type: "terminal"; status: RunResultStatus; totals: RunTotals };
+
+export type RunnerEvents = {
+  "run:progress": { runId: string; total: number; done: number; failed: number;
+                    flagged: number; spendUsd: number };
+  "run:done": { runId: string; totals: RunTotals };
+  "run:failed": { runId: string; error: string };
+  "run:budget-stop": { runId: string; spendUsd: number; maxCostUsd: number };
+  "run:paused": { runId: string; drained: number };
+};
+
+export type ExecutableHandler = {
+  estimate(request: unknown): { usd: number };
+  execute(request: unknown, opts: { signal?: AbortSignal }):
+    Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
+};
+export type HandlerRequest = { input: Record<string, unknown>; params: Record<string, unknown> };
+export type ProviderErrorHint = {
+  status?: number;
+  kind?: "timeout" | "network" | "content-policy"; // overrides status-based inference
+  retryAfterMs?: number;
+};
+
+export type State = { active: ActiveRun | null };
+
+export type RunnerApi = {
+  run(options: RunOptions, opts?: { signal?: AbortSignal }): Promise<RunResult>;
+    // dryRun → no journal writes, runId "dry-run", status "done", plan total in
+    // totals.estimatedRemainingUsd. Throws only when a run is already active;
+    // in-run failures resolve { status: "failed" } after emitting run:failed.
+  resume(opts?: { runId?: string; signal?: AbortSignal }): Promise<RunResult>;
+    // requeueDispatching + idempotent re-plan; done items never re-billed.
+  estimate(options: { files?: string }): Promise<EstimateResult>; // same math as the budget gate
+  status(runId?: string): RunStatusReport; // given id, else active run, else latest resumable
+  events(): AsyncIterable<RunEvent>;
+    // per-consumer bounded queue; oldest ITEM records drop into one {type:"overflow"};
+    // "progress" coalesces (latest wins); "terminal" is ALWAYS delivered last.
+};
+```
+
+Retry taxonomy (contractual): http-5xx (status>=500) retry · http-429 retry
+(Retry-After honored when larger) · timeout (kind) retry · network (kind, or no hint)
+retry · http-4xx (except 429) terminal failed · content-policy (kind) terminal flagged.
+
+--------------------------------------------------------------------------------
+4.4 voiceover — app.voiceover (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "voiceover" task contract; providers implement + register it; this plugin
+resolves, runtime-shape-guards, and performs the task's ONE audited cast. Also bundles
+versioned template packs (packs/narration.ts): per-provider param presets merged UNDER
+request params (request wins); pack version participates in artifact identity.
+
+Contract (src/plugins/voiceover/contract.ts):
+
+```ts
+export type VoiceoverRequest = {
+  text: string;
+  voice: string;                     // provider-scoped voice id/name
+  language?: string;                 // BCP-47 hint
+  model?: string;
+  format?: "mp3" | "wav" | "ogg";    // defaulted from config.defaultFormat when omitted
+  params?: Record<string, unknown>;  // resolved pack values merged upstream
+};
+export type VoiceoverResult = {
+  audio: Uint8Array;
+  mimeType: string;                  // audio/mpeg | audio/wav | audio/ogg
+  costUsd: number;
+  meta?: Record<string, unknown>;    // metadata only — never a payload echo
+};
+export type VoiceoverHandler = {
+  estimate(request: VoiceoverRequest): { usd: number };
+  execute(request: VoiceoverRequest, opts: { signal?: AbortSignal }): Promise<VoiceoverResult>;
+};
+```
+
+Config + API (src/plugins/voiceover/types.ts):
+
+```ts
+export type Config = {
+  defaultProvider: string;              // default "elevenlabs"
+  defaultFormat: "mp3" | "wav" | "ogg"; // default "mp3"
+};
+export type VoiceoverApi = {
+  generate(request: VoiceoverRequest,
+    opts?: { signal?: AbortSignal; provider?: string }): Promise<VoiceoverResult>; // NOT journaled
+  estimate(request: VoiceoverRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[]; // = registry.providers("voiceover")
+};
+```
+
+Unknown-provider error (same shape for translate/promptGen with their task names):
+`[ai] No voiceover provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+--------------------------------------------------------------------------------
+4.5 translate — app.translate (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Contract (src/plugins/translate/contract.ts):
+
+```ts
+export type TranslateRequest = {
+  text: string;
+  targetLang: string;   // BCP-47
+  sourceLang?: string;  // omitted = auto-detect
+  model?: string;
+  params?: Record<string, unknown>;
+};
+export type TranslateResult = {
+  text: string;
+  detectedSourceLang?: string;
+  costUsd: number;
+  meta?: Record<string, unknown>;
+};
+export type TranslateHandler = {
+  estimate(request: TranslateRequest): { usd: number };
+  execute(request: TranslateRequest, opts: { signal?: AbortSignal }): Promise<TranslateResult>;
+};
+```
+
+```ts
+export type Config = { defaultProvider: string }; // default "openai"
+export type TranslateApi = {
+  generate(request: TranslateRequest,
+    opts?: { signal?: AbortSignal; provider?: string }): Promise<TranslateResult>; // NOT journaled
+  estimate(request: TranslateRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];
+};
+```
+
+Malformed-registration error: `[ai] Registered translate provider "<name>" does not
+implement TranslateHandler.\n  It must expose estimate() and execute() functions.`
+
+--------------------------------------------------------------------------------
+4.6 promptGen — app.promptGen (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+NAMING: plugin/api name is camelCase `promptGen`; the registry/task key used in build
+files and register() calls is kebab-case `"prompt-gen"`. Exists at M0 primarily to back
+`compose` (which calls this facade instead of touching the registry).
+
+Contract (src/plugins/promptGen/contract.ts):
+
+```ts
+export type PromptGenRequest = {
+  prompt: string;
+  system?: string;
+  model?: string;
+  temperature?: number;              // provider maps/clamps as needed
+  params?: Record<string, unknown>;
+};
+export type PromptGenResult = {
+  text: string;
+  costUsd: number;
+  meta?: Record<string, unknown>;
+};
+export type PromptGenHandler = {
+  estimate(request: PromptGenRequest): { usd: number };
+  execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<PromptGenResult>;
+};
+```
+
+```ts
+export type Config = { defaultProvider: string }; // default "openai"
+export type PromptGenApi = {
+  generate(request: PromptGenRequest,
+    opts?: { signal?: AbortSignal; provider?: string }): Promise<PromptGenResult>; // NOT journaled
+  estimate(request: PromptGenRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];
+};
+```
+
+--------------------------------------------------------------------------------
+4.7 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
+("voiceover", "elevenlabs") → createVoiceoverHandler(ctx). POST
+/v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
+ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
+are key-free). estimate = text.length × per-character price for the resolved model
+(request.model ?? config.defaultModel); unpriced models estimate $0.
+
+```ts
+export type Config = {
+  apiKeyEnv: string;      // default "ELEVENLABS_API_KEY"
+  baseUrl: string;        // default "https://api.elevenlabs.io"
+  defaultModel: string;   // default "eleven_multilingual_v2"
+  timeoutMs: number;      // default 60_000 (AbortSignal.timeout merged with caller signal)
+  priceOverrides: Record<string, number>; // USD/char by model, merged over bundled table
+};
+export type State = { prices: Record<string, number> | null }; // lazy effective table
+
+export type ElevenlabsApi = {
+  info(): { provider: "elevenlabs"; configured: boolean; models: string[] }; // never throws
+};
+
+// Error classes (exported values under the Elevenlabs namespace):
+export class RetryableProviderError extends Error {
+  readonly status: number | undefined;                 // 5xx or 429
+  readonly kind: "timeout" | "network" | undefined;
+  readonly retryAfterMs: number | undefined;           // parsed Retry-After (seconds or HTTP-date)
+  constructor(message: string,
+    hint: { status?: number; kind?: "timeout" | "network"; retryAfterMs?: number });
+}
+export class TerminalProviderError extends Error {
+  readonly status: number;                             // 4xx except 429
+  constructor(message: string, status: number);
+}
+export class FlaggedProviderError extends Error {
+  readonly kind: "content-policy" = "content-policy";
+  constructor(message: string);
+}
+```
+
+Bundled prices (USD/char): eleven_multilingual_v2 0.0003 · eleven_turbo_v2_5 0.000_15 ·
+eleven_flash_v2_5 0.000_06 · eleven_monolingual_v1 0.0003.
+Missing-key error (before any network call):
+`[ai] ELEVENLABS_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.`
+Logs (redacted): elevenlabs:voiceover:done (info) / elevenlabs:voiceover:failed (warn).
+
+--------------------------------------------------------------------------------
+4.8 openai — app.openai (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Provider adapter via the official `openai` SDK (fetch-based; SDK retries disabled with
+maxRetries: 0 — the runner owns retry timing). onInit registers THREE handlers:
+("voiceover","openai") tts/handler.ts · ("translate","openai") translate/handler.ts ·
+("prompt-gen","openai") prompt-gen/handler.ts. Lazy client (constructed on first
+execute; info()/estimate() never touch it). Chat estimates use a chars/4 token
+heuristic; actual cost is usage-based when reported, heuristic fallback otherwise.
+Translate uses a fixed system prompt with temperature: 0 and never sets
+detectedSourceLang. A non-null `refusal` in a chat response → FlaggedProviderError.
+Voiceover format mapping: mp3→mp3 (audio/mpeg), wav→wav (audio/wav), ogg→opus (audio/ogg).
+
+```ts
+export type Config = {
+  apiKeyEnv: string;                   // default "OPENAI_API_KEY"
+  baseUrl?: string;                    // optional; proxies / OpenAI-compatible endpoints
+  models: { tts: string; chat: string }; // default { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }
+  timeoutMs: number;                   // default 60_000 (SDK client timeout)
+  priceOverrides: Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }>;
+};
+export type PriceTable = Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }>;
+export type State = { client: OpenaiClient | null; prices: PriceTable | null };
+
+export type OpenaiApi = {
+  info(): { provider: "openai"; configured: boolean; models: { tts: string; chat: string } };
+};
+
+// OpenaiClient is a STRUCTURAL alias covering exactly the two SDK calls used
+// (audio.speech.create, chat.completions.create) — survives .d.ts bundling, trivially mockable.
+
+// Error classes (exported values under the Openai namespace) — same taxonomy shape:
+export class RetryableProviderError extends Error {
+  readonly status: number | undefined;
+  readonly kind: "timeout" | "network" | undefined;
+  readonly retryAfterMs: number | undefined;
+  constructor(message: string,
+    hint?: { status?: number; kind?: "timeout" | "network"; retryAfterMs?: number });
+}
+export class TerminalProviderError extends Error {
+  readonly status: number | undefined;
+  constructor(message: string, status?: number);
+}
+export class FlaggedProviderError extends Error { readonly kind = "content-policy" as const; }
+```
+
+Bundled prices: gpt-4o-mini $0.15/M in · $0.60/M out — gpt-4o $2.50/M in · $10/M out —
+gpt-4o-mini-tts $15/M chars — tts-1 $15/M chars — tts-1-hd $30/M chars.
+Missing-key error: `[ai] OPENAI_API_KEY is not set.\n  Export it or set config.apiKeyEnv
+to the variable that holds your key.`
+Logs (redacted): openai:{tts|translate|prompt-gen}:{done|failed}.
+
+--------------------------------------------------------------------------------
+4.9 compose — app.compose (Standard tier; depends: [buildfilePlugin, promptGenPlugin])
+--------------------------------------------------------------------------------
+Natural-language prompt → validated build file. Pipeline: system prompt embedding
+buildfile.jsonSchema() + per-task input docs → promptGen.generate({ prompt, system },
+{ provider, signal }) → strip defensive ```yaml fence → buildfile.compile({ text,
+lang: "yaml" }) → on failure re-prompt with the validation issue, up to
+maxRepairAttempts additional times → apply opts.name override → emit. GUARANTEE:
+compose can never return an invalid build file. Never writes files — the CLI (or the
+caller) persists `text`. Never touches registry (the audited cast stays with the task
+plugin). costUsd accumulates across ALL attempts, failed ones included.
+
+```ts
+export type Config = {
+  provider: string;          // default "openai" — passed to promptGen.generate
+  maxRepairAttempts: number; // default 2 — ADDITIONAL attempts; total = 1 + maxRepairAttempts
+};
+export type ComposeResult = { spec: BuildSpec; text: string; costUsd: number };
+export type ComposeApi = {
+  compose(opts: {
+    prompt: string;
+    emit: "build" | "script"; // "build" = YAML (modeline + $schema key); "script" = defineBuild() TS module
+    name?: string;            // spec.name override, applied after validation
+    signal?: AbortSignal;     // forwarded to every promptGen.generate call
+  }): Promise<ComposeResult>;
+};
+```
+
+Exhaustion error: `[ai] Compose could not produce a valid build file after <n> attempts.
+  Refine the prompt or write the build file manually with "moku new".`
+
+--------------------------------------------------------------------------------
+4.10 cli — app.cli (Complex tier; depends: [runnerPlugin, buildfilePlugin, composePlugin])
+--------------------------------------------------------------------------------
+The `moku` command surface. No lifecycle, no state (ratified OQ1). argv parsed with
+node:util parseArgs (strict; kebab flags → camelCase keys; boolean flags recorded as
+the literal "true"). All rendering through @moku-labs/common/cli's BrandConsole (MC1);
+plain mode when config.plain || !TTY || NO_COLOR (via ctx.env). dispatch() NEVER calls
+process.exit — src/bin.ts owns the process (createApp → start → dispatch → stop → exit).
+SIGINT wiring (run/compose): first Ctrl-C aborts the AbortSignal (clean pause/drain);
+the once-listener then falls through to Node's default on a second Ctrl-C.
+
+```ts
+export type Config = { plain: boolean }; // default false
+
+export const EXIT_CODES = {
+  ok: 0, failure: 1, validation: 2, usage: 3, paused: 4, budgetStop: 5
+} as const;
+
+export type CliApi = {
+  dispatch(argv: string[]): Promise<number>; // argv excludes node/script prefix
+  commands(): CommandTree;                    // mountable tree for a future umbrella CLI
+};
+export type CommandTree = {
+  name: string; description: string;
+  commands: Array<{ name: string; description: string; flags: Record<string, string> }>;
+};
+// Also exported under the Cli namespace: CommandContext, CommandDefinition,
+// CommandFlags, CommandFlagSpec.
+```
+
+Commands:
+- moku new [name] — writes template({ name }) to <name>.moku.yaml (default "build") +
+  jsonSchema() at the modeline path; refuses overwrite (exit 1).
+- moku validate [glob] — loadGlob; exit 0 all valid, 2 on first invalid/empty match.
+- moku estimate [glob] — runner.estimate breakdown box; exit 0.
+- moku run [glob] [--max-cost <usd>] [--dry-run] — runner.run + events() progress;
+  exits: done→0, failed→1, paused→4, budget-stopped→5, bad --max-cost→3.
+- moku status [runId] [--follow] — status snapshot; --follow polls
+  journal.readSnapshot every 1s (short-lived reads — WAL checkpoint-starvation
+  mitigation) until terminal. Exit 0.
+- moku compose "<prompt>" [--emit build|script] [--out <path>] — compose.compose;
+  writes --out or prints; exits 0 ok, 3 usage, 2 repair-exhausted, else 1.
+
+================================================================================
+5. COMPLETE EVENT CATALOG
+================================================================================
+
+Plugin-bus events (declared ONLY by runner; every other plugin declares none):
+
+| Event            | Payload                                                              | When |
+|------------------|----------------------------------------------------------------------|------|
+| run:progress     | { runId: string; total: number; done: number; failed: number; flagged: number; spendUsd: number } | coalesced, ≤1 per 500ms |
+| run:done         | { runId: string; totals: RunTotals }                                  | run completed |
+| run:failed       | { runId: string; error: string }                                      | unrecoverable run error |
+| run:budget-stop  | { runId: string; spendUsd: number; maxCostUsd: number }               | budget ceiling; run drained |
+| run:paused       | { runId: string; drained: number }                                    | clean pause completed |
+
+Subscription: a plugin declares `depends: [runnerPlugin]` and a `hooks` map (typed via
+dependency events). There is NO app.on. Hook dispatch is sequential-await — which is
+exactly why per-item events are kept off the bus.
+
+```ts
+const watcher = createPlugin("watcher", {
+  depends: [runnerPlugin],
+  hooks: ctx => ({
+    "run:progress": payload => ctx.log.info("progress", payload),
+    "run:budget-stop": ({ runId, spendUsd, maxCostUsd }) =>
+      ctx.log.warn("budget stop", { runId, spendUsd, maxCostUsd })
+  })
+});
+```
+
+Per-item stream records — app.runner.events(), AsyncIterable<RunEvent>, active run only
+(closed empty stream otherwise):
+
+| Record            | Fields                                | When |
+|-------------------|----------------------------------------|------|
+| item:queued       | itemId, task, provider                 | item enters the pipeline |
+| item:dispatching  | itemId                                 | passed the atomic gate |
+| item:done         | itemId, costUsd, contentHash           | artifact stored + committed |
+| item:retry        | itemId, errorClass, attempt            | retryable failure; re-queued with backoff |
+| item:failed       | itemId, errorClass                     | terminal failure |
+| item:flagged      | itemId                                 | content policy (terminal) |
+| overflow          | dropped                                | buffer overflowed; oldest item records coalesced |
+| progress          | totals                                 | coalesced totals (latest unconsumed wins) |
+| terminal          | status, totals                         | ALWAYS the last record delivered |
+
+Structured log events (ctx.log; diagnostics, not bus events): runner:stale-item,
+elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/failed,
+openai:prompt-gen:done/failed.
+
+================================================================================
+6. CONFIG SCHEMA — EVERY FIELD
+================================================================================
+
+Global framework Config: {} (empty, ratified). Per-plugin (defaults shipped in each
+plugin's index.ts; override REGULAR plugins via createApp({ pluginConfigs })):
+
+journal (core — createCore-level only):
+  path: string = ".moku/journal.db"            — journal DB file; parents created on start
+  checkpointIntervalMs: number = 30_000        — wal_checkpoint(TRUNCATE) cadence (unref'd)
+  busyTimeoutMs: number = 5000                 — SQLite busy_timeout (also for readSnapshot conns)
+
+store (core — createCore-level only):
+  dir: string = ".moku/store"                  — CAS root (gitignored)
+  algo: "sha256" = "sha256"                    — fixed at M0
+
+limits (core — createCore-level only):
+  defaults.rpm: number = 60                    — requests/minute per lane (bucket capacity)
+  defaults.concurrency: number = 4             — in-flight ceiling per lane
+  defaults.breakerThreshold: number = 5        — consecutive retryable failures to open
+  defaults.breakerCooldownMs: number = 30_000  — open duration before half-open probe
+  lanes: Record<string, Partial<LaneConfig>> = {} — exact-lane or "{task}/{provider}" prefix overrides
+
+registry: no config.
+
+buildfile:
+  defaultGlob: string = "**/*.moku.yaml"       — used when loadGlob gets no pattern
+  schemaPath: string = ".moku/build.schema.json" — where moku new writes the JSON Schema
+
+runner:
+  maxAttempts: number = 3                      — per-item retry ceiling (build defaults.maxAttempts overrides)
+  retryBaseMs: number = 1000                   — backoff base (exponential, jittered 50–100%)
+  eventBufferSize: number = 10_000             — events() per-consumer buffer
+
+voiceover:
+  defaultProvider: string = "elevenlabs"
+  defaultFormat: "mp3" | "wav" | "ogg" = "mp3"
+
+translate:
+  defaultProvider: string = "openai"
+
+promptGen:
+  defaultProvider: string = "openai"
+
+elevenlabs:
+  apiKeyEnv: string = "ELEVENLABS_API_KEY"
+  baseUrl: string = "https://api.elevenlabs.io"
+  defaultModel: string = "eleven_multilingual_v2"
+  timeoutMs: number = 60_000
+  priceOverrides: Record<string, number> = {}  — USD/char by model
+
+openai:
+  apiKeyEnv: string = "OPENAI_API_KEY"
+  baseUrl?: string = undefined                 — SDK default endpoint when omitted
+  models: { tts: string; chat: string } = { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }
+  timeoutMs: number = 60_000
+  priceOverrides: Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }> = {}
+
+compose:
+  provider: string = "openai"
+  maxRepairAttempts: number = 2                — additional attempts; total = 1 + this
+
+cli:
+  plain: boolean = false                       — auto-true when !TTY or NO_COLOR (via ctx.env)
+
+Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY (names configurable via
+apiKeyEnv; read via ctx.env at execute time only), NO_COLOR (CLI plain mode).
+
+================================================================================
+7. COMPLETE USAGE EXAMPLES
+================================================================================
+
+7.1 Durable run with budget, clean pause, live stream, and resume:
+
+```ts
+import { createApp } from "@moku-labs/ai";
+
+const app = createApp({});
+await app.start();
+
+const controller = new AbortController();
+process.on("SIGINT", () => controller.abort());
+
+const { totalUsd } = await app.runner.estimate({ files: "voice/*.moku.yaml" });
+const runPromise = app.runner.run(
+  { files: "voice/*.moku.yaml", maxCostUsd: totalUsd * 1.2 },
+  { signal: controller.signal }
+);
+
+for await (const event of app.runner.events()) {
+  if (event.type === "item:done") report(event.itemId, event.costUsd);
+  if (event.type === "item:retry") warn(event.itemId, event.errorClass, event.attempt);
+  if (event.type === "terminal") break;
+}
+
+const result = await runPromise;
+if (result.status === "paused") {
+  await app.runner.resume({ runId: result.runId }); // done items never re-billed
+}
+await app.stop();
+```
+
+7.2 One-off facades (NOT journaled — scripts/tests/experiments only):
+
+```ts
+const { configured } = app.elevenlabs.info();
+if (!configured) throw new Error("Export ELEVENLABS_API_KEY first.");
+
+const { usd } = app.voiceover.estimate({ text: "Welcome!", voice: "21m00Tcm4TlvDq8ikWAM" });
+const speech = await app.voiceover.generate(
+  { text: "Welcome!", voice: "21m00Tcm4TlvDq8ikWAM", format: "ogg" },
+  { provider: "elevenlabs" }
+);
+await Bun.write("welcome.ogg", speech.audio);
+
+const translated = await app.translate.generate({ text: "Welcome!", targetLang: "ja" });
+const tagline = await app.promptGen.generate(
+  { prompt: "One-line tagline for a durable AI build system.", temperature: 0.7 },
+  { provider: "openai" }
+);
+```
+
+7.3 Natural language → build file → run (compose + cli split: compose produces text,
+the caller persists it):
+
+```ts
+const { spec, text, costUsd } = await app.compose.compose({
+  prompt: "Narrate a greeting in English, then translate it to Spanish.",
+  emit: "build",
+  name: "greeting"
+});
+await Bun.write("greeting.moku.yaml", text);
+const result = await app.runner.run({ files: "greeting.moku.yaml", maxCostUsd: 1 });
+```
+
+7.4 Build files — YAML, NDJSON items, and typed TS:
+
+```yaml
+# yaml-language-server: $schema=.moku/build.schema.json
+$schema: .moku/build.schema.json
+version: 1
+name: "launch-assets"
+defaults: { provider: elevenlabs, maxAttempts: 3 }
+items:
+  - task: voiceover
+    id: intro-line
+    input: { text: "Hello, world!", voice: "en-US-1" }
+  - task: translate
+    provider: openai
+    input: { text: "Hello, world!", targetLang: "es" }
+    params: { formality: high }        # part of the planning key
+itemsFrom: extra-items.ndjson          # one BuildItem JSON object per line
+```
+
+```ts
+// build.moku.ts — compile({ path: "build.moku.ts" }) imports the default export
+import { defineBuild } from "@moku-labs/ai";
+export default defineBuild({
+  version: 1,
+  name: "demo",
+  items: [{ task: "voiceover", input: { text: "Hello, world!", voice: "en-US-1" } }]
+});
+```
+
+7.5 Status from a second process (safe — readSnapshot opens its own short-lived
+connection against the shared WAL journal file):
+
+```ts
+const report = app.runner.status();            // { runId, status, totals, updatedAt }
+// or: moku status --follow
+```
+
+7.6 Direct journal/store/limits use from a custom plugin (full item lifecycle):
+
+```ts
+import { createPlugin } from "@moku-labs/ai";
+
+export const myPipelinePlugin = createPlugin("myPipeline", {
+  api: ctx => ({
+    async produceOne() {
+      const run = ctx.journal.openRun({ glob: "assets/*.yaml", maxCostUsd: 10 });
+      const [item] = ctx.journal.insertItems(run.id, [{
+        planningKey: ctx.store.hashOf(new TextEncoder().encode("intent")),
+        buildFile: "assets/one.yaml", task: "voiceover", provider: "elevenlabs",
+        packVersion: null, estimatedCostUsd: 0.4
+      }]);
+
+      const gate = ctx.journal.gateToDispatching(item.id);
+      if (!gate.ok) return ctx.log.warn("blocked", { reason: gate.reason }); // "budget" | "duplicate"
+
+      const lane = "voiceover/elevenlabs/default";
+      const { release } = await ctx.limits.acquire(lane);
+      const attemptId = ctx.journal.recordAttempt(item.id, {
+        provider: "elevenlabs", account: "default", startedAt: Date.now()
+      });
+      try {
+        const body = await callProvider();
+        const { hash } = await ctx.store.put(body);      // bytes FIRST
+        ctx.limits.reportOutcome(lane, "ok");
+        ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "done", costUsd: 0.2 });
+        ctx.journal.commitDone(item.id, { actualCostUsd: 0.2, artifactKey: hash, contentHash: hash });
+        ctx.journal.setRunStatus(run.id, "done");
+      } catch {
+        ctx.limits.reportOutcome(lane, "retryable-error");
+        ctx.journal.finishAttempt(attemptId, {
+          endedAt: Date.now(), outcome: "retryable-error", errorClass: "http-5xx"
+        });
+        ctx.journal.markFailed(item.id, { errorClass: "http-5xx", terminal: false });
+      } finally {
+        release();
+      }
+    }
+  })
+});
+```
+
+7.7 Programmatic CLI dispatch:
+
+```ts
+import { Cli, createApp } from "@moku-labs/ai";
+const app = createApp({ pluginConfigs: { cli: { plain: true } } });
+await app.start();
+const code = await app.cli.dispatch(["validate"]);
+if (code !== Cli.EXIT_CODES.ok) { /* handle */ }
+await app.stop();
+```
+
+================================================================================
+8. ERROR HANDLING PATTERNS
+================================================================================
+
+All framework errors are plain Error subclasses at M0 (no custom error hierarchy
+beyond the provider classes). Messages follow the pinned two-line format:
+"[ai] <what happened>.\n  <how to fix it>."
+
+Pattern 1 — provider error taxonomy (instanceof, per provider namespace):
+
+```ts
+import { Elevenlabs } from "@moku-labs/ai";
+try {
+  await app.voiceover.generate({ text: "Hi", voice: "21m00Tcm4TlvDq8ikWAM" });
+} catch (error) {
+  if (error instanceof Elevenlabs.RetryableProviderError) {
+    // transient: 5xx / 429 / timeout / network — error.status, error.kind, error.retryAfterMs
+  } else if (error instanceof Elevenlabs.FlaggedProviderError) {
+    // content policy — do not re-queue
+  } else if (error instanceof Elevenlabs.TerminalProviderError) {
+    // deterministic 4xx — error.status
+  } else throw error;
+}
+```
+
+Pattern 2 — structural classification (how the runner does it; no class imports).
+Provider errors carry ProviderErrorHint fields read by shape: `status?: number`,
+`kind?: "timeout" | "network" | "content-policy"` (kind overrides status),
+`retryAfterMs?: number`. An error with no hint classifies as "network" (retryable).
+Custom providers steer retry behavior by attaching these fields to thrown errors.
+
+Pattern 3 — breaker-open (tag, not message):
+
+```ts
+try {
+  const { release } = await ctx.limits.acquire(lane);
+  // ... release() in finally
+} catch (error) {
+  if ((error as { reason?: string }).reason === "breaker-open") return; // skip / fail over
+  throw error;
+}
+```
+
+Pattern 4 — gate results are values, not throws:
+`gateToDispatching` returns { ok: false, reason: "budget" | "duplicate" } — branch,
+don't catch. Run-level failures also resolve (RunResult.status "failed") rather than
+reject; run()/resume() throw only for caller mistakes (run already active, unknown
+runId, no resumable run).
+
+Pattern 5 — aborts are not errors. A caller-initiated AbortSignal abort propagates
+unchanged (never reclassified, never breaker-reported); the runner turns it into
+{ status: "paused" } after draining in-flight items.
+
+Pinned message catalog (verbatim, interpolations in <>):
+- [ai] Journal is not open.\n  Call app.start() before using the journal.
+- [ai] Store object not found for hash <hash>.
+- [ai] Store integrity check failed for <hash>.
+- [ai] Provider "<provider>" is already registered for task "<task>".\n  Register each task/provider pair exactly once.
+- [ai] Build file "<label>" is invalid.\n  <path>: <message>.
+- [ai] No build files matched "<pattern>".\n  Run "moku new" to create one.
+- [ai] No voiceover provider named "<name>" is registered.\n  Available: <list or "none">.
+  (same shape for translate / prompt-gen)
+- [ai] Registered translate provider "<name>" does not implement TranslateHandler.\n  It must expose estimate() and execute() functions.
+  (same shape per task contract)
+- [ai] ELEVENLABS_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.
+- [ai] OPENAI_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.
+- [ai] Compose could not produce a valid build file after <n> attempts.\n  Refine the prompt or write the build file manually with "moku new".
+
+================================================================================
+9. DEPENDENCY GRAPH + INITIALIZATION ORDER
+================================================================================
+
+Core plugins (Layer 1, before all regular plugins):
+  log → env → journal → store → limits          (no inter-dependencies; injected as ctx.*)
+
+Regular plugins (Layer 2 registration order in src/index.ts — every plugin after
+everything it depends on):
+
+  1. registry      (deps: none)   Nano
+  2. buildfile     (deps: none)   Standard
+  3. runner        (deps: registry, buildfile)          Complex
+  4. voiceover     (deps: registry)                      Standard
+  5. translate     (deps: registry)                      Standard
+  6. promptGen     (deps: registry)                      Standard
+  7. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs")   Complex
+  8. openai        (deps: registry) — onInit registers ("voiceover","openai"),
+                    ("translate","openai"), ("prompt-gen","openai")                  Complex
+  9. compose       (deps: buildfile, promptGen)          Standard
+ 10. cli           (deps: runner, buildfile, compose)    Complex
+
+ASCII graph (A --> B means A depends on B):
+
+  runner ----> registry        voiceover --> registry     elevenlabs --> registry
+  runner ----> buildfile       translate --> registry     openai -----> registry
+  compose ---> buildfile       promptGen --> registry
+  compose ---> promptGen
+  cli -------> runner          cli --------> buildfile    cli --------> compose
+
+Provider registration happens in onInit, so by the time app.start() resolves every
+task facade sees its providers. Registration order makes elevenlabs the first (and
+therefore default) voiceover provider; openai is the only translate/prompt-gen
+provider at M0. Wave history: W1 registry+buildfile · W2 runner+voiceover+translate+
+promptGen · W3 elevenlabs+openai+compose · W4 cli.
+
+================================================================================
+10. EXTENSION PATTERNS
+================================================================================
+
+10.1 Custom provider for an existing task (most common):
+
+```ts
+import { createApp, createPlugin, registryPlugin } from "@moku-labs/ai";
+import type { Voiceover } from "@moku-labs/ai";
+
+const handler: Voiceover.VoiceoverHandler = {
+  estimate: request => ({ usd: request.text.length * 0.00003 }),
+  execute: async (request, { signal }) => ({
+    audio: await acmeSynthesize(request.text, request.voice, signal),
+    mimeType: "audio/mpeg",
+    costUsd: request.text.length * 0.00003
+  })
+};
+
+export const acmeTtsPlugin = createPlugin("acmeTts", {
+  depends: [registryPlugin],
+  onInit: ctx => {
+    ctx.require(registryPlugin).register("voiceover", "acme", handler);
+  }
+});
+
+const app = createApp({
+  plugins: [acmeTtsPlugin],
+  pluginConfigs: { voiceover: { defaultProvider: "acme", defaultFormat: "mp3" } }
+});
+```
+
+Rules: implement the task's contract type; register in onInit under the task key;
+throw errors carrying ProviderErrorHint fields (status/kind/retryAfterMs) so the
+runner's retry taxonomy classifies them; never echo request text in messages/meta/logs.
+
+10.2 Custom TASK (open task set — a stated product requirement). Define a contract,
+register handlers under a new task key, and build files can use it immediately (the
+runner validates the handler shape at dispatch, not the task name at compile):
+
+```ts
+import { createPlugin, registryPlugin } from "@moku-labs/ai";
+
+type ImageRequest = { prompt: string; size?: string };
+type ImageHandler = {
+  estimate(request: ImageRequest): { usd: number };
+  execute(request: ImageRequest, opts: { signal?: AbortSignal }):
+    Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
+    // For runner-driven tasks the execute result MUST satisfy ExecutableHandler's
+    // { body, mimeType, costUsd } shape (the runner stores `body` in the CAS).
+};
+
+const imageHandler: ImageHandler = {
+  estimate: () => ({ usd: 0.04 }),
+  execute: async request => ({ body: await renderPng(request), mimeType: "image/png", costUsd: 0.04 })
+};
+
+export const imageProviderPlugin = createPlugin("imageProvider", {
+  depends: [registryPlugin],
+  onInit: ctx => ctx.require(registryPlugin).register("image", "acme", imageHandler)
+});
+```
+
+```yaml
+items:
+  - task: image
+    input: { prompt: "a neon city skyline", size: "1024x1024" }
+```
+
+10.3 Event-consumer plugin (bus subscription — the only way; no app.on):
+
+```ts
+import { createPlugin, runnerPlugin } from "@moku-labs/ai";
+
+export const metricsPlugin = createPlugin("metrics", {
+  depends: [runnerPlugin],
+  hooks: ctx => ({
+    "run:done": ({ runId, totals }) => ctx.log.info("run finished", { runId, spend: totals.spendUsd }),
+    "run:failed": ({ runId, error }) => ctx.log.error("run failed", { runId, error })
+  })
+});
+```
+
+10.4 Plugin with its own API, state, and config (full shape):
+
+```ts
+import { createPlugin } from "@moku-labs/ai";
+
+type Config = { greeting: string };
+type State = { count: number };
+
+export const counterPlugin = createPlugin("counter", {
+  config: { greeting: "hello" } satisfies Config,
+  createState: (): State => ({ count: 0 }),
+  api: ctx => ({
+    bump: () => {
+      ctx.state.count += 1;
+      ctx.log.info(ctx.config.greeting, { count: ctx.state.count });
+      return ctx.state.count;
+    }
+  })
+});
+// app.counter.bump() after createApp({ plugins: [counterPlugin] }).start()
+```
+
+Every custom plugin's ctx automatically carries ctx.journal, ctx.store, ctx.limits,
+ctx.log, ctx.env (core APIs) plus emit/require per its declarations. Family rules for
+plugin source: render CLI output through @moku-labs/common/cli (MC1), log via ctx.log
+(MC2), read env via ctx.env (MC3).
+
+10.5 Testing conventions: mock the structural APIs (JournalApi/StoreApi/LimitsApi are
+plain object types — fake object literals satisfy them); assemble a private framework
+with createCore(coreConfig, { plugins: [...], pluginConfigs: { journal: { path: tmp },
+store: { dir: tmp } } }) to pin core-plugin paths into a temp dir. Plugin tests live in
+src/plugins/<name>/__tests__/{unit,integration}; root tests/ is framework-level only.
+522 tests, 90% coverage threshold. Run: bun run test.
