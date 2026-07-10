@@ -10,7 +10,7 @@ It is a **Core plugin** (Complex tier): registered in `createCoreConfig` at Laye
 
 ## Configuration
 
-Configured under the `journal` key of `pluginConfigs` in `createApp`.
+The journal is a Core plugin, so its config lives at Layer 1 — it is set where `createCore` is called, not by consumer apps. `createApp`'s `pluginConfigs` is typed to **regular plugins only**; the framework calls `createCore` with `pluginConfigs: {}`, so at M0 the defaults below are fixed for Layer-3 apps.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -198,20 +198,20 @@ None. The journal is a Core plugin — it declares no events, emits nothing, and
 
 ## Usage examples
 
-### Consumer app: overriding journal config
+### Consumer app: journal lifecycle
+
+Consumer apps do not configure the journal — its Layer-1 defaults (`.moku/journal.db`, 30s checkpoints) are fixed at M0. The journal opens and closes with the app:
 
 ```ts
 import { createApp } from "@moku-labs/ai";
 
-const app = createApp({
-  pluginConfigs: {
-    journal: { path: ".moku/my-project.db", checkpointIntervalMs: 10_000 }
-  }
-});
+const app = createApp({});
 
 await app.start(); // opens the journal (directory, driver, pragmas, schema, timer)
 await app.stop();  // final checkpoint + close
 ```
+
+(Framework tests that need a different path call `createCore(coreConfig, { plugins: [], pluginConfigs: { journal: { path: tmp } } })` — a Layer-2 option, not available through `createApp`.)
 
 ### Custom plugin: driving the full item lifecycle
 

@@ -27,24 +27,22 @@ type Config = {
 | `defaults.breakerCooldownMs` | `number` | `30_000` | How long an open breaker stays open before the half-open probe, in ms. |
 | `lanes` | `Record<string, Partial<LaneConfig>>` | `{}` | Per-lane overrides, keyed by the exact lane string (`"{task}/{provider}/{account}"`) or a `"{task}/{provider}"` prefix. |
 
-Merge precedence (resolved per lane by `laneConfig`): **exact lane override → `"task/provider"` prefix override → `defaults`**. Consumer apps override values via `createApp({ pluginConfigs: { limits: { ... } } })`:
+Merge precedence (resolved per lane by `laneConfig`): **exact lane override → `"task/provider"` prefix override → `defaults`**.
+
+Limits is a Core plugin, so its config lives at Layer 1 — it is set where `createCore` is called, not by consumer apps. `createApp`'s `pluginConfigs` is typed to **regular plugins only**; the framework calls `createCore` with `pluginConfigs: {}`, so at M0 the defaults above (60 rpm / 4 concurrent per lane) are fixed for Layer-3 apps. The config shape, for Layer-2 callers of `createCore(coreConfig, { pluginConfigs })`:
 
 ```ts
-import { createApp } from "@moku-labs/ai";
-
-const app = createApp({
-  pluginConfigs: {
-    limits: {
-      defaults: { rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 },
-      lanes: {
-        // Prefix override: applies to every account on this task/provider pair.
-        "voiceover/elevenlabs": { rpm: 20, concurrency: 2 },
-        // Exact override: wins over the prefix for this specific lane.
-        "voiceover/elevenlabs/default": { breakerCooldownMs: 60_000 }
-      }
+{
+  limits: {
+    defaults: { rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 },
+    lanes: {
+      // Prefix override: applies to every account on this task/provider pair.
+      "voiceover/elevenlabs": { rpm: 20, concurrency: 2 },
+      // Exact override: wins over the prefix for this specific lane.
+      "voiceover/elevenlabs/default": { breakerCooldownMs: 60_000 }
     }
   }
-});
+}
 ```
 
 ## API reference (`ctx.limits.*`)

@@ -27,20 +27,14 @@ The root directory is created lazily on the first `put` (memoized via plugin sta
 
 ## Configuration
 
-Set under the `store` key of `pluginConfigs`.
+The store is a Core plugin, so its config lives at Layer 1 — it is set where `createCore` is called, not by consumer apps. `createApp`'s `pluginConfigs` is typed to **regular plugins only**; the framework calls `createCore` with `pluginConfigs: {}`, so at M0 the defaults below are fixed for Layer-3 apps.
 
 | Option | Type       | Default         | Description                                                                                  |
 | ------ | ---------- | --------------- | -------------------------------------------------------------------------------------------- |
 | `dir`  | `string`   | `".moku/store"` | Root directory of the CAS. Shards and objects are created beneath it.                        |
 | `algo` | `"sha256"` | `"sha256"`      | Hash algorithm (`node:crypto`). Fixed to `"sha256"` at M0; the option exists for forward-compat. |
 
-```ts
-const app = createApp({
-  pluginConfigs: {
-    store: { dir: ".cache/artifacts", algo: "sha256" }
-  }
-});
-```
+(Framework tests that need a different directory call `createCore(coreConfig, { plugins: [], pluginConfigs: { store: { dir: tmp } } })` — a Layer-2 option, not available through `createApp`.)
 
 ## API reference (`ctx.store.*`)
 
@@ -156,18 +150,6 @@ if (!(await ctx.store.has(hash))) {
 }
 
 const onDiskPath = ctx.store.pathOf(hash);
-```
-
-### Overriding the store directory in a consumer app
-
-```ts
-import { createApp } from "@moku-labs/ai";
-
-const app = createApp({
-  pluginConfigs: {
-    store: { dir: "/var/cache/moku-store", algo: "sha256" }
-  }
-});
 ```
 
 ## Integration

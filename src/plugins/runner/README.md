@@ -160,9 +160,20 @@ The runner is the only event declarer at M0. It emits five bus events and listen
 | `run:budget-stop` | `{ runId, spendUsd, maxCostUsd }` | Budget ceiling reached; run drained + stopped |
 | `run:paused` | `{ runId, drained }` | Clean pause completed (signal abort drained); `drained` = settled item count |
 
+The `App` type has no `on()` method — subscribe from a plugin that declares `depends: [runnerPlugin]` and a `hooks` map:
+
 ```ts
-app.on("run:progress", ({ done, total, spendUsd }) => render(done, total, spendUsd));
-app.on("run:done", ({ runId, totals }) => summarize(runId, totals));
+import { createApp, createPlugin, runnerPlugin } from "@moku-labs/ai";
+
+const reporterPlugin = createPlugin("reporter", {
+  depends: [runnerPlugin],
+  hooks: ctx => ({
+    "run:progress": ({ done, total, spendUsd }) => render(done, total, spendUsd),
+    "run:done": ({ runId, totals }) => summarize(runId, totals)
+  })
+});
+
+const app = createApp({ plugins: [reporterPlugin] });
 ```
 
 ## The pipeline (per item)

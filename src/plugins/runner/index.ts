@@ -30,7 +30,11 @@ export const runnerPlugin = createPlugin("runner", {
    * @returns The run:* event registrations.
    * @example
    * ```ts
-   * app.on("run:done", ({ runId }) => runId);
+   * // Subscribe from a plugin: depends: [runnerPlugin] + a hooks map.
+   * createPlugin("reporter", {
+   *   depends: [runnerPlugin],
+   *   hooks: () => ({ "run:done": ({ runId }) => runId })
+   * });
    * ```
    */
   events: register => ({
