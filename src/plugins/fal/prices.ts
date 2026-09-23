@@ -143,8 +143,19 @@ export function lookupPrice(
 }
 
 /**
- * Whether a request input is a resolved file (a `$ref` still unresolved at
- * estimate time is a plain object without these fields).
+ * A request image or ref at estimate time: a resolved file, or still the
+ * build-file reference the runner resolves before submit (the runner
+ * estimates the unresolved request).
+ *
+ * @example
+ * ```ts
+ * const input: EstimateInput = { $ref: "s01.key" };
+ * ```
+ */
+type EstimateInput = VideoFile | { $ref: string } | { $file: string };
+
+/**
+ * Whether a request input is a resolved file rather than a `$ref` / `$file`.
  *
  * @param value - A request image or ref.
  * @returns True for a resolved `VideoFile`.
@@ -153,14 +164,8 @@ export function lookupPrice(
  * isResolvedFile({ path: "a.png", mimeType: "image/png", hash: "h" }); // => true
  * ```
  */
-function isResolvedFile(value: unknown): value is VideoFile {
-  if (typeof value !== "object" || value === null) return false;
-  const file = value as Partial<Record<keyof VideoFile, unknown>>;
-  return (
-    typeof file.path === "string" &&
-    typeof file.mimeType === "string" &&
-    typeof file.hash === "string"
-  );
+function isResolvedFile(value: EstimateInput): value is VideoFile {
+  return "path" in value && "mimeType" in value && "hash" in value;
 }
 
 /**
@@ -173,7 +178,7 @@ function isResolvedFile(value: unknown): value is VideoFile {
  * imageTokens({ path: "square.png", mimeType: "image/png", hash: "h" }); // => 1024
  * ```
  */
-function imageTokens(file: unknown): number {
+function imageTokens(file: EstimateInput): number {
   if (!isResolvedFile(file)) return WORST_CASE_IMAGE_TOKENS;
 
   let size: ReturnType<typeof imageSize>;
@@ -199,7 +204,7 @@ function imageTokens(file: unknown): number {
  * isAudioFile({ path: "v.mp3", mimeType: "audio/mpeg", hash: "h" }); // => true
  * ```
  */
-function isAudioFile(file: unknown): boolean {
+function isAudioFile(file: EstimateInput): boolean {
   return isResolvedFile(file) && file.mimeType.startsWith("audio/");
 }
 
@@ -216,8 +221,8 @@ function isAudioFile(file: unknown): boolean {
  * ```
  */
 function referenceTokens(request: VideoRequest): number {
-  const references: readonly unknown[] = request.refs ?? [];
-  const images: unknown[] = references.filter(file => !isAudioFile(file));
+  const references: readonly EstimateInput[] = request.refs ?? [];
+  const images: EstimateInput[] = references.filter(file => !isAudioFile(file));
   if (request.image !== undefined) images.unshift(request.image);
 
   const imageTotal = images.reduce<number>((total, file) => total + imageTokens(file), 0);

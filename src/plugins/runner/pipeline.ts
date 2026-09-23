@@ -433,10 +433,10 @@ async function submitJob(
 
 /**
  * First poll of a job adopted after it expired. When the provider reports it
- * failed, or does not know it (a non-retryable poll error), the job is lost:
- * the source attempt and this attempt are marked `failed` and a new job is
- * submitted in this attempt. A content-policy verdict, pending and done are
- * returned for the normal loop.
+ * failed, or does not know it (a thrown 4xx), the job is lost: the source
+ * attempt and this attempt are marked `failed` and a new job is submitted in
+ * this attempt. A content-policy verdict, pending and done are returned for
+ * the normal loop; an abort or an unclassified error is rethrown.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -466,17 +466,20 @@ async function pollAdoptedExpired(
   try {
     poll = await pollOnce(ctx, handler, job.jobId, request, attemptId, signal);
   } catch (error) {
-    if (signal.aborted) throw error;
+    // An abort pauses; an unclassified error is a bug, never a reason to pay for a new job.
+    if (signal.aborted || classifyError(error) === "unknown") throw error;
     poll = { state: "failed", error };
   }
+
   // A content-policy verdict ends the item as flagged: the same prompt would be flagged again.
   const isFlagged = poll.state === "failed" && classifyError(poll.error) === "content-policy";
   if (poll.state !== "failed" || isFlagged) return { poll, jobId: job.jobId };
 
   // The provider lost or failed the expired job: only now is a second job paid for.
-  // Both rows stop pointing at it, so a failed re-submit never adopts the lost job again.
+  // Both rows are marked failed, so findLiveJob never returns the lost job again.
   ctx.journal.setAttemptJob(job.adoptedFrom, { jobState: "failed" });
   ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
+  if (signal.aborted) throw abortReasonOf(signal);
   ctx.log.warn("runner:job:resubmitted", { itemId: item.id });
   const jobId = await submitJob(ctx, item, handler, request, attemptId, signal);
   return { poll: { state: "pending" }, jobId };
@@ -518,8 +521,10 @@ async function runJob(
   let adoptedFrom = job.adoptedFrom;
 
   for (;;) {
+    // Stop cleanly when the drain signal fired since the last poll.
     if (signal.aborted) throw abortReasonOf(signal);
 
+    // Poll the job; an expired one adopted this attempt gets its first-poll verdict instead.
     let poll: Awaited<ReturnType<JobHandler["poll"]>>;
     if (adoptedFrom === undefined) {
       poll = await pollOnce(ctx, handler, jobId, request, attemptId, signal);
@@ -539,6 +544,7 @@ async function runJob(
       adoptedFrom = undefined;
     }
 
+    // A done or failed job ends the loop.
     if (poll.state === "done") {
       ctx.journal.setAttemptJob(attemptId, { jobState: "done" });
       return poll;
@@ -548,6 +554,7 @@ async function runJob(
       throw poll.error;
     }
 
+    // Still pending: expire at the deadline, else wait for the next poll.
     if (Date.now() >= deadline) {
       ctx.journal.setAttemptJob(attemptId, { jobState: "expired" });
       throw jobTimeoutError(ctx.config.jobTimeoutMs);
