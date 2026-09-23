@@ -98,12 +98,13 @@ Seedance 1080p has no bundled price. Add `seedance-2.5@1080p` to `priceOverrides
 
 | Condition | Result |
 | --- | --- |
-| Caller abort | Rethrown unchanged (clean pause) |
+| Caller abort | Rethrown unchanged (clean pause). It stops uploads; a queue POST already sent runs to the end, so a billed job always returns its id |
 | Request timeout / network failure | Retryable, `kind: "timeout"` / `"network"` (a poll keeps polling) |
 | 429 | Retryable, `status: 429`, `Retry-After` honored |
 | 5xx | Retryable, `status` |
 | 422 `content_policy_violation`, or `error_type` with `content_policy` | Flagged, never re-queued |
 | Other 4xx | Terminal, `status` |
+| Result or download of a `COMPLETED` job fails with a 4xx other than 422 | Retryable 503 (`fal:result:unreadable`): the clip exists and is paid for, so polling goes on and the job stays adoptable |
 | Job `COMPLETED` + `generation_timeout` / `downstream_service_unavailable` / `internal_server_error` | `failed` with a retryable 503: the next attempt submits again |
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
 | `FAL_KEY` not set, unknown model, missing image, too many refs | Plain error: terminal after one attempt, nothing billed |

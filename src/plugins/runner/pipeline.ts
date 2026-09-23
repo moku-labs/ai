@@ -565,8 +565,10 @@ async function runJob(
 
 /**
  * One poll of a provider job. A thrown retryable error (transport problem)
- * reads as `pending`; any other thrown error marks the job `failed` and is
- * rethrown. An abort is rethrown unchanged.
+ * reads as `pending`; a classified non-retryable error marks the job `failed`
+ * and is rethrown. An abort, or an unclassified error (a bug, not the
+ * provider's verdict), is rethrown with the job left `submitted`, so a later
+ * attempt or run adopts it instead of paying for a new one.
  *
  * @param ctx - Runner domain context.
  * @param handler - A job handler.
@@ -595,7 +597,8 @@ async function pollOnce(
 
     const errorClass = classifyError(error);
     if (!isRetryableErrorClass(errorClass)) {
-      ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
+      // An unclassified error is a bug on our side, not the provider's verdict: the job stays adoptable.
+      if (errorClass !== "unknown") ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
       throw error;
     }
     ctx.log.warn("runner:job:poll-retry", { errorClass });

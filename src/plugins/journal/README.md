@@ -173,7 +173,7 @@ const attemptId = ctx.journal.recordAttempt(item.id, {
 
 #### `finishAttempt(attemptId: number, end: AttemptEnd): void`
 
-Records the end of an attempt: `endedAt`, an `outcome` (`"done" | "retryable-error" | "terminal-error" | "flagged"`), and optionally `errorClass` and `costUsd`.
+Records the end of an attempt: `endedAt`, an `outcome` (`"done" | "retryable-error" | "terminal-error" | "flagged" | "aborted"`), and optionally `errorClass` and `costUsd`.
 
 ```ts
 ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "done", costUsd: 0.2 });

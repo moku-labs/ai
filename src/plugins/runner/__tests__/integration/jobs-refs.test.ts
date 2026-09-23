@@ -412,6 +412,29 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
     expect(video.submits).toHaveLength(2);
   });
 
+  it("D8: an unclassified poll error fails the item but leaves the job adoptable, so no second submit", async () => {
+    const video = jobHandler({
+      polls: (_jobId, count) => {
+        if (count === 1) throw new TypeError("cannot read properties of undefined");
+        return done("clip");
+      }
+    });
+    const image = imageHandler();
+    const app = await startApp(tempDir, [
+      ["image", "fake", image.handler],
+      ["video", "fake", video.handler]
+    ]);
+    stops.push(() => app.stop());
+    await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
+
+    const first = await app.runner.run({ files });
+    const second = await app.runner.run({ files });
+
+    expect(first.totals.failed).toBe(1);
+    expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+    expect(video.submits).toHaveLength(1);
+  });
+
   describe("D8: a job adopted after it expired", () => {
     it("is polled and finished with no second submit when fal completed it", async () => {
       const { video, first, second } = await expireThenRun(tempDir, stops, () => done("clip"));
@@ -490,13 +513,17 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
       expect(video.submits).toHaveLength(3);
     });
 
-    it("fails without a re-submit when its first poll throws an unclassified error", async () => {
-      const { video, second } = await expireThenRun(tempDir, stops, () => {
+    it("fails without a re-submit when its first poll throws an unclassified error, and stays adoptable", async () => {
+      const { app, video, second } = await expireThenRun(tempDir, stops, () => {
         throw new TypeError("cannot read properties of undefined");
       });
 
       expect(second.totals).toMatchObject({ done: 1, failed: 1 });
       expect(video.submits).toHaveLength(1);
+      const clip = app.probe.journal
+        .listItems(second.runId, {})
+        .find(item => item.task === "video");
+      expect(app.probe.journal.findLiveJob(clip?.artifactKey ?? "")?.externalId).toBe("job-1");
     });
 
     it("pauses without a re-submit when the run is aborted after fal reports the job failed", async () => {

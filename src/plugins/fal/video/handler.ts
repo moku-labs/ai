@@ -12,7 +12,7 @@ import type { ResolvedFalModel } from "../models";
 import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
 import type { FalContext, FalProviderError } from "../types";
-import { FlaggedProviderError, TerminalProviderError } from "../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
 import {
@@ -44,6 +44,12 @@ const PENDING: VideoJobPoll = { state: "pending" };
 
 /** Log event for a job that ended with an error. */
 const FAILED_EVENT = "fal:video:failed";
+
+/** fal's status for a job it rejected (validation or content policy) when the result is read. */
+const UNPROCESSABLE = 422;
+
+/** Status carried by a result that could not be read, so the runner classifies it retryable (5xx). */
+const RETRY_STATUS = 503;
 
 /**
  * Reads the fal key through the injected env API (MC3).
@@ -217,13 +223,15 @@ async function submitJob(
 
   const references = splitReferences(model, request.refs ?? []);
   const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
+
+  // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
+  signal?.throwIfAborted();
   const response = await falFetch({
     url: `${ctx.config.queueUrl}/${model.endpoint}`,
     method: "POST",
     apiKey,
     json: buildFalBody(model, request, urls),
-    timeoutMs: ctx.config.timeoutMs,
-    signal
+    timeoutMs: ctx.config.timeoutMs
   });
 
   const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
@@ -236,9 +244,11 @@ async function submitJob(
 }
 
 /**
- * Fetches a finished job's result and downloads the clip. A 4xx on either
- * call (a content-policy 422 included) becomes `failed`; 5xx, network and
- * timeout errors are thrown so the runner keeps polling.
+ * Fetches a finished job's result and downloads the clip. A content-policy
+ * flag or a 422 on the result is fal's verdict and becomes `failed`. Any
+ * other failure (another 4xx, 5xx, network, timeout) is thrown as retryable:
+ * the clip exists and is paid for, so the runner keeps polling and the job
+ * stays adoptable instead of being paid for again.
  *
  * @param ctx - Plugin context.
  * @param job - The job.
@@ -279,11 +289,36 @@ async function fetchResult(
       meta: { endpoint: job.endpoint, requestId: job.requestId, seconds: requestSeconds(request) }
     };
   } catch (error) {
-    const isFinal = error instanceof TerminalProviderError || error instanceof FlaggedProviderError;
-    if (!isFinal) throw error;
+    const isJobVerdict =
+      error instanceof FlaggedProviderError ||
+      (error instanceof TerminalProviderError && error.status === UNPROCESSABLE);
+    if (!isJobVerdict) throw asRetryable(ctx, job, error);
     ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
     return { state: "failed", error };
   }
+}
+
+/**
+ * Turns a terminal failure to read a finished job's result into a retryable
+ * one (logged as `fal:result:unreadable`); every other error is returned as is.
+ *
+ * @param ctx - Plugin context (log).
+ * @param job - The job.
+ * @param error - What the result or download call threw.
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * throw asRetryable(ctx, job, error);
+ * ```
+ */
+function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
+  if (!(error instanceof TerminalProviderError)) return error;
+
+  ctx.log.warn("fal:result:unreadable", { requestId: job.requestId, status: error.status });
+  return new RetryableProviderError(
+    `[ai] fal finished the job but its result could not be read (HTTP ${error.status}).\n  The job stays live; the next poll reads it again.`,
+    { status: RETRY_STATUS }
+  );
 }
 
 /**
@@ -359,11 +394,13 @@ export function createVideoHandler(ctx: FalContext): FalVideoHandler {
       return { usd: videoCostUsd(ctx, request) };
     },
     /**
-     * Uploads the inputs and queues the job.
+     * Uploads the inputs and queues the job. An abort stops the uploads; once
+     * the queue POST is sent it runs to the end, so a billed job always
+     * returns its id.
      *
      * @param request - The resolved video request.
      * @param opts - Options.
-     * @param opts.signal - Caller abort signal.
+     * @param opts.signal - Caller abort signal (uploads only).
      * @returns The opaque job id to journal.
      * @example
      * ```ts

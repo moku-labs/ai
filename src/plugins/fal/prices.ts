@@ -184,8 +184,10 @@ function isResolvedFile(value: EstimateInput): value is VideoFile {
  * ```
  */
 function imageTokens(file: EstimateInput): number {
+  // A `$ref` / `$file` not resolved yet is priced at the worst case.
   if (!isResolvedFile(file)) return WORST_CASE_IMAGE_TOKENS;
 
+  // Read the header; an unreadable file or unknown format also takes the worst case.
   let size: ReturnType<typeof imageSize>;
   try {
     size = imageSize(new Uint8Array(readFileSync(file.path)));
@@ -194,6 +196,7 @@ function imageTokens(file: EstimateInput): number {
   }
   if (size === undefined) return WORST_CASE_IMAGE_TOKENS;
 
+  // Match the aspect ratio to the fal token table.
   const ratio = Math.max(size.width, size.height) / Math.min(size.width, size.height);
   const row = IMAGE_TOKENS_BY_RATIO.find(([rowRatio]) => ratio <= rowRatio + RATIO_TOLERANCE);
   return row === undefined ? WORST_CASE_IMAGE_TOKENS : row[1];

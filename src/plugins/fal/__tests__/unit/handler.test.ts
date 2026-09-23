@@ -201,6 +201,34 @@ describe("submit", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not POST when the caller aborted before the queue call", async () => {
+    const fetchMock = stubFetch();
+    const controller = new AbortController();
+    controller.abort();
+    const handler = createVideoHandler(createTestCtx({ config: { upload: "data-uri" } }));
+
+    await expect(
+      handler.submit(minimaxRequest(), { signal: controller.signal })
+    ).rejects.toBeDefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("finishes a queue POST already sent when the caller aborts, so the billed job id is returned", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      controller.abort();
+      if (init?.signal?.aborted) throw init.signal.reason;
+      return submitResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const handler = createVideoHandler(createTestCtx({ config: { upload: "data-uri" } }));
+
+    const { jobId } = await handler.submit(minimaxRequest(), { signal: controller.signal });
+
+    expect(JSON.parse(jobId)).toMatchObject({ requestId: "req-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects an unknown model", async () => {
     stubFetch();
     const handler = createVideoHandler(createTestCtx());
@@ -372,12 +400,42 @@ describe("poll", () => {
     expect(error).toBeInstanceOf(FlaggedProviderError);
   });
 
-  it("a 4xx result fails terminal", async () => {
-    stubFetch(jsonResponse(200, { status: "COMPLETED" }), jsonResponse(404, { detail: "gone" }));
+  it("a 422 result is fal's verdict and fails terminal", async () => {
+    stubFetch(jsonResponse(200, { status: "COMPLETED" }), jsonResponse(422, { detail: "invalid" }));
     const error = failedError(
       await createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
     );
     expect(error).toBeInstanceOf(TerminalProviderError);
+  });
+
+  it("another 4xx on a finished job's result is thrown retryable, so the paid clip is not lost", async () => {
+    stubFetch(jsonResponse(200, { status: "COMPLETED" }), jsonResponse(404, { detail: "gone" }));
+    const ctx = createTestCtx();
+
+    const rejection = await createVideoHandler(ctx)
+      .poll(JOB_ID, minimaxRequest(), {})
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(RetryableProviderError);
+    expect((rejection as RetryableProviderError).status).toBe(503);
+    expect((rejection as Error).message).toBe(
+      "[ai] fal finished the job but its result could not be read (HTTP 404).\n  The job stays live; the next poll reads it again."
+    );
+    expect(ctx.log.warn).toHaveBeenCalledWith("fal:result:unreadable", {
+      requestId: "req-1",
+      status: 404
+    });
+  });
+
+  it("a 403 on the clip download is thrown retryable too", async () => {
+    stubFetch(
+      jsonResponse(200, { status: "COMPLETED" }),
+      jsonResponse(200, { video: { url: VIDEO_URL } }),
+      jsonResponse(403, {})
+    );
+    await expect(
+      createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
+    ).rejects.toBeInstanceOf(RetryableProviderError);
   });
 
   it("a 5xx result is thrown so the runner keeps polling", async () => {
