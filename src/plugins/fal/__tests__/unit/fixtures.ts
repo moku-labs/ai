@@ -196,3 +196,98 @@ export function initiateResponse(n: number): Response {
 export function okResponse(): Response {
   return new Response("", { status: 200 });
 }
+
+/** Writes `value` as big-endian bytes of `width` length. */
+function bigEndian(value: number, width: number): number[] {
+  return Array.from({ length: width }, (_, index) => (value >> (8 * (width - 1 - index))) & 0xff);
+}
+
+/** Writes `value` as little-endian bytes of `width` length. */
+function littleEndian(value: number, width: number): number[] {
+  return Array.from({ length: width }, (_, index) => (value >> (8 * index)) & 0xff);
+}
+
+/** ASCII bytes of `text`. */
+function asciiBytes(text: string): number[] {
+  return [...text].map(char => char.codePointAt(0) ?? 0);
+}
+
+/** A PNG header (signature + IHDR) for a `width` x `height` image. */
+export function pngHeader(width: number, height: number): Uint8Array {
+  return new Uint8Array([
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+    ...bigEndian(13, 4),
+    ...asciiBytes("IHDR"),
+    ...bigEndian(width, 4),
+    ...bigEndian(height, 4),
+    8,
+    6,
+    0,
+    0,
+    0
+  ]);
+}
+
+/** A JPEG header with an EXIF APP1 and a DQT segment before the SOF0 marker. */
+export function jpegHeader(width: number, height: number): Uint8Array {
+  return new Uint8Array([
+    0xff,
+    0xd8,
+    0xff,
+    0xe1,
+    ...bigEndian(8, 2),
+    ...asciiBytes("Exif"),
+    0,
+    0,
+    0xff,
+    0xdb,
+    ...bigEndian(4, 2),
+    0,
+    1,
+    0xff,
+    0xc0,
+    ...bigEndian(17, 2),
+    8,
+    ...bigEndian(height, 2),
+    ...bigEndian(width, 2),
+    3,
+    1,
+    0x22,
+    0,
+    2,
+    0x11,
+    1,
+    3,
+    0x11,
+    1
+  ]);
+}
+
+/** A WebP header whose first chunk is `VP8 `, `VP8L` or `VP8X`. */
+export function webpHeader(
+  kind: "VP8 " | "VP8L" | "VP8X",
+  width: number,
+  height: number
+): Uint8Array {
+  const payloads: Record<typeof kind, number[]> = {
+    "VP8 ": [0, 0, 0, 0x9d, 0x01, 0x2a, ...littleEndian(width, 2), ...littleEndian(height, 2)],
+    VP8L: [0x2f, ...littleEndian((width - 1) | ((height - 1) << 14), 4)],
+    VP8X: [0, 0, 0, 0, ...littleEndian(width - 1, 3), ...littleEndian(height - 1, 3)]
+  };
+  const payload = payloads[kind];
+  return new Uint8Array([
+    ...asciiBytes("RIFF"),
+    ...littleEndian(payload.length + 12, 4),
+    ...asciiBytes("WEBP"),
+    ...asciiBytes(kind),
+    ...littleEndian(payload.length, 4),
+    ...payload
+  ]);
+}

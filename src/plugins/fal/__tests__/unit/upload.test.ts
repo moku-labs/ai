@@ -43,11 +43,17 @@ describe("uploadInputs — storage mode", () => {
       okResponse()
     );
 
-    const urls = await uploadInputs(createTestCtx(), png, [jpg], { apiKey: TEST_KEY });
+    const urls = await uploadInputs(
+      createTestCtx(),
+      png,
+      { images: [jpg], audio: [] },
+      { apiKey: TEST_KEY }
+    );
 
     expect(urls).toEqual({
       image: "https://cdn.fal.test/file/1",
-      refs: ["https://cdn.fal.test/file/2"]
+      refs: ["https://cdn.fal.test/file/2"],
+      audioRefs: []
     });
     const calls = callsOf(fetchMock);
     expect(calls).toHaveLength(4);
@@ -77,11 +83,12 @@ describe("uploadInputs — storage mode", () => {
     const fetchMock = stubFetch(jsonResponse(500, { detail: "down" }));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, [jpg], { apiKey: TEST_KEY });
+    const urls = await uploadInputs(ctx, png, { images: [jpg], audio: [] }, { apiKey: TEST_KEY });
 
     expect(urls).toEqual({
       image: toDataUri(PNG, "image/png"),
-      refs: [toDataUri(JPG, "image/jpeg")]
+      refs: [toDataUri(JPG, "image/jpeg")],
+      audioRefs: []
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(ctx.log.warn).toHaveBeenCalledTimes(1);
@@ -93,9 +100,9 @@ describe("uploadInputs — storage mode", () => {
     stubFetch(new TypeError("fetch failed"));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, [], { apiKey: TEST_KEY });
+    const urls = await uploadInputs(ctx, png, { images: [], audio: [] }, { apiKey: TEST_KEY });
 
-    expect(urls).toEqual({ image: toDataUri(PNG, "image/png"), refs: [] });
+    expect(urls).toEqual({ image: toDataUri(PNG, "image/png"), refs: [], audioRefs: [] });
     expect(ctx.log.warn).toHaveBeenCalledWith("fal:upload:fallback", { status: undefined });
   });
 
@@ -103,7 +110,12 @@ describe("uploadInputs — storage mode", () => {
     const png = temp.file("f.png", PNG, "image/png", HASH_A);
     stubFetch(jsonResponse(200, { upload_url: "https://u" }));
 
-    const urls = await uploadInputs(createTestCtx(), png, [], { apiKey: TEST_KEY });
+    const urls = await uploadInputs(
+      createTestCtx(),
+      png,
+      { images: [], audio: [] },
+      { apiKey: TEST_KEY }
+    );
 
     expect(urls.image).toBe(toDataUri(PNG, "image/png"));
   });
@@ -113,7 +125,7 @@ describe("uploadInputs — storage mode", () => {
     stubFetch(initiateResponse(1), jsonResponse(503, {}));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, [], { apiKey: TEST_KEY });
+    const urls = await uploadInputs(ctx, png, { images: [], audio: [] }, { apiKey: TEST_KEY });
 
     expect(urls.image).toBe(toDataUri(PNG, "image/png"));
     expect(ctx.log.warn).toHaveBeenCalledWith("fal:upload:fallback", { status: 503 });
@@ -133,7 +145,12 @@ describe("uploadInputs — storage mode", () => {
     const ctx = createTestCtx();
 
     await expect(
-      uploadInputs(ctx, png, [], { apiKey: TEST_KEY, signal: controller.signal })
+      uploadInputs(
+        ctx,
+        png,
+        { images: [], audio: [] },
+        { apiKey: TEST_KEY, signal: controller.signal }
+      )
     ).rejects.toBe(abortError);
     expect(ctx.log.warn).not.toHaveBeenCalled();
   });
@@ -141,8 +158,13 @@ describe("uploadInputs — storage mode", () => {
   it("uploads only the image when there are no refs", async () => {
     const png = temp.file("j.png", PNG, "image/png", HASH_A);
     const fetchMock = stubFetch(initiateResponse(1), okResponse());
-    const urls = await uploadInputs(createTestCtx(), png, [], { apiKey: TEST_KEY });
-    expect(urls).toEqual({ image: "https://cdn.fal.test/file/1", refs: [] });
+    const urls = await uploadInputs(
+      createTestCtx(),
+      png,
+      { images: [], audio: [] },
+      { apiKey: TEST_KEY }
+    );
+    expect(urls).toEqual({ image: "https://cdn.fal.test/file/1", refs: [], audioRefs: [] });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -152,9 +174,14 @@ describe("uploadInputs — data-uri mode", () => {
     const png = temp.file("i.png", PNG, "image/png", HASH_A);
     const fetchMock = stubFetch();
 
-    const urls = await uploadInputs(createTestCtx({ config: { upload: "data-uri" } }), png, [], {
-      apiKey: TEST_KEY
-    });
+    const urls = await uploadInputs(
+      createTestCtx({ config: { upload: "data-uri" } }),
+      png,
+      { images: [], audio: [] },
+      {
+        apiKey: TEST_KEY
+      }
+    );
 
     expect(urls.image).toBe(`data:image/png;base64,${Buffer.from(PNG).toString("base64")}`);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -163,9 +190,14 @@ describe("uploadInputs — data-uri mode", () => {
   it("throws a readable [ai] error when the file cannot be read", async () => {
     const missing = { path: `${temp.dir}/missing.png`, mimeType: "image/png", hash: HASH_A };
     await expect(
-      uploadInputs(createTestCtx({ config: { upload: "data-uri" } }), missing, [], {
-        apiKey: TEST_KEY
-      })
+      uploadInputs(
+        createTestCtx({ config: { upload: "data-uri" } }),
+        missing,
+        { images: [], audio: [] },
+        {
+          apiKey: TEST_KEY
+        }
+      )
     ).rejects.toThrow(/^\[ai\] Cannot read fal input file/);
   });
 });

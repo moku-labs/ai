@@ -88,9 +88,11 @@ function imageHandler(): { handler: ExecutableHandler; calls: string[] } {
 /** Script for one fake video job handler. */
 type JobScript = {
   /** Poll results per job id, consumed in order; the last one repeats. */
-  polls: (jobId: string, count: number) => JobPoll;
+  polls: (jobId: string, count: number) => JobPoll | Promise<JobPoll>;
   /** Called on every poll, before the result is returned. */
   onPoll?: (jobId: string) => void;
+  /** Makes submit number `n` (1-based) throw this error instead of returning a job id. */
+  submitError?: (n: number) => Error | undefined;
 };
 
 /**
@@ -112,6 +114,8 @@ function jobHandler(script: JobScript) {
     estimate: request => ({ usd: Number(request.seconds ?? 5) * 0.1 }),
     submit: async request => {
       submits.push(request);
+      const error = script.submitError?.(submits.length);
+      if (error) throw error;
       return { jobId: `job-${submits.length}` };
     },
     poll: async jobId => {
@@ -189,6 +193,54 @@ items:
       image: { $ref: shot.key }
       seconds: 5
 `;
+
+/**
+ * Runs the chain twice in one app: run 1 lets job-1 expire on its only
+ * attempt, then `after` decides what the provider says about each job in run 2.
+ *
+ * @param tempDir - Per-test directory.
+ * @param stops - Cleanup list the app's stop is pushed to.
+ * @param after - Poll answers once job-1 has expired.
+ * @param options - Extra script and run-2 options.
+ * @param options.submitError - Makes submit number `n` throw.
+ * @param options.signal - Abort signal for run 2.
+ * @returns The app, the video handler logs and both run results.
+ * @example
+ * ```ts
+ * const { second } = await expireThenRun(tempDir, stops, () => done("clip"));
+ * ```
+ */
+async function expireThenRun(
+  tempDir: string,
+  stops: Array<() => Promise<void>>,
+  after: (jobId: string) => JobPoll | Promise<JobPoll>,
+  options: { submitError?: (n: number) => Error | undefined; signal?: AbortSignal } = {}
+) {
+  let expired = false;
+  const video = jobHandler({
+    polls: jobId => (expired ? after(jobId) : PENDING),
+    ...(options.submitError ? { submitError: options.submitError } : {})
+  });
+  const image = imageHandler();
+  const app = await startApp(
+    tempDir,
+    [
+      ["image", "fake", image.handler],
+      ["video", "fake", video.handler]
+    ],
+    { jobTimeoutMs: 20, maxAttempts: 1 }
+  );
+  stops.push(() => app.stop());
+  await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
+
+  const first = await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+  expired = true;
+  const second = await app.runner.run(
+    { files: path.join(tempDir, "*.moku.yaml") },
+    options.signal ? { signal: options.signal } : undefined
+  );
+  return { app, video, first, second };
+}
 
 describe("runner: flat requests, jobs, references, export, reuse", () => {
   let tempDir: string;
@@ -340,7 +392,7 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
     expect(video.submits).toHaveLength(2);
   });
 
-  it("D8: a job past jobTimeoutMs expires and the next attempt re-submits", async () => {
+  it("D8: a job that stays pending through two timeouts is stuck, and a later attempt re-submits", async () => {
     const video = jobHandler({ polls: jobId => (jobId === "job-1" ? PENDING : done("clip")) });
     const image = imageHandler();
     const app = await startApp(
@@ -358,6 +410,187 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
 
     expect(result.status).toBe("done");
     expect(video.submits).toHaveLength(2);
+  });
+
+  it("D8: an unclassified poll error fails the item but leaves the job adoptable, so no second submit", async () => {
+    const video = jobHandler({
+      polls: (_jobId, count) => {
+        if (count === 1) throw new TypeError("cannot read properties of undefined");
+        return done("clip");
+      }
+    });
+    const image = imageHandler();
+    const app = await startApp(tempDir, [
+      ["image", "fake", image.handler],
+      ["video", "fake", video.handler]
+    ]);
+    stops.push(() => app.stop());
+    await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
+
+    const first = await app.runner.run({ files });
+    const second = await app.runner.run({ files });
+
+    expect(first.totals.failed).toBe(1);
+    expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+    expect(video.submits).toHaveLength(1);
+  });
+
+  it("D8: a poll that always throws an unclassified error is re-submitted once, after two runs", async () => {
+    const video = jobHandler({
+      polls: jobId => {
+        if (jobId === "job-1") throw new TypeError("cannot read properties of undefined");
+        return done("clip");
+      }
+    });
+    const image = imageHandler();
+    const app = await startApp(tempDir, [
+      ["image", "fake", image.handler],
+      ["video", "fake", video.handler]
+    ]);
+    stops.push(() => app.stop());
+    await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
+
+    const first = await app.runner.run({ files });
+    const second = await app.runner.run({ files });
+    expect([first.totals.failed, second.totals.failed, video.submits.length]).toEqual([1, 1, 1]);
+
+    const third = await app.runner.run({ files });
+
+    expect(third.totals).toMatchObject({ done: 2, failed: 0 });
+    expect(video.submits).toHaveLength(2);
+  });
+
+  describe("D8: a job adopted after it expired", () => {
+    it("is polled and finished with no second submit when fal completed it", async () => {
+      const { video, first, second } = await expireThenRun(tempDir, stops, () => done("clip"));
+
+      expect(first.totals.failed).toBe(1);
+      expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(1);
+    });
+
+    it("is submitted again, once, when fal no longer knows it", async () => {
+      const { app, video, first, second } = await expireThenRun(tempDir, stops, jobId => {
+        if (jobId === "job-1") throw Object.assign(new Error("not found"), { status: 404 });
+        return done("clip");
+      });
+
+      expect(first.totals.failed).toBe(1);
+      expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(2);
+      const clip = app.probe.journal
+        .listItems(second.runId, { status: "done" })
+        .find(item => item.task === "video");
+      expect(app.probe.journal.findLiveJob(clip?.artifactKey ?? "")).toBeUndefined();
+    });
+
+    it("is submitted again, once, when fal reports it failed", async () => {
+      const { video, second } = await expireThenRun(tempDir, stops, jobId =>
+        jobId === "job-1"
+          ? { state: "failed", error: Object.assign(new Error("gen failed"), { status: 503 }) }
+          : done("clip")
+      );
+
+      expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(2);
+    });
+
+    it("ends flagged, with no second submit, when fal flagged it for content policy", async () => {
+      const { video, second } = await expireThenRun(tempDir, stops, () => ({
+        state: "failed",
+        error: Object.assign(new Error("policy"), { kind: "content-policy" })
+      }));
+
+      expect(second.totals).toMatchObject({ done: 1, flagged: 1 });
+      expect(video.submits).toHaveLength(1);
+    });
+
+    it("gives the job submitted in its place a fresh jobTimeoutMs", async () => {
+      // The first poll outlasts the adopted job's 20 ms deadline before fal says it is gone.
+      const { video, second } = await expireThenRun(tempDir, stops, async jobId => {
+        if (jobId !== "job-1") return done("clip");
+        await new Promise(resolve => setTimeout(resolve, 40));
+        throw Object.assign(new Error("not found"), { status: 404 });
+      });
+
+      expect(second.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(2);
+    });
+
+    it("never adopts the lost job again when its re-submit fails", async () => {
+      const { app, video, second } = await expireThenRun(
+        tempDir,
+        stops,
+        jobId =>
+          jobId === "job-1"
+            ? { state: "failed", error: Object.assign(new Error("bad input"), { status: 400 }) }
+            : done("clip"),
+        {
+          submitError: n =>
+            n === 2 ? Object.assign(new Error("busy"), { status: 503 }) : undefined
+        }
+      );
+      expect(second.totals.failed).toBe(1);
+
+      const third = await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+
+      expect(third.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(3);
+    });
+
+    it("fails without a re-submit when its first poll throws an unclassified error; the next run submits once", async () => {
+      const { app, video, second } = await expireThenRun(tempDir, stops, jobId => {
+        if (jobId === "job-1") throw new TypeError("cannot read properties of undefined");
+        return done("clip");
+      });
+
+      expect(second.totals).toMatchObject({ done: 1, failed: 1 });
+      expect(video.submits).toHaveLength(1);
+
+      // job-1 has now expired twice (timeout, then the bug): it is stuck, so run 3 pays once.
+      const third = await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+      expect(third.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(2);
+    });
+
+    it("pauses without a re-submit when the run is aborted after fal reports the job failed", async () => {
+      const controller = new AbortController();
+      const { video, second } = await expireThenRun(
+        tempDir,
+        stops,
+        () => {
+          controller.abort();
+          return {
+            state: "failed",
+            error: Object.assign(new Error("gen failed"), { status: 503 })
+          };
+        },
+        { signal: controller.signal }
+      );
+
+      expect(second.status).toBe("paused");
+      expect(video.submits).toHaveLength(1);
+    });
+
+    it("pauses without a re-submit when the run is aborted during its first poll", async () => {
+      const controller = new AbortController();
+      const { app, video, second } = await expireThenRun(
+        tempDir,
+        stops,
+        () => {
+          controller.abort();
+          throw new Error("aborted");
+        },
+        { signal: controller.signal }
+      );
+
+      expect(second.status).toBe("paused");
+      expect(video.submits).toHaveLength(1);
+      const clip = app.probe.journal
+        .listItems(second.runId, {})
+        .find(item => item.task === "video");
+      expect(app.probe.journal.findLiveJob(clip?.artifactKey ?? "")?.externalId).toBe("job-1");
+    });
   });
 
   it("D7: a TypeError in a handler runs once and fails as unknown", async () => {

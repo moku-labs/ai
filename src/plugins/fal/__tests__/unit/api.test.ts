@@ -8,7 +8,14 @@ describe("createFalApi().info()", () => {
     expect(api.info()).toEqual({
       provider: "fal",
       configured: true,
-      models: ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "kling-3-pro", "kling-o3-ref"]
+      models: [
+        "seedance-2.5",
+        "seedance-2.5-ref",
+        "minimax-h3",
+        "minimax-h3-max-ref",
+        "kling-3-pro",
+        "kling-o3-ref"
+      ]
     });
   });
 

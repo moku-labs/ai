@@ -32,6 +32,23 @@ function mustExist<T>(value: T | undefined): T {
   return value;
 }
 
+/** Records one attempt on a fresh `pk-1` item and sets its job. */
+function jobAttempt(
+  api: JournalApi,
+  externalId: string,
+  jobState: "submitted" | "expired" | "failed" | "done"
+): number {
+  const run = api.openRun({ glob: "*.yaml" });
+  const [item] = api.insertItems(run.id, [intent("pk-1")]);
+  const attemptId = api.recordAttempt(mustExist(item).id, {
+    provider: "elevenlabs",
+    account: "default",
+    startedAt: 1
+  });
+  api.setAttemptJob(attemptId, { externalId, jobState });
+  return attemptId;
+}
+
 describe("journal api", () => {
   let dir: string;
   let driver: SqliteDriver;
@@ -217,6 +234,46 @@ describe("journal api", () => {
       expect(() =>
         api.finishAttempt(attemptId, { endedAt: 2, outcome: "done", costUsd: 0.05 })
       ).not.toThrow();
+    });
+  });
+
+  describe("findLiveJob", () => {
+    it("returns a submitted job with its attempt row", () => {
+      const attemptId = jobAttempt(api, "req-1", "submitted");
+      expect(api.findLiveJob("ak-pk-1")).toEqual({
+        externalId: "req-1",
+        jobState: "submitted",
+        attemptId
+      });
+    });
+
+    it("returns an expired job, so a new attempt polls it before submitting", () => {
+      const attemptId = jobAttempt(api, "req-1", "expired");
+      expect(api.findLiveJob("ak-pk-1")).toEqual({
+        externalId: "req-1",
+        jobState: "expired",
+        attemptId
+      });
+    });
+
+    it("skips an expired job a later row marked failed", () => {
+      jobAttempt(api, "req-1", "expired");
+      jobAttempt(api, "req-1", "failed");
+      expect(api.findLiveJob("ak-pk-1")).toBeUndefined();
+    });
+
+    it("skips a job that expired twice", () => {
+      jobAttempt(api, "req-1", "expired");
+      jobAttempt(api, "req-1", "expired");
+      expect(api.findLiveJob("ak-pk-1")).toBeUndefined();
+    });
+
+    it("skips a done job and returns the newest live one", () => {
+      jobAttempt(api, "req-1", "done");
+      expect(api.findLiveJob("ak-pk-1")).toBeUndefined();
+
+      const attemptId = jobAttempt(api, "req-2", "submitted");
+      expect(api.findLiveJob("ak-pk-1")?.attemptId).toBe(attemptId);
     });
   });
 

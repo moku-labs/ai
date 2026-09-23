@@ -12,7 +12,7 @@ import type { ResolvedFalModel } from "../models";
 import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
 import type { FalContext, FalProviderError } from "../types";
-import { FlaggedProviderError, TerminalProviderError } from "../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
 import {
@@ -44,6 +44,12 @@ const PENDING: VideoJobPoll = { state: "pending" };
 
 /** Log event for a job that ended with an error. */
 const FAILED_EVENT = "fal:video:failed";
+
+/** fal's status for a job it rejected (validation or content policy) when the result is read. */
+const UNPROCESSABLE = 422;
+
+/** Status carried by a result that could not be read, so the runner classifies it retryable (5xx). */
+const RETRY_STATUS = 503;
 
 /**
  * Reads the fal key through the injected env API (MC3).
@@ -88,29 +94,88 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
 }
 
 /**
- * Keeps the refs the model accepts, warning when some are dropped.
+ * A request's refs, split by kind: audio refs have an `audio/*` MIME type,
+ * every other ref is an image ref.
  *
- * @param ctx - Plugin context (log).
- * @param model - The resolved catalog row.
- * @param references - The request's reference images.
- * @returns At most `model.maxRefs` refs.
  * @example
  * ```ts
- * capReferences(ctx, resolveFalModel("kling-o3-ref"), references); // first 4
+ * const split: SplitReferences = { images: [face], audio: [voice] };
  * ```
  */
-function capReferences(
-  ctx: FalContext,
+export type SplitReferences = {
+  /** Reference images (every ref that is not audio). */
+  images: readonly VideoFile[];
+  /** Reference audio files. */
+  audio: readonly VideoFile[];
+};
+
+/**
+ * Whether a ref is an audio ref.
+ *
+ * @param file - The ref.
+ * @returns True for an `audio/*` MIME type.
+ * @example
+ * ```ts
+ * isAudioReference({ path: "v.mp3", mimeType: "audio/mpeg", hash: "h" }); // => true
+ * ```
+ */
+function isAudioReference(file: VideoFile): boolean {
+  return file.mimeType.startsWith("audio/");
+}
+
+/**
+ * The two-line error for refs over a model's limit.
+ *
+ * @param model - The resolved catalog row.
+ * @param kind - What is over the limit.
+ * @param max - The model's limit.
+ * @param given - How many the request has.
+ * @returns A plain (terminal) error.
+ * @example
+ * ```ts
+ * throw tooManyReferencesError(model, "reference images", 4, 6);
+ * ```
+ */
+function tooManyReferencesError(
+  model: ResolvedFalModel,
+  kind: "reference images" | "reference audio files",
+  max: number,
+  given: number
+): Error {
+  const limit =
+    max === 0 ? `takes no ${kind.replace(" files", "")}` : `takes at most ${max} ${kind}`;
+  return new Error(
+    `[ai] fal model "${model.alias}" ${limit}, got ${given}.\n  Remove refs from input.refs, or use a model that takes more.`
+  );
+}
+
+/**
+ * Splits the refs into images and audio and checks each against the model's
+ * limit. Nothing is dropped: a request over a limit fails before any upload.
+ *
+ * @param model - The resolved catalog row.
+ * @param references - The request's refs.
+ * @returns Image refs and audio refs, in request order.
+ * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
+ * @example
+ * ```ts
+ * splitReferences(resolveFalModel("kling-o3-ref"), references); // throws for 5+ image refs
+ * ```
+ */
+export function splitReferences(
   model: ResolvedFalModel,
   references: readonly VideoFile[]
-): readonly VideoFile[] {
-  if (references.length <= model.maxRefs) return references;
-  ctx.log.warn("fal:refs:truncated", {
-    model: model.alias,
-    given: references.length,
-    max: model.maxRefs
-  });
-  return references.slice(0, model.maxRefs);
+): SplitReferences {
+  const audio = references.filter(file => isAudioReference(file));
+  const images = references.filter(file => !isAudioReference(file));
+
+  if (images.length > model.maxRefs) {
+    throw tooManyReferencesError(model, "reference images", model.maxRefs, images.length);
+  }
+  if (audio.length > model.maxAudioRefs) {
+    throw tooManyReferencesError(model, "reference audio files", model.maxAudioRefs, audio.length);
+  }
+  return { images, audio };
 }
 
 /**
@@ -156,15 +221,17 @@ async function submitJob(
   const image = requireImage(model, request);
   const apiKey = resolveApiKey(ctx);
 
-  const references = capReferences(ctx, model, request.refs ?? []);
+  const references = splitReferences(model, request.refs ?? []);
   const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
+
+  // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
+  signal?.throwIfAborted();
   const response = await falFetch({
     url: `${ctx.config.queueUrl}/${model.endpoint}`,
     method: "POST",
     apiKey,
     json: buildFalBody(model, request, urls),
-    timeoutMs: ctx.config.timeoutMs,
-    signal
+    timeoutMs: ctx.config.timeoutMs
   });
 
   const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
@@ -177,9 +244,11 @@ async function submitJob(
 }
 
 /**
- * Fetches a finished job's result and downloads the clip. A 4xx on either
- * call (a content-policy 422 included) becomes `failed`; 5xx, network and
- * timeout errors are thrown so the runner keeps polling.
+ * Fetches a finished job's result and downloads the clip. A content-policy
+ * flag or a 422 on the result is fal's verdict and becomes `failed`. Any
+ * other failure (another 4xx, 5xx, network, timeout) is thrown as retryable:
+ * the clip exists and is paid for, so the runner keeps polling and the job
+ * stays adoptable instead of being paid for again.
  *
  * @param ctx - Plugin context.
  * @param job - The job.
@@ -220,11 +289,36 @@ async function fetchResult(
       meta: { endpoint: job.endpoint, requestId: job.requestId, seconds: requestSeconds(request) }
     };
   } catch (error) {
-    const isFinal = error instanceof TerminalProviderError || error instanceof FlaggedProviderError;
-    if (!isFinal) throw error;
+    const isJobVerdict =
+      error instanceof FlaggedProviderError ||
+      (error instanceof TerminalProviderError && error.status === UNPROCESSABLE);
+    if (!isJobVerdict) throw asRetryable(ctx, job, error);
     ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
     return { state: "failed", error };
   }
+}
+
+/**
+ * Turns a terminal failure to read a finished job's result into a retryable
+ * one (logged as `fal:result:unreadable`); every other error is returned as is.
+ *
+ * @param ctx - Plugin context (log).
+ * @param job - The job.
+ * @param error - What the result or download call threw.
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * throw asRetryable(ctx, job, error);
+ * ```
+ */
+function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
+  if (!(error instanceof TerminalProviderError)) return error;
+
+  ctx.log.warn("fal:result:unreadable", { requestId: job.requestId, status: error.status });
+  return new RetryableProviderError(
+    `[ai] fal finished the job but its result could not be read (HTTP ${error.status}).\n  Poll the job again; the runner does this on its own.`,
+    { status: RETRY_STATUS }
+  );
 }
 
 /**
@@ -286,7 +380,8 @@ async function pollJob(
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
     /**
-     * Estimates cost without any network or file access.
+     * Estimates cost without any network access. Reads only the headers of
+     * resolved reference images, for models billed by reference tokens.
      *
      * @param request - The video request (may still hold unresolved `$ref`s).
      * @returns The cost in USD.
@@ -299,11 +394,13 @@ export function createVideoHandler(ctx: FalContext): FalVideoHandler {
       return { usd: videoCostUsd(ctx, request) };
     },
     /**
-     * Uploads the inputs and queues the job.
+     * Uploads the inputs and queues the job. An abort stops the uploads; once
+     * the queue POST is sent it runs to the end, so a billed job always
+     * returns its id.
      *
      * @param request - The resolved video request.
      * @param opts - Options.
-     * @param opts.signal - Caller abort signal.
+     * @param opts.signal - Caller abort signal (uploads only).
      * @returns The opaque job id to journal.
      * @example
      * ```ts
