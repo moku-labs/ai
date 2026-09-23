@@ -183,9 +183,9 @@ ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "done", cos
 
 Records a provider job on an attempt: its id (`external_id`) and state (`submitted` → `done` | `failed` | `expired`). The runner writes `submitted` right after `submit()` returns, before any wait.
 
-#### `findLiveJob(artifactKey: string): { externalId: string } | undefined`
+#### `findLiveJob(artifactKey: string): LiveJob | undefined`
 
-The newest still-`submitted` job for any item with this artifact key, in any run. The runner adopts it instead of submitting again, so a crash or pause during a video job never pays twice.
+The newest adoptable job for any item with this artifact key, in any run: `{ externalId, jobState, attemptId }`. Adoptable means still `submitted`, or `expired` (a runner stopped waiting, the provider may still finish it), with no later row of the same job marked `failed` or `done`. A job that expired twice is stuck and is not returned. The runner adopts the job instead of submitting again, so a crash, a pause or a job timeout never pays twice.
 
 ### Reads and aggregates
 

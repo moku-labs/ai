@@ -340,7 +340,7 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
     expect(video.submits).toHaveLength(2);
   });
 
-  it("D8: a job past jobTimeoutMs expires and the next attempt re-submits", async () => {
+  it("D8: a job that stays pending through two timeouts is stuck, and a later attempt re-submits", async () => {
     const video = jobHandler({ polls: jobId => (jobId === "job-1" ? PENDING : done("clip")) });
     const image = imageHandler();
     const app = await startApp(

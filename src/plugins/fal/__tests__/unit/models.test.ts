@@ -8,7 +8,11 @@ import {
   resolveFalModel
 } from "../../models";
 
-const URLS = { image: "https://cdn/img", refs: ["https://cdn/r1", "https://cdn/r2"] };
+const URLS = {
+  image: "https://cdn/img",
+  refs: ["https://cdn/r1", "https://cdn/r2"],
+  audioRefs: []
+};
 
 /** Builds the body for `model` from a request with the given overrides. */
 function bodyFor(model: string, overrides: Partial<VideoRequest> = {}): Record<string, unknown> {
@@ -17,11 +21,12 @@ function bodyFor(model: string, overrides: Partial<VideoRequest> = {}): Record<s
 }
 
 describe("fal model catalog", () => {
-  it("lists the five aliases in catalog order", () => {
+  it("lists the six aliases in catalog order", () => {
     expect(falAliases()).toEqual([
       "seedance-2.5",
       "seedance-2.5-ref",
       "minimax-h3",
+      "minimax-h3-max-ref",
       "kling-3-pro",
       "kling-o3-ref"
     ]);
@@ -43,7 +48,7 @@ describe("fal model catalog", () => {
 
   it("rejects a model that is not an alias with the pinned two-line error", () => {
     expect(() => resolveFalModel("sora-9")).toThrow(
-      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, kling-3-pro, kling-o3-ref.'
+      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, kling-3-pro, kling-o3-ref.'
     );
   });
 

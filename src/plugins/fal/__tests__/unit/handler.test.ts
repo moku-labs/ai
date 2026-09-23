@@ -147,30 +147,34 @@ describe("submit", () => {
     expect(body.aspect_ratio).toBe("9:16");
   });
 
-  it("does not upload refs for a model without a refs field", async () => {
-    const fetchMock = stubFetch(initiateResponse(1), okResponse(), submitResponse());
+  it("rejects refs for a model without a refs field, before any fetch", async () => {
+    const fetchMock = stubFetch();
     const handler = createVideoHandler(createTestCtx());
 
-    await handler.submit({ model: "seedance-2.5", prompt: PROMPT, image, refs }, {});
+    const rejection = await handler
+      .submit({ model: "seedance-2.5", prompt: PROMPT, image, refs }, {})
+      .catch((error: unknown) => error);
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect((rejection as Error).message).toBe(
+      '[ai] fal model "seedance-2.5" takes no reference images, got 5.\n  Remove refs from input.refs, or use a model that takes more.'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("sends at most 4 refs to kling-o3-ref and warns about the rest", async () => {
-    const fetchMock = stubFetch(submitResponse());
-    const ctx = createTestCtx({ config: { upload: "data-uri" } });
-    const handler = createVideoHandler(ctx);
+  it("rejects more than 4 refs on kling-o3-ref with a terminal error, before any fetch", async () => {
+    const fetchMock = stubFetch();
+    const handler = createVideoHandler(createTestCtx({ config: { upload: "data-uri" } }));
 
-    await handler.submit({ model: "kling-o3-ref", prompt: PROMPT, image, refs }, {});
+    const rejection = await handler
+      .submit({ model: "kling-o3-ref", prompt: PROMPT, image, refs }, {})
+      .catch((error: unknown) => error);
 
-    const body = jsonBodyOf(callsOf(fetchMock)[0]);
-    expect(body.image_urls).toHaveLength(4);
-    expect(String(body.start_image_url)).toMatch(/^data:image\/png;base64,/);
-    expect(ctx.log.warn).toHaveBeenCalledWith("fal:refs:truncated", {
-      model: "kling-o3-ref",
-      given: 5,
-      max: 4
-    });
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBeInstanceOf(RetryableProviderError);
+    expect((rejection as Error).message).toBe(
+      '[ai] fal model "kling-o3-ref" takes at most 4 reference images, got 5.\n  Remove refs from input.refs, or use a model that takes more.'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws a plain two-line Error when the key is missing, before any fetch", async () => {

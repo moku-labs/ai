@@ -251,34 +251,42 @@ async function uploadOne(
 }
 
 /**
- * Makes a request's first frame and reference images readable by fal, one
- * at a time. After an initiate failure the remaining files of this call go
- * as data URIs.
+ * Makes a request's first frame, reference images and reference audio
+ * readable by fal, one at a time, in that order. After an initiate failure
+ * the remaining files of this call go as data URIs.
  *
  * @param ctx - Plugin context (`config.upload`, `config.uploadUrl`, `config.timeoutMs`, `log`).
  * @param image - The first frame.
- * @param references - Reference images, already capped to the model's limit.
+ * @param references - Image refs and audio refs, already checked against the model's limits.
+ * @param references.images - Reference images.
+ * @param references.audio - Reference audio files.
  * @param options - Key and caller signal.
- * @returns URLs (or data URIs) for the image and each ref, in order.
+ * @returns URLs (or data URIs) for the image, each image ref and each audio ref, in order.
  * @throws {RetryableProviderError} When a storage PUT fails with 5xx/429/timeout/network.
  * @throws {TerminalProviderError} When a storage PUT fails with another status.
  * @throws {Error} When a file cannot be read.
  * @example
  * ```ts
- * const urls = await uploadInputs(ctx, request.image, request.refs ?? [], { apiKey });
+ * const urls = await uploadInputs(ctx, request.image, { images: [], audio: [] }, { apiKey });
  * ```
  */
 export async function uploadInputs(
   ctx: FalContext,
   image: VideoFile,
-  references: readonly VideoFile[],
+  references: { images: readonly VideoFile[]; audio: readonly VideoFile[] },
   options: UploadOptions
 ): Promise<UploadedUrls> {
   const session: UploadSession = { mode: ctx.config.upload };
   const imageUrl = await uploadOne(ctx, session, image, options);
+
   const refUrls: string[] = [];
-  for (const reference of references) {
+  for (const reference of references.images) {
     refUrls.push(await uploadOne(ctx, session, reference, options));
   }
-  return { image: imageUrl, refs: refUrls };
+
+  const audioReferenceUrls: string[] = [];
+  for (const reference of references.audio) {
+    audioReferenceUrls.push(await uploadOne(ctx, session, reference, options));
+  }
+  return { image: imageUrl, refs: refUrls, audioRefs: audioReferenceUrls };
 }

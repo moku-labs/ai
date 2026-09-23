@@ -317,8 +317,8 @@ function handleAttemptError(
 
 /**
  * Builds the error a timed-out provider job raises: classified `timeout`
- * (retryable), after the job is marked `expired` so the next attempt
- * re-submits instead of adopting it again.
+ * (retryable), after the job is marked `expired`. The next attempt adopts
+ * the expired job and polls it before it submits a new one.
  *
  * @param jobTimeoutMs - The configured job timeout, ms.
  * @returns The error to throw.
@@ -330,7 +330,7 @@ function handleAttemptError(
 function jobTimeoutError(jobTimeoutMs: number): Error {
   return Object.assign(
     new Error(
-      `[ai] Provider job did not finish within ${Math.round(jobTimeoutMs / 1000)} s.\n  It is marked expired; the next attempt submits it again.`
+      `[ai] Provider job did not finish within ${Math.round(jobTimeoutMs / 1000)} s.\n  It is marked expired; the next attempt polls it again before submitting a new one.`
     ),
     { kind: "timeout" as const }
   );
@@ -351,11 +351,20 @@ function abortReasonOf(signal: AbortSignal): unknown {
   return signal.reason ?? new Error("[ai] Aborted.\n  The run was paused.");
 }
 
+/** A job handler: exposes `submit` + `poll`. */
+type JobHandler = ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>;
+
 /**
- * Starts or adopts the provider job for an item: a still-`submitted` job
- * with the same artifact key (from any run, e.g. after a crash or pause) is
- * adopted and polled; otherwise the handler submits a new one. The job id is
- * journaled on the attempt before anything waits on it.
+ * The job an attempt drives: its provider id and, when it was adopted after
+ * a runner stopped waiting for it, the attempt row it was adopted from.
+ */
+type StartedJob = { jobId: string; adoptedFrom: number | undefined };
+
+/**
+ * Starts or adopts the provider job for an item: a live job with the same
+ * artifact key (from any run, e.g. after a crash, a pause or a job timeout)
+ * is adopted and polled; otherwise the handler submits a new one. The job id
+ * is journaled on the attempt before anything waits on it.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -363,27 +372,59 @@ function abortReasonOf(signal: AbortSignal): unknown {
  * @param request - The resolved request.
  * @param attemptId - The current attempt row.
  * @param signal - Drain signal.
- * @returns The provider job id.
+ * @returns The job id, and the source attempt when an expired job was adopted.
  * @example
  * ```ts
- * const jobId = await startJob(ctx, item, handler, request, attemptId, signal);
+ * const job = await startJob(ctx, item, handler, request, attemptId, signal);
  * ```
  */
 async function startJob(
   ctx: RunnerContext,
   item: ItemRow,
-  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  handler: JobHandler,
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): Promise<StartedJob> {
+  const live = item.artifactKey === null ? undefined : ctx.journal.findLiveJob(item.artifactKey);
+  if (live) {
+    ctx.journal.setAttemptJob(attemptId, { externalId: live.externalId, jobState: "submitted" });
+    const isExpired = live.jobState === "expired";
+    ctx.log.info(isExpired ? "runner:job:adopted-expired" : "runner:job:adopted", {
+      itemId: item.id
+    });
+    return { jobId: live.externalId, adoptedFrom: isExpired ? live.attemptId : undefined };
+  }
+
+  return {
+    jobId: await submitJob(ctx, item, handler, request, attemptId, signal),
+    adoptedFrom: undefined
+  };
+}
+
+/**
+ * Submits a new provider job and journals its id on the attempt.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param handler - A job handler.
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The new job id.
+ * @example
+ * ```ts
+ * const jobId = await submitJob(ctx, item, handler, request, attemptId, signal);
+ * ```
+ */
+async function submitJob(
+  ctx: RunnerContext,
+  item: ItemRow,
+  handler: JobHandler,
   request: HandlerRequest,
   attemptId: number,
   signal: AbortSignal
 ): Promise<string> {
-  const live = item.artifactKey === null ? undefined : ctx.journal.findLiveJob(item.artifactKey);
-  if (live) {
-    ctx.journal.setAttemptJob(attemptId, { externalId: live.externalId, jobState: "submitted" });
-    ctx.log.info("runner:job:adopted", { itemId: item.id });
-    return live.externalId;
-  }
-
   const { jobId } = await handler.submit(request, { signal });
   ctx.journal.setAttemptJob(attemptId, { externalId: jobId, jobState: "submitted" });
   ctx.log.info("runner:job:submitted", { itemId: item.id });
@@ -391,12 +432,60 @@ async function startJob(
 }
 
 /**
+ * First poll of a job adopted after it expired. When the provider reports it
+ * failed, or does not know it (a non-retryable poll error), the job is lost:
+ * the source attempt is marked `failed` and a new job is submitted in this
+ * attempt. Otherwise the poll result is returned for the normal loop.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param handler - A job handler.
+ * @param job - The adopted job.
+ * @param job.jobId - Its provider job id.
+ * @param job.adoptedFrom - The attempt row it was adopted from.
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The first poll, or a pending poll for the newly submitted job.
+ * @example
+ * ```ts
+ * const first = await pollAdoptedExpired(ctx, item, handler, job, request, attemptId, signal);
+ * ```
+ */
+async function pollAdoptedExpired(
+  ctx: RunnerContext,
+  item: ItemRow,
+  handler: JobHandler,
+  job: { jobId: string; adoptedFrom: number },
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): Promise<{ poll: Awaited<ReturnType<JobHandler["poll"]>>; jobId: string }> {
+  let poll: Awaited<ReturnType<JobHandler["poll"]>>;
+  try {
+    poll = await pollOnce(ctx, handler, job.jobId, request, attemptId, signal);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    poll = { state: "failed", error };
+  }
+  if (poll.state !== "failed") return { poll, jobId: job.jobId };
+
+  // The provider lost or failed the expired job: only now is a second job paid for.
+  ctx.journal.setAttemptJob(job.adoptedFrom, { jobState: "failed" });
+  ctx.log.warn("runner:job:resubmitted", { itemId: item.id });
+  const jobId = await submitJob(ctx, item, handler, request, attemptId, signal);
+  return { poll: { state: "pending" }, jobId };
+}
+
+/**
  * Drives one provider job to an end state (D8): start or adopt it, then poll
  * every `pollIntervalMs`. A retryable poll failure (a transport problem) keeps
  * polling; a job the provider finished with an error, or a terminal poll
  * failure, marks the job `failed` and throws; a job still pending after
- * `jobTimeoutMs` is marked `expired` and throws a retryable timeout. An abort
- * leaves the job `submitted`, so resume or a later run adopts it.
+ * `jobTimeoutMs` is marked `expired` and throws a retryable timeout. A job
+ * adopted after it expired is polled first and re-submitted only when the
+ * provider lost or failed it. An abort leaves the job `submitted`, so resume
+ * or a later run adopts it.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -413,18 +502,36 @@ async function startJob(
 async function runJob(
   ctx: RunnerContext,
   item: ItemRow,
-  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  handler: JobHandler,
   request: HandlerRequest,
   attemptId: number,
   signal: AbortSignal
 ): Promise<HandlerResult> {
   const deadline = Date.now() + ctx.config.jobTimeoutMs;
-  const jobId = await startJob(ctx, item, handler, request, attemptId, signal);
+  const job = await startJob(ctx, item, handler, request, attemptId, signal);
+  let jobId = job.jobId;
+  let adoptedFrom = job.adoptedFrom;
 
   for (;;) {
     if (signal.aborted) throw abortReasonOf(signal);
 
-    const poll = await pollOnce(ctx, handler, jobId, request, attemptId, signal);
+    let poll: Awaited<ReturnType<JobHandler["poll"]>>;
+    if (adoptedFrom === undefined) {
+      poll = await pollOnce(ctx, handler, jobId, request, attemptId, signal);
+    } else {
+      const first = await pollAdoptedExpired(
+        ctx,
+        item,
+        handler,
+        { jobId, adoptedFrom },
+        request,
+        attemptId,
+        signal
+      );
+      ({ poll, jobId } = first);
+      adoptedFrom = undefined;
+    }
+
     if (poll.state === "done") {
       ctx.journal.setAttemptJob(attemptId, { jobState: "done" });
       return poll;
@@ -461,7 +568,7 @@ async function runJob(
  */
 async function pollOnce(
   ctx: RunnerContext,
-  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  handler: JobHandler,
   jobId: string,
   request: HandlerRequest,
   attemptId: number,

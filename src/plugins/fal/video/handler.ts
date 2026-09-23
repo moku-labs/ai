@@ -88,29 +88,88 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
 }
 
 /**
- * Keeps the refs the model accepts, warning when some are dropped.
+ * A request's refs, split by kind: audio refs have an `audio/*` MIME type,
+ * every other ref is an image ref.
  *
- * @param ctx - Plugin context (log).
- * @param model - The resolved catalog row.
- * @param references - The request's reference images.
- * @returns At most `model.maxRefs` refs.
  * @example
  * ```ts
- * capReferences(ctx, resolveFalModel("kling-o3-ref"), references); // first 4
+ * const split: SplitReferences = { images: [face], audio: [voice] };
  * ```
  */
-function capReferences(
-  ctx: FalContext,
+export type SplitReferences = {
+  /** Reference images (every ref that is not audio). */
+  images: readonly VideoFile[];
+  /** Reference audio files. */
+  audio: readonly VideoFile[];
+};
+
+/**
+ * Whether a ref is an audio ref.
+ *
+ * @param file - The ref.
+ * @returns True for an `audio/*` MIME type.
+ * @example
+ * ```ts
+ * isAudioReference({ path: "v.mp3", mimeType: "audio/mpeg", hash: "h" }); // => true
+ * ```
+ */
+function isAudioReference(file: VideoFile): boolean {
+  return file.mimeType.startsWith("audio/");
+}
+
+/**
+ * The two-line error for refs over a model's limit.
+ *
+ * @param model - The resolved catalog row.
+ * @param kind - What is over the limit.
+ * @param max - The model's limit.
+ * @param given - How many the request has.
+ * @returns A plain (terminal) error.
+ * @example
+ * ```ts
+ * throw tooManyReferencesError(model, "reference images", 4, 6);
+ * ```
+ */
+function tooManyReferencesError(
+  model: ResolvedFalModel,
+  kind: "reference images" | "reference audio files",
+  max: number,
+  given: number
+): Error {
+  const limit =
+    max === 0 ? `takes no ${kind.replace(" files", "")}` : `takes at most ${max} ${kind}`;
+  return new Error(
+    `[ai] fal model "${model.alias}" ${limit}, got ${given}.\n  Remove refs from input.refs, or use a model that takes more.`
+  );
+}
+
+/**
+ * Splits the refs into images and audio and checks each against the model's
+ * limit. Nothing is dropped: a request over a limit fails before any upload.
+ *
+ * @param model - The resolved catalog row.
+ * @param references - The request's refs.
+ * @returns Image refs and audio refs, in request order.
+ * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
+ * @example
+ * ```ts
+ * splitReferences(resolveFalModel("kling-o3-ref"), references); // throws for 5+ image refs
+ * ```
+ */
+export function splitReferences(
   model: ResolvedFalModel,
   references: readonly VideoFile[]
-): readonly VideoFile[] {
-  if (references.length <= model.maxRefs) return references;
-  ctx.log.warn("fal:refs:truncated", {
-    model: model.alias,
-    given: references.length,
-    max: model.maxRefs
-  });
-  return references.slice(0, model.maxRefs);
+): SplitReferences {
+  const audio = references.filter(file => isAudioReference(file));
+  const images = references.filter(file => !isAudioReference(file));
+
+  if (images.length > model.maxRefs) {
+    throw tooManyReferencesError(model, "reference images", model.maxRefs, images.length);
+  }
+  if (audio.length > model.maxAudioRefs) {
+    throw tooManyReferencesError(model, "reference audio files", model.maxAudioRefs, audio.length);
+  }
+  return { images, audio };
 }
 
 /**
@@ -156,7 +215,7 @@ async function submitJob(
   const image = requireImage(model, request);
   const apiKey = resolveApiKey(ctx);
 
-  const references = capReferences(ctx, model, request.refs ?? []);
+  const references = splitReferences(model, request.refs ?? []);
   const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
   const response = await falFetch({
     url: `${ctx.config.queueUrl}/${model.endpoint}`,
@@ -286,7 +345,8 @@ async function pollJob(
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
     /**
-     * Estimates cost without any network or file access.
+     * Estimates cost without any network access. Reads only the headers of
+     * resolved reference images, for models billed by reference tokens.
      *
      * @param request - The video request (may still hold unresolved `$ref`s).
      * @returns The cost in USD.

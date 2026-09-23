@@ -54,9 +54,26 @@ export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "fl
 /**
  * Lifecycle of a provider-side async job recorded on an `attempts` row:
  * `submitted` until the provider reports an end state; `expired` when the
- * runner gave up waiting (the next attempt re-submits).
+ * runner gave up waiting (the next attempt polls it again before it submits).
  */
 export type JobState = "submitted" | "done" | "failed" | "expired";
+
+/**
+ * A provider job a new attempt can adopt instead of submitting again.
+ *
+ * @example
+ * ```ts
+ * const live: LiveJob = { externalId: "req-1", jobState: "expired", attemptId: 7 };
+ * ```
+ */
+export type LiveJob = {
+  /** Provider job id. */
+  externalId: string;
+  /** `submitted`, or `expired` when a runner stopped waiting for it. */
+  jobState: "submitted" | "expired";
+  /** The attempt row the job was found on. */
+  attemptId: number;
+};
 
 /**
  * A reusable `done` artifact found by artifact key, from any run.
@@ -259,12 +276,13 @@ export type JournalApi = {
    */
   setAttemptJob(attemptId: number, job: { externalId?: string; jobState: JobState }): void;
   /**
-   * Newest still-`submitted` provider job for this artifact key, in any run.
+   * Newest adoptable provider job for this artifact key, in any run: still
+   * `submitted`, or `expired` at most once, and not failed or done since.
    *
    * @param artifactKey - Artifact identity key.
-   * @returns The job id, or undefined.
+   * @returns The live job, or undefined.
    */
-  findLiveJob(artifactKey: string): { externalId: string } | undefined;
+  findLiveJob(artifactKey: string): LiveJob | undefined;
   /**
    * Newest run of any status.
    *

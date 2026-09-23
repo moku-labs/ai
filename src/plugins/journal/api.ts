@@ -19,6 +19,7 @@ import type {
   ItemStatus,
   JobState,
   JournalApi,
+  LiveJob,
   RunRow,
   RunSnapshot,
   RunStatus,
@@ -38,6 +39,9 @@ const RECENT_ITEMS_LIMIT = 20;
  */
 // eslint-disable-next-line unicorn/no-null -- see comment above; the single source of the null literal for this file
 const SQL_NULL = null;
+
+/** A provider job that expired this many times is stuck: `findLiveJob` stops returning it. */
+const MAX_JOB_EXPIRIES = 2;
 
 /** Raw `items` row shape, matching the SQL schema column-for-column. */
 type ItemDatabaseRow = {
@@ -685,27 +689,39 @@ function setAttemptJob(
 }
 
 /**
- * Finds the newest still-`submitted` provider job for any item with this
- * artifact key, in any run — the job a new attempt adopts instead of
- * re-submitting.
+ * Finds the newest adoptable provider job for any item with this artifact
+ * key, in any run — the job a new attempt adopts instead of re-submitting.
+ * Adoptable: `submitted`, or `expired` (a runner stopped waiting, the provider
+ * may still finish it), with no later row of the same job marked `failed` or
+ * `done`. A job that expired twice counts as stuck and is not returned, so
+ * the next attempt submits.
  *
  * @param state - Journal plugin state.
  * @param artifactKey - Artifact identity key.
- * @returns The live job's external id, or undefined.
+ * @returns The live job, or undefined.
  * @example
  * ```ts
  * const live = findLiveJob(state, artifactKey);
  * ```
  */
-function findLiveJob(state: State, artifactKey: string): { externalId: string } | undefined {
+function findLiveJob(state: State, artifactKey: string): LiveJob | undefined {
   const driver = requireDriver(state);
-  const row = driver.get<{ external_id: string }>(
-    `SELECT a.external_id AS external_id FROM attempts a JOIN items i ON i.id = a.item_id
-     WHERE i.artifact_key = ? AND a.job_state = 'submitted' AND a.external_id IS NOT NULL
+  const row = driver.get<{ external_id: string; job_state: LiveJob["jobState"]; id: number }>(
+    `SELECT a.external_id AS external_id, a.job_state AS job_state, a.id AS id
+     FROM attempts a JOIN items i ON i.id = a.item_id
+     WHERE i.artifact_key = ? AND a.external_id IS NOT NULL
+       AND a.job_state IN ('submitted', 'expired')
+       AND NOT EXISTS (
+         SELECT 1 FROM attempts b
+         WHERE b.external_id = a.external_id AND b.id > a.id AND b.job_state IN ('failed', 'done'))
+       AND (SELECT COUNT(*) FROM attempts c
+            WHERE c.external_id = a.external_id AND c.job_state = 'expired') < ?
      ORDER BY a.id DESC LIMIT 1`,
-    [artifactKey]
+    [artifactKey, MAX_JOB_EXPIRIES]
   );
-  return row ? { externalId: row.external_id } : undefined;
+  return row
+    ? { externalId: row.external_id, jobState: row.job_state, attemptId: row.id }
+    : undefined;
 }
 
 /**
@@ -1202,7 +1218,7 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
      * Finds a live provider job for an artifact key. See {@link findLiveJob}.
      *
      * @param artifactKey - Artifact identity key.
-     * @returns The job's external id, or undefined.
+     * @returns The live job (id, state, attempt row), or undefined.
      * @example
      * ```ts
      * api.findLiveJob(artifactKey);
