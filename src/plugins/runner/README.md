@@ -40,7 +40,7 @@ the same graceful drain with `{ status: "budget-stopped" }`.
 | `retryBaseMs` | `number` | `1000` | Base backoff for retryable errors, ms. Exponential in the attempt number, jittered to 50–100% of the computed value; a provider `Retry-After` hint is honored when larger. |
 | `eventBufferSize` | `number` | `10000` | `events()` per-consumer buffer: max unconsumed item records before overflow coalescing. |
 | `pollIntervalMs` | `number` | `5000` | Delay between two polls of a provider job (`submit` + `poll` handlers). |
-| `jobTimeoutMs` | `number` | `1800000` | A job still pending after this long is marked `expired`; the next attempt submits it again. |
+| `jobTimeoutMs` | `number` | `1800000` | A job still pending after this long is marked `expired`; the next attempt polls it again before it submits a new one. |
 
 ```ts
 const app = createApp({
@@ -220,7 +220,13 @@ re-enters admit + gate after the backoff delay, until it settles or exhausts `ma
 A handler with both `submit` and `poll` always runs through the job path:
 
 1. `journal.findLiveJob(artifactKey)` — a job still `submitted` for this artifact key, from any
-   run (a crash, a pause, a timeout of the caller), is **adopted**: no new submit.
+   run (a crash, a pause, a timeout of the caller), is **adopted**: no new submit. An `expired`
+   job is adopted too: its first poll decides. Pending or done → it continues. Failed, or unknown
+   to the provider (a thrown 4xx) → both rows are marked `failed` and one new job is
+   submitted in the same attempt, with its own `jobTimeoutMs`. A content-policy verdict ends the
+   item `flagged` with no new submit. An unclassified error ends the attempt as `unknown`, and an
+   abort pauses the run, both with no new submit. A job that expired twice is stuck and is not
+   adopted again.
 2. Otherwise `submit()`, then `journal.setAttemptJob(attemptId, { externalId: jobId,
    jobState: "submitted" })` immediately, before any wait.
 3. `poll()` every `pollIntervalMs`. A thrown retryable error (5xx / 429 / timeout / network) is a
@@ -228,7 +234,8 @@ A handler with both `submit` and `poll` always runs through the job path:
    marks the job `failed`; the error is classified as usual, and a retryable one re-submits on
    the next attempt. `{ state: "done", ... }` marks it `done` and persists as above.
 4. After `jobTimeoutMs` the job is marked `expired` and the attempt fails with a retryable
-   `timeout`, so the next attempt submits a fresh job.
+   `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never
+   billed twice for one shot.
 
 ### Retry taxonomy (contractual)
 

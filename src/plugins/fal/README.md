@@ -29,18 +29,32 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`.
 
 `input.model` must be one of these aliases. Any other value throws `Unknown fal video model`.
 
-| Alias | fal endpoint | Keyframe field | Extra refs | Duration | Audio |
-| --- | --- | --- | --- | --- | --- |
-| `seedance-2.5` | `bytedance/seedance-2.5/image-to-video` | `image_url` | none | `"4"`..`"30"` | `generate_audio` |
-| `seedance-2.5-ref` | `bytedance/seedance-2.5/reference-to-video` | `image_urls[0]` (`[Image1]` in the prompt) | rest of `image_urls` | `"4"`..`"30"` | `generate_audio` |
-| `minimax-h3` | `minimax/h3/image-to-video` | `image_url` | none | integer | none (silent) |
-| `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | none | `"3"`..`"15"` | `generate_audio` |
-| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | `image_urls` (max 4) | `"3"`..`"15"` | `generate_audio` |
+| Alias | fal endpoint | Keyframe field | Image refs | Audio refs | Duration | Audio |
+| --- | --- | --- | --- | --- | --- | --- |
+| `seedance-2.5` | `bytedance/seedance-2.5/image-to-video` | `image_url` | none | none | `"4"`..`"30"` | `generate_audio` |
+| `seedance-2.5-ref` | `bytedance/seedance-2.5/reference-to-video` | `image_urls[0]` (`@Image1` in the prompt) | rest of `image_urls` (max 29) | `audio_urls` (max 10) | `"4"`..`"30"` | `generate_audio` |
+| `minimax-h3` | `minimax/h3/image-to-video` | `image_url` | none | none | integer | always on (native stereo) |
+| `minimax-h3-max-ref` | `minimax/h3-max/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | integer 5-15 | always on (native stereo) |
+| `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | none | none | `"3"`..`"15"` | `generate_audio` |
+| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | `image_urls` (max 4) | none | `"3"`..`"15"` | `generate_audio` |
 
 Request fields map as: `prompt`, `image` (required), `refs`, `seconds` (default 5), `aspect` (default `9:16`,
 sent where the model takes `aspect_ratio`), `resolution` (default `720p` Seedance, `768P` MiniMax),
-`audio` (default off), `negative` (Kling v3 `negative_prompt` only). `request.params` is merged last into
-the body, so any model field can be set from the build file.
+`audio` (default off), `negative` (only `kling-3-pro` has `negative_prompt`; the other fal schemas have no
+negative field, so it is not sent). `request.params` is merged last into the body, so any model field can
+be set from the build file.
+
+**Refs.** A ref with an `audio/*` MIME type is an audio ref (a voice timbre anchor); every other ref is an
+image ref. Too many image or audio refs for the model fail the item with a terminal error before any upload,
+so a shot is never silently cut down:
+
+```
+[ai] fal model "kling-o3-ref" takes at most 4 reference images, got 6.
+  Remove refs from input.refs, or use a model that takes more.
+```
+
+**MiniMax H3 dialogue.** H3 and H3 Max voice lines written in the prompt, e.g. `<d>[Japanese] 行こう。</d>`.
+H3 Max sends `prompt_expansion_mode: "balanced"` (the schema requires it; override with `params`).
 
 ## Prices (USD per second)
 
@@ -49,11 +63,24 @@ the body, so any model field can be set from the build file.
 | `seedance-2.5@480p`, `seedance-2.5-ref@480p` | 0.2205 |
 | `seedance-2.5@720p`, `seedance-2.5-ref@720p` | 0.4730 |
 | `minimax-h3@480P` / `@768P` / `@2K` / `@4K` | 0.05 / 0.06 / 0.13 / 0.16 |
+| `minimax-h3-max-ref@480P` / `@768P` / `@1080P` | 0.05 / 0.08 / 0.16 |
 | `kling-3-pro` / `kling-3-pro+audio` | 0.112 / 0.168 |
 | `kling-o3-ref` / `kling-o3-ref+audio` | 0.112 / 0.14 |
 
 Lookup order: `<alias>@<resolution>`, then `<alias>+audio` when audio is on, then `<alias>`.
-Cost = seconds × USD/s. `estimate` and the recorded cost use the same function.
+Cost = seconds × USD/s + reference-token surcharge. `estimate` and the recorded cost use the same function.
+
+**Reference tokens (`minimax-h3-max-ref`).** Keys `minimax-h3-max-ref#refTokensIncluded` (4096) and
+`minimax-h3-max-ref#refTokenUsdPer1k` (0.02). Surcharge = max(0, tokens − 4096) × 0.02 / 1000. Tokens:
+
+| Input | Tokens |
+| --- | --- |
+| Image (first frame and each image ref), by aspect ratio from its PNG/JPEG/WebP header | 1:1 1024, 4:3 1376, 16:9 1824, 5:2 2560 (a ratio in between takes the next row up) |
+| Image not resolved yet, or unreadable | 2560 |
+| Any audio refs | 1200 in total (fal's 15 s maximum at ~80 tokens/s) |
+
+Example: 5 s at 768P with four square images is 0.40; with five it is 0.42048. The estimate can only be
+higher than fal's bill, never lower.
 
 Seedance 1080p has no bundled price. Add `seedance-2.5@1080p` to `priceOverrides` to use it.
 
@@ -79,7 +106,7 @@ Seedance 1080p has no bundled price. Add `seedance-2.5@1080p` to `priceOverrides
 | Other 4xx | Terminal, `status` |
 | Job `COMPLETED` + `generation_timeout` / `downstream_service_unavailable` / `internal_server_error` | `failed` with a retryable 503: the next attempt submits again |
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
-| `FAL_KEY` not set, unknown model, missing image | Plain error: terminal after one attempt, nothing billed |
+| `FAL_KEY` not set, unknown model, missing image, too many refs | Plain error: terminal after one attempt, nothing billed |
 
 Messages start with `[ai] fal …` and never contain the key. Logs carry ids and statuses, never prompts.
 

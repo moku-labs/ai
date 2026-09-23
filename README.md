@@ -166,7 +166,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
 | [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
-| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5, MiniMax H3, Kling 3; per-second price table. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5, MiniMax H3 and H3 Max, Kling 3; image and audio refs; per-second and reference-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
