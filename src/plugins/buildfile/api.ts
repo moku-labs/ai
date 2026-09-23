@@ -13,6 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { checkReferenceGraph } from "./references";
 import { buildItemSchema, buildSpecSchema, firstIssueMessage } from "./schema";
 import type {
   BuildfileApi,
@@ -196,12 +197,18 @@ async function compileSource(source: BuildfileSource): Promise<CompiledBuild> {
   }
 
   const { itemsFrom } = result.data;
-  if (itemsFrom === undefined) {
-    return { file: label, spec: result.data };
+  const items =
+    itemsFrom === undefined
+      ? result.data.items
+      : [...result.data.items, ...(await expandItemsFrom(itemsFrom, dir, label))];
+
+  // $ref graph: unique ids, known targets, well-formed values, no cycle.
+  const refProblem = checkReferenceGraph(items);
+  if (refProblem) {
+    throw buildFileInvalidError(label, refProblem);
   }
 
-  const extraItems = await expandItemsFrom(itemsFrom, dir, label);
-  return { file: label, spec: { ...result.data, items: [...result.data.items, ...extraItems] } };
+  return { file: label, spec: { ...result.data, items } };
 }
 
 /**
@@ -297,6 +304,21 @@ items: []
 # - task: prompt-gen
 #   input:
 #     prompt: "Describe a sunset over the ocean."
+#
+# - task: image
+#   id: shot-01-key
+#   input:
+#     prompt: "A small patisserie at night, warm lamps."
+#     aspect: "9:16"
+#     refs: [{ $file: "refs/location.png" }]
+#
+# - task: video
+#   id: shot-01
+#   input:
+#     model: "minimax-h3"
+#     prompt: "Slow push-in on the counter."
+#     image: { $ref: shot-01-key }
+#     seconds: 5
 `;
 }
 

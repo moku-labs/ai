@@ -24,3 +24,4 @@ export const buildfilePlugin = createPlugin("buildfile", {
 });
 
 export { defineBuild } from "./define";
+export { collectReferences, isFileValue, isReferenceValue } from "./references";

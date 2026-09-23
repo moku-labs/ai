@@ -8,7 +8,7 @@ import type { buildfilePlugin } from "../buildfile";
 import type { BuildfileApi } from "../buildfile/types";
 import type { ErrorClass, ItemIntent, JournalApi, RunTotals } from "../journal/types";
 import type { LimitsApi } from "../limits/types";
-import type { registryPlugin } from "../registry";
+import type { RegistryApi, registryPlugin } from "../registry";
 import type { StoreApi } from "../store/types";
 
 /**
@@ -22,6 +22,10 @@ export type Config = {
   retryBaseMs: number;
   /** events() per-consumer buffer size before overflow coalescing. */
   eventBufferSize: number;
+  /** Delay between two polls of an async provider job, ms. */
+  pollIntervalMs: number;
+  /** An async job still pending after this long is `expired`; the next attempt re-submits. ms. */
+  jobTimeoutMs: number;
 };
 
 /** Options accepted by {@link RunnerApi.run}. */
@@ -72,27 +76,61 @@ export type RunnerEvents = {
   "run:paused": { runId: string; drained: number };
 };
 
-/** Uniform structural protocol every registered handler satisfies (runtime-guarded). */
-export type ExecutableHandler = {
-  estimate(request: unknown): { usd: number };
-  execute(
-    request: unknown,
-    opts: { signal?: AbortSignal }
-  ): Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
-};
+/**
+ * The request payload the runner passes to a handler: the item's `input`
+ * spread flat, plus `params` — exactly the task contract's request shape
+ * (e.g. `VoiceoverRequest`). `$ref`/`$file` values are replaced by
+ * {@link ResolvedFile}s before `execute`/`submit`; `estimate` sees them
+ * unresolved. Never persisted to `ctx.journal` (redaction boundary; spec/06).
+ */
+export type HandlerRequest = Record<string, unknown>;
 
 /**
- * The request payload the runner passes to {@link ExecutableHandler.estimate}
- * and {@link ExecutableHandler.execute} — the item's resolved input/params.
- * Never persisted to `ctx.journal` (redaction boundary; spec/06).
+ * A local file handed to a handler in place of a `$ref` (another item's
+ * stored artifact) or a `$file` (a file next to the build file).
  */
-export type HandlerRequest = { input: Record<string, unknown>; params: Record<string, unknown> };
+export type ResolvedFile = { path: string; mimeType: string; hash: string };
+
+/**
+ * What a handler may return: the bytes under the field its task contract
+ * names (`body`, `audio`, `image`, `video`) or `text`, plus cost and mime.
+ * The runner normalizes it before storing.
+ */
+export type HandlerResult = {
+  body?: Uint8Array;
+  audio?: Uint8Array;
+  image?: Uint8Array;
+  video?: Uint8Array;
+  text?: string;
+  mimeType?: string;
+  costUsd: number;
+  meta?: Record<string, unknown>;
+};
+
+/** One poll of an async provider job. `failed` means the provider finished the job with an error. */
+export type JobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & HandlerResult)
+  | { state: "failed"; error: unknown };
+
+/**
+ * Uniform structural protocol every registered handler satisfies
+ * (runtime-guarded): `estimate` plus either `execute`, or `submit` + `poll`
+ * for long provider jobs. When both forms exist the runner uses
+ * `submit` + `poll`, so the job id is journaled and never re-submitted.
+ */
+export type ExecutableHandler = {
+  estimate(request: HandlerRequest): { usd: number };
+  execute?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<HandlerResult>;
+  submit?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(jobId: string, request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<JobPoll>;
+};
 
 /**
  * Structural hint a provider handler may attach to a thrown error so the
  * retry taxonomy (`classifyError`/backoff in retry.ts) can classify it
  * without depending on a concrete HTTP client. All fields optional; an
- * error with none of them classifies as `"network"`.
+ * error with none of them classifies as `"unknown"` (terminal).
  */
 export type ProviderErrorHint = {
   /** HTTP status code, when the failure came from an HTTP response. */
@@ -112,48 +150,31 @@ export type PlannedItem = {
   intent: ItemIntent;
   request: HandlerRequest;
   maxAttempts: number;
+  /** `$ref` target id → that item's planning key (same run). */
+  refKeys: ReadonlyMap<string, string>;
+  /** `$file` path as written in the build file → the resolved local file. */
+  files: ReadonlyMap<string, ResolvedFile>;
 };
 
-/**
- * Public surface of the `registry` plugin (`app.registry`), redeclared here
- * because `registry` is Nano tier and ships no `types.ts` of its own. This
- * mirrors its real inferred API exactly, so `ctx.require(registryPlugin)`
- * can be typed inside this plugin's domain files instead of widening to
- * `unknown` (spec/09 R9 — the shape is derivable from a known, documented
- * dependency contract). Matches the redeclaration in translate/promptGen/
- * voiceover's `types.ts` (the same Nano `registry` dependency).
- */
-export type RegistryApi = {
-  /**
-   * Registers a handler for a (task, provider) pair.
-   *
-   * @param task - Task key, e.g. "voiceover".
-   * @param provider - Provider name, e.g. "elevenlabs".
-   * @param handler - Opaque handler; narrowed by the owning task plugin.
-   */
-  register(task: string, provider: string, handler: unknown): void;
-  /**
-   * Resolves a registered handler.
-   *
-   * @param task - Task key.
-   * @param provider - Provider name.
-   * @returns The registered handler, or undefined when unregistered.
-   */
-  resolve(task: string, provider: string): unknown;
-  /**
-   * Provider names registered for a task, in registration order.
-   *
-   * @param task - Task key.
-   * @returns Provider names, first-registered first (the task default).
-   */
-  providers(task: string): string[];
-  /**
-   * All registered task names.
-   *
-   * @returns Task names in registration order.
-   */
-  tasks(): string[];
+/** One file written by {@link RunnerApi.export}. */
+export type ExportedFile = {
+  label: string;
+  path: string;
+  bytes: number;
+  costUsd: number;
+  mimeType: string;
 };
+
+/** Result of {@link RunnerApi.export}: the files written and the labels skipped. */
+export type ExportResult = {
+  runId: string;
+  outDir: string;
+  files: ExportedFile[];
+  skipped: string[];
+};
+
+/** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
+export type { RegistryApi } from "../registry";
 
 /**
  * `ctx.require` narrowed to the runner's two declared dependencies
@@ -206,9 +227,52 @@ export type State = { active: ActiveRun | null };
 
 /** Public API surface of the runner plugin, exposed as `app.runner`. */
 export type RunnerApi = {
+  /**
+   * Executes one durable run over the matched build files.
+   *
+   * @param options - Glob, budget cap, dry-run.
+   * @param opts - Optional abort signal for a clean pause.
+   * @param opts.signal - Abort signal; aborting drains to `paused`.
+   * @returns The run's final result.
+   */
   run(options: RunOptions, opts?: { signal?: AbortSignal }): Promise<RunResult>;
+  /**
+   * Continues the latest (or a given) resumable run; live provider jobs are polled, not re-submitted.
+   *
+   * @param opts - Optional run id and abort signal.
+   * @param opts.runId - Run to resume; default the latest resumable run.
+   * @param opts.signal - Abort signal; aborting drains to `paused`.
+   * @returns The run's final result.
+   */
   resume(opts?: { runId?: string; signal?: AbortSignal }): Promise<RunResult>;
+  /**
+   * The same per-item estimate the budget gate uses, grouped by task/provider. No journal writes.
+   *
+   * @param options - Glob options.
+   * @param options.files - Glob pattern; default the buildfile default glob.
+   * @returns The breakdown and total.
+   */
   estimate(options: { files?: string }): Promise<EstimateResult>;
+  /**
+   * Read-only status snapshot of a run.
+   *
+   * @param runId - Run id; defaults to the active or latest resumable run.
+   * @returns The status report.
+   */
   status(runId?: string): RunStatusReport;
+  /**
+   * Per-item detail stream for the active run.
+   *
+   * @returns An async iterable of stream records.
+   */
   events(): AsyncIterable<RunEvent>;
+  /**
+   * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`.
+   *
+   * @param opts - Run id (default: newest run) and output directory (default "out").
+   * @param opts.runId - Run to export.
+   * @param opts.outDir - Export root directory.
+   * @returns The files written and the labels skipped.
+   */
+  export(opts?: { runId?: string; outDir?: string }): Promise<ExportResult>;
 };

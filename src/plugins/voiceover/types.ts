@@ -3,7 +3,7 @@
  * the plugin's config, public API, and domain context types).
  */
 import type { PluginCtx } from "@moku-labs/core";
-import type { registryPlugin } from "../registry";
+import type { RegistryApi, registryPlugin } from "../registry";
 import type { VoiceoverRequest, VoiceoverResult } from "./contract";
 
 export type { VoiceoverHandler, VoiceoverRequest, VoiceoverResult } from "./contract";
@@ -87,52 +87,8 @@ export type VoiceoverApi = {
   providers(): string[];
 };
 
-/**
- * Public surface of the `registry` plugin (`app.registry`), redeclared here
- * because `registry` is Nano tier and ships no `types.ts` of its own. This
- * mirrors its real inferred API exactly, so `ctx.require(registryPlugin)`
- * can be typed inside this plugin's domain files instead of widening to
- * `unknown` (spec/09 R9 — the shape is derivable from a known, documented
- * dependency contract).
- *
- * @example
- * ```ts
- * const registry: RegistryApi = ctx.require(registryPlugin);
- * registry.providers("voiceover");
- * ```
- */
-export type RegistryApi = {
-  /**
-   * Registers a handler for a (task, provider) pair.
-   *
-   * @param task - Task key, e.g. "voiceover".
-   * @param provider - Provider name, e.g. "elevenlabs".
-   * @param handler - Opaque handler; narrowed by the owning task plugin.
-   * @returns Nothing.
-   */
-  register(task: string, provider: string, handler: unknown): void;
-  /**
-   * Resolves a registered handler.
-   *
-   * @param task - Task key.
-   * @param provider - Provider name.
-   * @returns The registered handler, or undefined when unregistered.
-   */
-  resolve(task: string, provider: string): unknown;
-  /**
-   * Provider names registered for a task, in registration order.
-   *
-   * @param task - Task key.
-   * @returns Provider names, first-registered first (the task default).
-   */
-  providers(task: string): string[];
-  /**
-   * All registered task names.
-   *
-   * @returns Task names in registration order.
-   */
-  tasks(): string[];
-};
+/** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
+export type { RegistryApi } from "../registry";
 
 /**
  * Domain context for the voiceover API factory. `voiceover` is a stateless

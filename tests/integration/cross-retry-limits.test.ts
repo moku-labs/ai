@@ -31,7 +31,7 @@ const LANE = "fakeTask/fake/default";
 
 /** Extracts the `text` input marker the runner passed to a handler. */
 function markerOf(request: unknown): string {
-  return String((request as HandlerRequest).input.text);
+  return String((request as HandlerRequest).text);
 }
 
 /** The `item:*` record types of a collected stream, in delivery order. */

@@ -17,6 +17,9 @@ function intent(planningKey: string, overrides: Partial<ItemIntent> = {}): ItemI
     // eslint-disable-next-line unicorn/no-null -- ItemIntent.packVersion is typed `string | null`, matching the nullable SQL column
     packVersion: null,
     estimatedCostUsd: 0.1,
+    label: planningKey,
+    buildName: "voice",
+    artifactKey: `ak-${planningKey}`,
     ...overrides
   };
 }
@@ -115,7 +118,9 @@ describe("journal api", () => {
 
       expect(mustExist(item).status).toBe("queued");
       expect(mustExist(item).attemptCount).toBe(0);
-      expect(mustExist(item).artifactKey).toBeNull();
+      expect(mustExist(item).artifactKey).toBe("ak-pk-1");
+      expect(mustExist(item).label).toBe("pk-1");
+      expect(mustExist(item).mimeType).toBeNull();
     });
   });
 

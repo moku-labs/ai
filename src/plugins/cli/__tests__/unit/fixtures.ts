@@ -12,7 +12,13 @@ import { composePlugin } from "../../../compose";
 import type { ComposeApi, ComposeResult } from "../../../compose/types";
 import type { JournalApi, RunSnapshot, RunTotals } from "../../../journal/types";
 import { runnerPlugin } from "../../../runner";
-import type { EstimateResult, RunnerApi, RunResult, RunStatusReport } from "../../../runner/types";
+import type {
+  EstimateResult,
+  ExportResult,
+  RunnerApi,
+  RunResult,
+  RunStatusReport
+} from "../../../runner/types";
 import type { CliContext, CommandContext, Config } from "../../types";
 
 /** Ordered log of fake-dependency method calls, for step-ordering assertions. */
@@ -123,6 +129,8 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
     }),
 
     events: async function* (): AsyncIterable<never> {},
+    export: (opts?: { runId?: string; outDir?: string }): Promise<ExportResult> =>
+      Promise.resolve({ runId: opts?.runId ?? "run-1", outDir: "/out", files: [], skipped: [] }),
     ...overrides.runner
   };
 
@@ -160,6 +168,12 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
       recentItems: []
     }),
     checkpoint: vi.fn(),
+    findDoneArtifact: vi.fn(),
+    reuseDone: vi.fn(),
+    setAttemptJob: vi.fn(),
+    findLiveJob: vi.fn(),
+    latestRun: vi.fn(),
+    getItem: vi.fn(),
     ...overrides.journal
   };
 

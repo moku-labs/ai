@@ -1,19 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
 import { buildfilePlugin } from "../../index";
-
-/**
- * Converts a relative filesystem path into a valid relative ES module
- * import specifier (ensures a leading "./" or "../").
- */
-function toImportSpecifier(relativePath: string): string {
-  const normalized = relativePath.replaceAll("\\", "/");
-  return normalized.startsWith(".") ? normalized : `./${normalized}`;
-}
 
 /**
  * Assembles a fresh framework wiring only `buildfilePlugin` as a regular
@@ -86,7 +77,7 @@ describe("buildfile integration", () => {
     const pluginDir = path.dirname(fileURLToPath(import.meta.url));
     const definePath = path.resolve(pluginDir, "../../define.ts");
     const filePath = path.join(tempDir, "build.moku.ts");
-    const importSpecifier = toImportSpecifier(path.relative(tempDir, definePath));
+    const importSpecifier = pathToFileURL(definePath).href;
     await writeFile(
       filePath,
       `import { defineBuild } from "${importSpecifier}";

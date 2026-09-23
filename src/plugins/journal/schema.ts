@@ -27,6 +27,9 @@ const SCHEMA_SQL = `
     actual_cost_usd REAL,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
+    label TEXT,
+    build_name TEXT,
+    mime_type TEXT,
     UNIQUE (run_id, planning_key)
   );
   CREATE INDEX IF NOT EXISTS idx_items_run_status ON items(run_id, status);
@@ -39,9 +42,52 @@ const SCHEMA_SQL = `
     ended_at INTEGER,
     outcome TEXT,
     error_class TEXT,
-    cost_usd REAL
+    cost_usd REAL,
+    external_id TEXT,
+    job_state TEXT
   );
 `;
+
+/** Index DDL that references migrated columns, so it runs after {@link migrateSchema}. */
+const INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_items_artifact ON items(artifact_key, status);
+  CREATE INDEX IF NOT EXISTS idx_attempts_item ON attempts(item_id);
+`;
+
+/** Columns added after the first release, per table, with their SQL type. */
+const ADDED_COLUMNS: Readonly<Record<string, ReadonlyArray<readonly [string, string]>>> = {
+  items: [
+    ["label", "TEXT"],
+    ["build_name", "TEXT"],
+    ["mime_type", "TEXT"]
+  ],
+  attempts: [
+    ["external_id", "TEXT"],
+    ["job_state", "TEXT"]
+  ]
+};
+
+/**
+ * Adds every column from {@link ADDED_COLUMNS} that an older journal file is
+ * missing. Reads `PRAGMA table_info` per table, so running it twice is a no-op.
+ *
+ * @param driver - Open SQLite driver.
+ * @example
+ * ```ts
+ * migrateSchema(driver);
+ * ```
+ */
+export function migrateSchema(driver: SqliteDriver): void {
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    const existing = new Set(
+      driver.all<{ name: string }>(`PRAGMA table_info(${table})`).map(row => row.name)
+    );
+    for (const [column, type] of columns) {
+      if (existing.has(column)) continue;
+      driver.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+}
 
 /**
  * Creates the journal schema idempotently (CREATE TABLE/INDEX IF NOT EXISTS).
@@ -56,4 +102,6 @@ const SCHEMA_SQL = `
  */
 export function createSchema(driver: SqliteDriver): void {
   driver.exec(SCHEMA_SQL);
+  migrateSchema(driver);
+  driver.exec(INDEX_SQL);
 }

@@ -1,11 +1,14 @@
 /**
  * @file runner API factory — assembles `run`/`resume`/`estimate`/`status`/
- * `events` from the domain modules (plan, pipeline, retry, stream). Owns run-
+ * `events`/`export` from the domain modules (plan, pipeline, retry, stream,
+ * export). Owns run-
  * level orchestration: opening/resuming the single `runs` row, driving every
  * queued item concurrently, coalesced progress, and the terminal transition.
  */
 import { buildfilePlugin } from "../buildfile";
 import type { ItemRow, RunRow, RunTotals } from "../journal/types";
+import { exportRun } from "./export";
+import type { ItemSettlement } from "./pipeline";
 import { createDrainController, executeItem } from "./pipeline";
 import { planItems } from "./plan";
 import { clearActiveRun } from "./state";
@@ -141,19 +144,74 @@ function failRun(ctx: RunnerContext, run: RunRow, active: ActiveRun, error: unkn
 
 /**
  * Picks a run's final status from its drain controller: a budget-stop takes
- * priority over a plain external-signal pause; otherwise the run is `done`.
+ * priority over a plain external-signal pause; an item blocked by a `$ref`
+ * target that did not finish also leaves the run `paused` (resumable once
+ * the target is fixed); otherwise the run is `done`.
  *
  * @param drain - The run's drain controller.
+ * @param blocked - How many items were blocked by an unfinished `$ref` target.
  * @returns The run's final (non-`failed`) status.
  * @example
  * ```ts
- * const status = finalStatusOf(drain);
+ * const status = finalStatusOf(drain, 0);
  * ```
  */
-function finalStatusOf(drain: ReturnType<typeof createDrainController>): RunResultStatus {
+function finalStatusOf(
+  drain: ReturnType<typeof createDrainController>,
+  blocked: number
+): RunResultStatus {
   if (drain.budgetStopped) return "budget-stopped";
-  if (drain.signal.aborted) return "paused";
+  if (drain.signal.aborted || blocked > 0) return "paused";
   return "done";
+}
+
+/**
+ * Starts every queued item in plan order, each waiting for its `$ref`
+ * targets' settle promises (D10), and resolves with how each one settled.
+ *
+ * @param ctx - Runner domain context.
+ * @param queued - The run's queued item rows.
+ * @param planned - Planned items, dependencies first.
+ * @param drain - The run's drain controller.
+ * @param active - The active run's live bookkeeping.
+ * @param report - Stream callback.
+ * @returns One settlement per started item.
+ * @example
+ * ```ts
+ * const settlements = await startItems(ctx, queued, planned, drain, active, report);
+ * ```
+ */
+function startItems(
+  ctx: RunnerContext,
+  queued: ItemRow[],
+  planned: PlannedItem[],
+  drain: ReturnType<typeof createDrainController>,
+  active: ActiveRun,
+  report: (event: Parameters<typeof broadcastEvent>[1]) => void
+): Promise<ItemSettlement[]> {
+  const queuedByKey = new Map(queued.map(item => [item.planningKey, item] as const));
+  const settledByKey = new Map<string, Promise<ItemSettlement>>();
+
+  for (const item of queued) {
+    if (!planned.some(p => p.intent.planningKey === item.planningKey)) {
+      ctx.log.warn("runner:stale-item", { itemId: item.id, planningKey: item.planningKey });
+    }
+  }
+
+  for (const plan of planned) {
+    const item = queuedByKey.get(plan.intent.planningKey);
+    if (!item || settledByKey.has(item.planningKey)) continue;
+
+    const dependencies = Promise.all(
+      [...plan.refKeys.values()].map(key => settledByKey.get(key) ?? Promise.resolve())
+    );
+    settledByKey.set(
+      item.planningKey,
+      executeItem(ctx, item, plan, drain, active, report, dependencies)
+    );
+  }
+
+  return Promise.all(settledByKey.values());
 }
 
 /**
@@ -179,7 +237,6 @@ async function drivePipeline(
   active: ActiveRun,
   planned: PlannedItem[]
 ): Promise<RunResult> {
-  const plannedByPlanningKey = new Map(planned.map(p => [p.intent.planningKey, p] as const));
   const queued = items.filter(item => item.status === "queued");
   const drain = createDrainController(active.signal);
 
@@ -203,20 +260,12 @@ async function drivePipeline(
     pushProgress(ctx, run.id, active);
   };
 
-  await Promise.all(
-    queued.map(item => {
-      const plan = plannedByPlanningKey.get(item.planningKey);
-      if (!plan) {
-        ctx.log.warn("runner:stale-item", { itemId: item.id, planningKey: item.planningKey });
-        return Promise.resolve();
-      }
-      return executeItem(ctx, item, plan.request, plan.maxAttempts, drain, active, report);
-    })
-  );
+  const settlements = await startItems(ctx, queued, planned, drain, active, report);
+  const blocked = settlements.filter(settlement => settlement === "blocked").length;
 
   pushProgress(ctx, run.id, active);
   const totals = ctx.journal.totals(run.id);
-  const status = finalStatusOf(drain);
+  const status = finalStatusOf(drain, blocked);
   ctx.journal.setRunStatus(run.id, status);
 
   broadcastEvent(active, { type: "terminal", status, totals });
@@ -255,7 +304,7 @@ async function drivePipeline(
  */
 async function dryRunEstimate(ctx: RunnerContext, options: RunOptions): Promise<RunResult> {
   const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
-  const planned = planItems(ctx, builds);
+  const planned = await planItems(ctx, builds);
   const totalUsd = planned.reduce((sum, p) => sum + p.intent.estimatedCostUsd, 0);
 
   const totals: RunTotals = {
@@ -312,7 +361,7 @@ async function run(
 
   try {
     const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
-    const planned = planItems(ctx, builds);
+    const planned = await planItems(ctx, builds);
     const items = ctx.journal.insertItems(
       openedRun.id,
       planned.map(p => p.intent)
@@ -365,7 +414,7 @@ async function resume(
   try {
     const pattern = targetRun.glob === DEFAULT_GLOB_LABEL ? undefined : targetRun.glob;
     const builds = await ctx.require(buildfilePlugin).loadGlob(pattern);
-    const planned = planItems(ctx, builds);
+    const planned = await planItems(ctx, builds);
     ctx.journal.insertItems(
       targetRun.id,
       planned.map(p => p.intent)
@@ -395,7 +444,7 @@ async function resume(
  */
 async function estimate(ctx: RunnerContext, options: { files?: string }): Promise<EstimateResult> {
   const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
-  const planned = planItems(ctx, builds);
+  const planned = await planItems(ctx, builds);
 
   const lines = new Map<string, EstimateResult["lines"][number]>();
   for (const p of planned) {
@@ -472,7 +521,7 @@ function events(ctx: RunnerContext): ReturnType<typeof createEventQueue> {
 }
 
 /**
- * Creates the runner API surface (run/resume/estimate/status/events),
+ * Creates the runner API surface (run/resume/estimate/status/events/export),
  * binding each method to the domain context.
  *
  * @param ctx - Runner domain context (config, state, emit, require, core APIs).
@@ -538,6 +587,17 @@ export function createRunnerApi(ctx: RunnerContext): RunnerApi {
      * for await (const event of app.runner.events()) ctx.log.debug("runner:event", event);
      * ```
      */
-    events: () => events(ctx)
+    events: () => events(ctx),
+    /**
+     * Copies a run's done artifacts to named files. See {@link exportRun}.
+     *
+     * @param opts - Run id (default: the newest run) and output directory (default "out").
+     * @returns The files written and the labels skipped.
+     * @example
+     * ```ts
+     * await app.runner.export({ outDir: "out" });
+     * ```
+     */
+    export: opts => exportRun(ctx, opts)
   };
 }

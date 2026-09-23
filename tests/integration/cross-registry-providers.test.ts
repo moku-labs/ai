@@ -10,10 +10,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { coreConfig } from "../../src/config";
-import { elevenlabsPlugin, registryPlugin } from "../../src/plugins";
-import type { HandlerRequest } from "../../src/plugins/runner/types";
-import type { VoiceoverHandler, VoiceoverRequest } from "../../src/plugins/voiceover/types";
 import {
   buildFileYaml,
   buildFramework,
@@ -78,39 +74,6 @@ function fakeElevenlabsAudioResponse(bytes: Uint8Array): Response {
     arrayBuffer: () => Promise.resolve(bytes.buffer)
   };
   return fake as unknown as Response;
-}
-
-/**
- * Fixture plugin bridging the runner's `HandlerRequest` `{input, params}`
- * envelope onto the REAL registered elevenlabs `VoiceoverHandler`.
- *
- * KNOWN GAP (see the S20 defect pin below): the runner passes
- * `{input, params}` to handlers, but every real provider handler expects the
- * flat task-contract request (`request.text` etc.), so a build item naming
- * `provider: elevenlabs` breaks at planning. This bridge adapts ONLY the
- * request/result envelope; everything else (buildfile → runner → registry →
- * real elevenlabs handler → HTTP boundary → store + journal) is the real stack.
- */
-function createBridgedElevenlabsPlugin() {
-  return coreConfig.createPlugin("elevenlabsBridge", {
-    depends: [registryPlugin, elevenlabsPlugin],
-    onInit: ctx => {
-      const registry = ctx.require(registryPlugin);
-
-      // Audited cast: the registry transports handlers opaquely; elevenlabs
-      // registered this exact handler under ("voiceover", "elevenlabs").
-      const real = registry.resolve("voiceover", "elevenlabs") as VoiceoverHandler;
-
-      registry.register("voiceover", "elevenlabs-bridged", {
-        estimate: (request: HandlerRequest) =>
-          real.estimate(request.input as unknown as VoiceoverRequest),
-        execute: async (request: HandlerRequest, opts: { signal?: AbortSignal }) => {
-          const result = await real.execute(request.input as unknown as VoiceoverRequest, opts);
-          return { body: result.audio, mimeType: result.mimeType, costUsd: result.costUsd };
-        }
-      });
-    }
-  });
 }
 
 describe("cross-plugin registry + providers integration", () => {
@@ -199,16 +162,8 @@ describe("cross-plugin registry + providers integration", () => {
 
   // ---------------------------------------------------------------------------
   // S20 — elevenlabs through the full runner pipeline (registry → runner with
-  // journal + store under it)
-  //
-  // DEVIATION from the plan (with a defect pin): the runner hands handlers a
-  // `HandlerRequest` `{input, params}` envelope (runner/plan.ts:139,
-  // pipeline.ts:369), but the real elevenlabs `VoiceoverHandler` reads the
-  // flat `VoiceoverRequest` (`request.text.length` in voiceover/handler.ts),
-  // so `provider: elevenlabs` build items break at planning. The happy path
-  // below routes through a thin envelope-bridging fixture over the REAL
-  // elevenlabs handler; the second half pins the current broken behavior so
-  // a framework fix surfaces here.
+  // journal + store under it). The runner hands handlers the flat task
+  // request (D1), so the real elevenlabs handler runs with no adapter.
   // ---------------------------------------------------------------------------
 
   it("S20: real elevenlabs handler runs through the runner pipeline into store + journal", async () => {
@@ -218,28 +173,28 @@ describe("cross-plugin registry + providers integration", () => {
     );
     const app = buildFramework(tempDir, {
       providers: true,
-      pluginConfigs: { elevenlabs: { priceOverrides: { eleven_multilingual_v2: 0.001 } } },
-      extraPlugins: [createBridgedElevenlabsPlugin()]
+      pluginConfigs: { elevenlabs: { priceOverrides: { eleven_multilingual_v2: 0.001 } } }
     }).createApp();
     await app.start();
     expect(app.elevenlabs.info().configured).toBe(true);
 
-    // One bridged elevenlabs voiceover item in its own build-file dir.
-    const bridgedDir = path.join(tempDir, "bridged");
-    await mkdir(bridgedDir);
+    // One elevenlabs voiceover item, planned and run with no adapter (D1).
+    // It also carries mime type and label onto the journal row (D9).
+    const voiceDir = path.join(tempDir, "voice");
+    await mkdir(voiceDir);
     await writeFile(
-      path.join(bridgedDir, "voice.moku.yaml"),
-      buildFileYaml("bridged-voice", [
+      path.join(voiceDir, "voice.moku.yaml"),
+      buildFileYaml("voice", [
         {
           task: "voiceover",
-          provider: "elevenlabs-bridged",
+          provider: "elevenlabs",
           input: { text: "Hello world", voice: "voice-1" }
         }
       ])
     );
 
     // The run settles done, with the fake audio bytes committed to the CAS.
-    const result = await app.runner.run({ files: path.join(bridgedDir, "*.moku.yaml") });
+    const result = await app.runner.run({ files: path.join(voiceDir, "*.moku.yaml") });
     expect(result.status).toBe("done");
     expect(result.totals.done).toBe(1);
 
@@ -251,27 +206,8 @@ describe("cross-plugin registry + providers integration", () => {
 
     // Cost came from the elevenlabs price table: "Hello world" × 0.001/char.
     expect(doneItem.actualCostUsd).toBeCloseTo("Hello world".length * 0.001, 10);
-
-    // KNOWN GAP pin — the UNBRIDGED path: a build item naming the real
-    // elevenlabs provider breaks at planning because the handler receives
-    // `{input, params}` instead of a flat VoiceoverRequest. When the
-    // framework reconciles the two request shapes, this assertion fails and
-    // the bridge fixture above becomes deletable.
-    const rawDir = path.join(tempDir, "raw");
-    await mkdir(rawDir);
-    await writeFile(
-      path.join(rawDir, "voice.moku.yaml"),
-      buildFileYaml("raw-voice", [
-        {
-          task: "voiceover",
-          provider: "elevenlabs",
-          input: { text: "Hello world", voice: "voice-1" }
-        }
-      ])
-    );
-    await expect(app.runner.estimate({ files: path.join(rawDir, "*.moku.yaml") })).rejects.toThrow(
-      /length/
-    );
+    expect(doneItem.mimeType).toBe("audio/mpeg");
+    expect(doneItem.label).toBe("01-voiceover");
 
     await app.stop();
   });

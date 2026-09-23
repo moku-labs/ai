@@ -165,7 +165,7 @@ describe("cli plugin integration", () => {
     await app.stop();
   });
 
-  it("commands() exposes the same six-command tree outside dispatch", async () => {
+  it("commands() exposes the same seven-command tree outside dispatch", async () => {
     const { createApp } = buildFramework();
     const app = createApp();
     await app.start();
@@ -176,6 +176,7 @@ describe("cli plugin integration", () => {
       "validate",
       "estimate",
       "run",
+      "export",
       "status",
       "compose"
     ]);

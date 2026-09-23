@@ -5,15 +5,19 @@
  * per-item retry loop (a retryable attempt re-enters admit+gate, per the
  * durable state machine — `markFailed` returns the item to `queued`).
  */
-import { createHash } from "node:crypto";
 import type { AttemptOutcome, ErrorClass, ItemRow } from "../journal/types";
 import { registryPlugin } from "../registry";
+import { canonicalJson, sha256Hex } from "./keys";
+import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import { backoffMs, classifyError, isRetryableErrorClass, retryAfterMsOf } from "./retry";
 import type {
   ActiveRun,
   DrainController,
   ExecutableHandler,
   HandlerRequest,
+  HandlerResult,
+  PlannedItem,
+  ResolvedFile,
   RunEvent,
   RunnerContext
 } from "./types";
@@ -21,60 +25,10 @@ import type {
 /** Discriminated outcome of a single provider attempt. */
 type AttemptOutcomeResult =
   | { kind: "done"; costUsd: number; contentHash: string }
+  | { kind: "aborted" }
   | { kind: "flagged" }
   | { kind: "terminal-failed"; errorClass: ErrorClass }
   | { kind: "retryable"; errorClass: ErrorClass; retryAfterMs: number | undefined };
-
-/**
- * Deep-sorts every object's keys (arrays keep their order) so structurally
- * equal values serialize identically regardless of key insertion order.
- *
- * @param value - Any JSON-serializable value.
- * @returns A structurally equivalent value with object keys sorted.
- * @example
- * ```ts
- * sortKeysDeep({ b: 1, a: 2 }); // => { a: 2, b: 1 }
- * ```
- */
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(item => sortKeysDeep(item));
-  if (value !== null && typeof value === "object") {
-    const sorted: Record<string, unknown> = {};
-    for (const key of Object.keys(value).toSorted()) {
-      sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
-    }
-    return sorted;
-  }
-  return value;
-}
-
-/**
- * Serializes a value to key-order-independent canonical JSON.
- *
- * @param value - Any JSON-serializable value.
- * @returns The canonical JSON text.
- * @example
- * ```ts
- * canonicalJson({ task: "voiceover", input: { text: "hi" } });
- * ```
- */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(sortKeysDeep(value));
-}
-
-/**
- * Hex-encoded sha256 digest of a UTF-8 string.
- *
- * @param text - Text to hash.
- * @returns The 64-character lowercase hex digest.
- * @example
- * ```ts
- * sha256Hex("hello");
- * ```
- */
-function sha256Hex(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
 
 /**
  * Runtime shape guard narrowing a registry-resolved handler (`unknown`) to
@@ -92,8 +46,33 @@ function sha256Hex(text: string): string {
  */
 export function isExecutableHandler(value: unknown): value is ExecutableHandler {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as { estimate?: unknown; execute?: unknown };
-  return typeof candidate.estimate === "function" && typeof candidate.execute === "function";
+  const candidate = value as {
+    estimate?: unknown;
+    execute?: unknown;
+    submit?: unknown;
+    poll?: unknown;
+  };
+  if (typeof candidate.estimate !== "function") return false;
+  if (typeof candidate.execute === "function") return true;
+  return typeof candidate.submit === "function" && typeof candidate.poll === "function";
+}
+
+/**
+ * Whether a handler runs provider-side jobs (`submit` + `poll`). Such
+ * handlers are always driven through the job path, even when they also
+ * expose `execute`, so the job id is journaled before any wait.
+ *
+ * @param handler - A narrowed handler.
+ * @returns True when both `submit` and `poll` exist.
+ * @example
+ * ```ts
+ * if (isJobHandler(handler)) await runJob(...);
+ * ```
+ */
+function isJobHandler(
+  handler: ExecutableHandler
+): handler is ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">> {
+  return typeof handler.submit === "function" && typeof handler.poll === "function";
 }
 
 /**
@@ -117,15 +96,16 @@ export function resolveHandler(
   const handler = ctx.require(registryPlugin).resolve(task, provider);
   if (!isExecutableHandler(handler)) {
     throw new Error(
-      `[ai] No executable handler registered for "${task}/${provider}".\n  Call registry.register("${task}", "${provider}", handler) with an object exposing estimate()/execute().`
+      `[ai] No executable handler registered for "${task}/${provider}".\n  Call registry.register("${task}", "${provider}", handler) with an object exposing estimate() plus execute() or submit()/poll().`
     );
   }
   return handler;
 }
 
 /**
- * Computes an item's artifact identity key from its planning key, resolved
- * provider, and pack version.
+ * Legacy artifact identity key from a planning key, provider and pack
+ * version — only for item rows written before artifact keys were planned
+ * (the planner now writes the key at insert; see plan.ts).
  *
  * @param planningKey - The item's planning key.
  * @param provider - The item's resolved provider.
@@ -336,15 +316,185 @@ function handleAttemptError(
 }
 
 /**
+ * Builds the error a timed-out provider job raises: classified `timeout`
+ * (retryable), after the job is marked `expired` so the next attempt
+ * re-submits instead of adopting it again.
+ *
+ * @param jobTimeoutMs - The configured job timeout, ms.
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * throw jobTimeoutError(1_800_000);
+ * ```
+ */
+function jobTimeoutError(jobTimeoutMs: number): Error {
+  return Object.assign(
+    new Error(
+      `[ai] Provider job did not finish within ${Math.round(jobTimeoutMs / 1000)} s.\n  It is marked expired; the next attempt submits it again.`
+    ),
+    { kind: "timeout" as const }
+  );
+}
+
+/**
+ * The error thrown when the drain signal stops a job wait — the caller
+ * turns it into an `aborted` attempt and leaves the item `dispatching`.
+ *
+ * @param signal - The aborted drain signal.
+ * @returns The signal's reason, or a plain abort error.
+ * @example
+ * ```ts
+ * throw abortReasonOf(signal);
+ * ```
+ */
+function abortReasonOf(signal: AbortSignal): unknown {
+  return signal.reason ?? new Error("[ai] Aborted.\n  The run was paused.");
+}
+
+/**
+ * Starts or adopts the provider job for an item: a still-`submitted` job
+ * with the same artifact key (from any run, e.g. after a crash or pause) is
+ * adopted and polled; otherwise the handler submits a new one. The job id is
+ * journaled on the attempt before anything waits on it.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param handler - A job handler (`submit` + `poll`).
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The provider job id.
+ * @example
+ * ```ts
+ * const jobId = await startJob(ctx, item, handler, request, attemptId, signal);
+ * ```
+ */
+async function startJob(
+  ctx: RunnerContext,
+  item: ItemRow,
+  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): Promise<string> {
+  const live = item.artifactKey === null ? undefined : ctx.journal.findLiveJob(item.artifactKey);
+  if (live) {
+    ctx.journal.setAttemptJob(attemptId, { externalId: live.externalId, jobState: "submitted" });
+    ctx.log.info("runner:job:adopted", { itemId: item.id });
+    return live.externalId;
+  }
+
+  const { jobId } = await handler.submit(request, { signal });
+  ctx.journal.setAttemptJob(attemptId, { externalId: jobId, jobState: "submitted" });
+  ctx.log.info("runner:job:submitted", { itemId: item.id });
+  return jobId;
+}
+
+/**
+ * Drives one provider job to an end state (D8): start or adopt it, then poll
+ * every `pollIntervalMs`. A retryable poll failure (a transport problem) keeps
+ * polling; a job the provider finished with an error, or a terminal poll
+ * failure, marks the job `failed` and throws; a job still pending after
+ * `jobTimeoutMs` is marked `expired` and throws a retryable timeout. An abort
+ * leaves the job `submitted`, so resume or a later run adopts it.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param handler - A job handler (`submit` + `poll`).
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The finished job's result.
+ * @example
+ * ```ts
+ * const result = await runJob(ctx, item, handler, request, attemptId, signal);
+ * ```
+ */
+async function runJob(
+  ctx: RunnerContext,
+  item: ItemRow,
+  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): Promise<HandlerResult> {
+  const deadline = Date.now() + ctx.config.jobTimeoutMs;
+  const jobId = await startJob(ctx, item, handler, request, attemptId, signal);
+
+  for (;;) {
+    if (signal.aborted) throw abortReasonOf(signal);
+
+    const poll = await pollOnce(ctx, handler, jobId, request, attemptId, signal);
+    if (poll.state === "done") {
+      ctx.journal.setAttemptJob(attemptId, { jobState: "done" });
+      return poll;
+    }
+    if (poll.state === "failed") {
+      ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
+      throw poll.error;
+    }
+
+    if (Date.now() >= deadline) {
+      ctx.journal.setAttemptJob(attemptId, { jobState: "expired" });
+      throw jobTimeoutError(ctx.config.jobTimeoutMs);
+    }
+    await delay(ctx.config.pollIntervalMs, signal);
+  }
+}
+
+/**
+ * One poll of a provider job. A thrown retryable error (transport problem)
+ * reads as `pending`; any other thrown error marks the job `failed` and is
+ * rethrown. An abort is rethrown unchanged.
+ *
+ * @param ctx - Runner domain context.
+ * @param handler - A job handler.
+ * @param jobId - The provider job id.
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The poll result.
+ * @example
+ * ```ts
+ * const poll = await pollOnce(ctx, handler, jobId, request, attemptId, signal);
+ * ```
+ */
+async function pollOnce(
+  ctx: RunnerContext,
+  handler: ExecutableHandler & Required<Pick<ExecutableHandler, "submit" | "poll">>,
+  jobId: string,
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): ReturnType<typeof handler.poll> {
+  try {
+    return await handler.poll(jobId, request, { signal });
+  } catch (error) {
+    if (signal.aborted) throw error;
+
+    const errorClass = classifyError(error);
+    if (!isRetryableErrorClass(errorClass)) {
+      ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
+      throw error;
+    }
+    ctx.log.warn("runner:job:poll-retry", { errorClass });
+    return { state: "pending" };
+  }
+}
+
+/**
  * Runs one provider attempt for an item already gated to `dispatching`:
- * records the attempt, calls `handler.execute`, and on success persists the
- * artifact (`store.put` → `journal.commitDone`) and reports the breaker
- * outcome. On failure, classifies and transitions via {@link handleAttemptError}.
+ * records the attempt, runs the handler (the job path for `submit` + `poll`
+ * handlers, else `execute`), normalizes the result, and persists the
+ * artifact (`store.put` → `journal.commitDone` with its mime type). On
+ * failure, classifies and transitions via {@link handleAttemptError}; when
+ * the drain signal aborted, ends the attempt `aborted` and leaves the item
+ * `dispatching` for resume.
  *
  * @param ctx - Runner domain context.
  * @param item - The item, already `dispatching`.
- * @param request - The item's request payload (input/params — never journaled).
- * @param signal - Drain signal, forwarded to `handler.execute`.
+ * @param request - The resolved request (never journaled).
+ * @param signal - Drain signal, forwarded to the handler.
  * @returns The attempt's outcome.
  * @example
  * ```ts
@@ -366,7 +516,8 @@ async function attemptOnce(
   });
 
   try {
-    const result = await handler.execute(request, { signal });
+    const result = await runHandler(ctx, item, handler, request, attemptId, signal);
+    const { bytes, mimeType } = normalizeResult(result);
     ctx.journal.finishAttempt(attemptId, {
       endedAt: Date.now(),
       outcome: "done",
@@ -374,16 +525,55 @@ async function attemptOnce(
     });
     ctx.limits.reportOutcome(lane, "ok");
 
-    const putResult = await ctx.store.put(result.body);
+    const putResult = await ctx.store.put(bytes);
     ctx.journal.commitDone(item.id, {
       actualCostUsd: result.costUsd,
-      artifactKey: artifactKeyOf(item.planningKey, item.provider, item.packVersion),
-      contentHash: putResult.hash
+      artifactKey:
+        item.artifactKey ?? artifactKeyOf(item.planningKey, item.provider, item.packVersion),
+      contentHash: putResult.hash,
+      mimeType
     });
     return { kind: "done", costUsd: result.costUsd, contentHash: putResult.hash };
   } catch (error) {
+    // The drain's own abort (no provider hint) pauses; a real provider error still counts.
+    if (signal.aborted && classifyError(error) === "unknown") {
+      ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "aborted" });
+      return { kind: "aborted" };
+    }
     return handleAttemptError(ctx, item, lane, attemptId, error);
   }
+}
+
+/**
+ * Calls the handler the way its shape asks for: the job path for `submit` +
+ * `poll`, else `execute`.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param handler - The narrowed handler.
+ * @param request - The resolved request.
+ * @param attemptId - The current attempt row.
+ * @param signal - Drain signal.
+ * @returns The handler's result.
+ * @throws {Error} When the handler exposes neither form (guarded earlier; defensive).
+ * @example
+ * ```ts
+ * const result = await runHandler(ctx, item, handler, request, attemptId, signal);
+ * ```
+ */
+async function runHandler(
+  ctx: RunnerContext,
+  item: ItemRow,
+  handler: ExecutableHandler,
+  request: HandlerRequest,
+  attemptId: number,
+  signal: AbortSignal
+): Promise<HandlerResult> {
+  if (isJobHandler(handler)) return runJob(ctx, item, handler, request, attemptId, signal);
+  if (handler.execute) return handler.execute(request, { signal });
+  throw new Error(
+    `[ai] Handler "${item.task}/${item.provider}" cannot execute.\n  Expose execute() or submit()/poll().`
+  );
 }
 
 /** Sentinel returned by {@link applyOutcome}: `true` means the item reached a terminal state. */
@@ -391,7 +581,8 @@ type OutcomeApplied = { terminal: true } | { terminal: false; attempt: number; w
 
 /**
  * Applies one attempt's outcome: reports the matching stream event for a
- * terminal outcome (`done`/`flagged`/`terminal-failed`), or — for a
+ * terminal outcome (`done`/`flagged`/`terminal-failed`), stops quietly on
+ * `aborted` (the item stays `dispatching` for resume), or — for a
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
  * computed backoff delay. Extracted from {@link executeItem} to keep its
@@ -417,6 +608,7 @@ function applyOutcome(
   outcome: AttemptOutcomeResult,
   report: (event: RunEvent) => void
 ): OutcomeApplied {
+  if (outcome.kind === "aborted") return { terminal: true };
   if (outcome.kind === "done") {
     report({
       type: "item:done",
@@ -454,36 +646,116 @@ function applyOutcome(
 }
 
 /**
+ * Cross-run reuse (D2): when a `done` artifact with this item's artifact key
+ * exists in any run and its bytes are still in the store, completes the item
+ * with it at cost 0 — no provider call, no budget reservation.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The queued item.
+ * @param report - Stream callback.
+ * @returns True when the item was completed by reuse.
+ * @example
+ * ```ts
+ * if (await tryReuse(ctx, item, report)) return;
+ * ```
+ */
+async function tryReuse(
+  ctx: RunnerContext,
+  item: ItemRow,
+  report: (event: RunEvent) => void
+): Promise<boolean> {
+  if (item.artifactKey === null) return false;
+
+  const artifact = ctx.journal.findDoneArtifact(item.artifactKey);
+  if (!artifact || !(await ctx.store.has(artifact.contentHash))) return false;
+
+  ctx.journal.reuseDone(item.id, artifact);
+  ctx.log.info("runner:reused", { itemId: item.id });
+  report({ type: "item:done", itemId: item.id, costUsd: 0, contentHash: artifact.contentHash });
+  return true;
+}
+
+/**
+ * Resolves an item's `$ref` targets to their stored artifacts (D10). Every
+ * target must be `done` in this run; otherwise the item is blocked.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The queued item.
+ * @param plan - The item's plan (target id → planning key).
+ * @returns Resolved files by target id, or undefined when a target is not done.
+ * @example
+ * ```ts
+ * const refFiles = resolveReferenceFiles(ctx, item, plan);
+ * ```
+ */
+function resolveReferenceFiles(
+  ctx: RunnerContext,
+  item: ItemRow,
+  plan: PlannedItem
+): Map<string, ResolvedFile> | undefined {
+  const refFiles = new Map<string, ResolvedFile>();
+
+  for (const [targetId, planningKey] of plan.refKeys) {
+    const target = ctx.journal.getItem(item.runId, planningKey);
+    if (target?.status !== "done" || target.contentHash === null) {
+      ctx.log.warn("runner:blocked", { itemId: item.id, waitingFor: targetId });
+      return undefined;
+    }
+    refFiles.set(targetId, {
+      path: ctx.store.pathOf(target.contentHash),
+      mimeType: target.mimeType ?? OCTET_STREAM,
+      hash: target.contentHash
+    });
+  }
+
+  return refFiles;
+}
+
+/** How {@link executeItem} ended for an item that did not reach a provider outcome. */
+export type ItemSettlement = "settled" | "blocked";
+
+/**
  * Drives one item through the durable pipeline to a terminal outcome:
- * admit(limits.acquire) → gate(journal.gateToDispatching, atomic) →
- * execute → persist → report, looping on retryable failures (each retry
- * re-enters admit+gate, since `markFailed` returns the item to `queued`)
- * until it reaches `done`/`failed`/`flagged`, exhausts `maxAttempts`, or the
- * drain signal aborts (leaving it `queued` for a future run). Reports every
+ * reuse(journal, D2) → wait for `$ref` targets (D10) → resolve references →
+ * admit(limits.acquire) → gate(journal.gateToDispatching, atomic) → execute
+ * or submit+poll → persist → report, looping on retryable failures (each
+ * retry re-enters admit+gate, since `markFailed` returns the item to
+ * `queued`) until it reaches `done`/`failed`/`flagged`, exhausts
+ * `maxAttempts`, or the drain signal aborts (leaving it `queued`, or
+ * `dispatching` when a job was in flight, for a future resume). Reports every
  * transition via `report`, including the initial `item:queued` marker.
  *
  * @param ctx - Runner domain context.
  * @param item - The queued item row to execute.
- * @param request - The item's request payload (input/params — never journaled).
- * @param maxAttempts - The effective per-item attempt ceiling.
+ * @param plan - The item's plan (request, maxAttempts, references).
  * @param drain - The run's drain controller (abort + budget-stop signal).
  * @param active - The active run's live bookkeeping (in-flight counter).
  * @param report - Callback invoked with every per-item stream record.
+ * @param dependencies - Settles once every `$ref` target of this item has settled.
+ * @returns `"blocked"` when a `$ref` target did not finish `done`, else `"settled"`.
  * @example
  * ```ts
- * await executeItem(ctx, item, request, 3, drain, active, report);
+ * await executeItem(ctx, item, plan, drain, active, report, Promise.resolve());
  * ```
  */
 export async function executeItem(
   ctx: RunnerContext,
   item: ItemRow,
-  request: HandlerRequest,
-  maxAttempts: number,
+  plan: PlannedItem,
   drain: DrainController,
   active: ActiveRun,
-  report: (event: RunEvent) => void
-): Promise<void> {
+  report: (event: RunEvent) => void,
+  dependencies: Promise<unknown>
+): Promise<ItemSettlement> {
   report({ type: "item:queued", itemId: item.id, task: item.task, provider: item.provider });
+  if (await tryReuse(ctx, item, report)) return "settled";
+
+  // $ref targets first; a target that did not finish done blocks this item.
+  await dependencies;
+  if (drain.signal.aborted) return "settled";
+  const refFiles = resolveReferenceFiles(ctx, item, plan);
+  if (!refFiles) return "blocked";
+  const request = resolveReferences(plan.request, refFiles, plan.files) as HandlerRequest;
 
   let attempt = item.attemptCount;
   while (!drain.signal.aborted) {
@@ -491,19 +763,19 @@ export async function executeItem(
     try {
       const lane = laneOf(item);
       const admission = await acquireLane(ctx, lane, drain.signal);
-      if (!admission) return;
+      if (!admission) return "settled";
 
       try {
         const gate = ctx.journal.gateToDispatching(item.id);
         if (!gate.ok) {
           if (gate.reason === "budget") drain.triggerBudgetStop();
-          return;
+          return "settled";
         }
         report({ type: "item:dispatching", itemId: item.id });
 
         const outcome = await attemptOnce(ctx, item, request, drain.signal);
-        const applied = applyOutcome(ctx, item, maxAttempts, attempt, outcome, report);
-        if (applied.terminal) return;
+        const applied = applyOutcome(ctx, item, plan.maxAttempts, attempt, outcome, report);
+        if (applied.terminal) return "settled";
 
         attempt = applied.attempt;
         await delay(applied.waitMs, drain.signal);
@@ -514,4 +786,5 @@ export async function executeItem(
       active.inFlight -= 1;
     }
   }
+  return "settled";
 }

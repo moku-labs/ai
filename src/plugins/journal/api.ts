@@ -10,12 +10,14 @@ import type {
   AttemptEnd,
   AttemptStart,
   Config,
+  DoneArtifact,
   ErrorClass,
   GateResult,
   ItemFilter,
   ItemIntent,
   ItemRow,
   ItemStatus,
+  JobState,
   JournalApi,
   RunRow,
   RunSnapshot,
@@ -53,6 +55,9 @@ type ItemDatabaseRow = {
   actual_cost_usd: number | null;
   attempt_count: number;
   updated_at: number;
+  label: string | null;
+  build_name: string | null;
+  mime_type: string | null;
 };
 
 /** Raw `runs` row shape, matching the SQL schema column-for-column. */
@@ -90,7 +95,10 @@ function mapItem(row: ItemDatabaseRow): ItemRow {
     estimatedCostUsd: row.estimated_cost_usd,
     actualCostUsd: row.actual_cost_usd,
     attemptCount: row.attempt_count,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    label: row.label,
+    buildName: row.build_name,
+    mimeType: row.mime_type
   };
 }
 
@@ -285,8 +293,8 @@ function insertOneItem(
   const id = crypto.randomUUID();
   driver.run(
     `INSERT INTO items
-       (id, run_id, build_file, planning_key, task, provider, pack_version, status, estimated_cost_usd, attempt_count, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?)`,
+       (id, run_id, build_file, planning_key, task, provider, pack_version, artifact_key, label, build_name, status, estimated_cost_usd, attempt_count, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, 0, ?)`,
     [
       id,
       runId,
@@ -295,6 +303,9 @@ function insertOneItem(
       item.task,
       item.provider,
       item.packVersion,
+      item.artifactKey,
+      item.label,
+      item.buildName,
       item.estimatedCostUsd,
       now
     ]
@@ -310,7 +321,10 @@ function insertOneItem(
     packVersion: item.packVersion,
     estimatedCostUsd: item.estimatedCostUsd,
     status: "queued",
-    artifactKey: SQL_NULL,
+    artifactKey: item.artifactKey,
+    label: item.label,
+    buildName: item.buildName,
+    mimeType: SQL_NULL,
     contentHash: SQL_NULL,
     actualCostUsd: SQL_NULL,
     attemptCount: 0,
@@ -572,6 +586,7 @@ function finishAttempt(state: State, attemptId: number, end: AttemptEnd): void {
  * @param result.actualCostUsd - The item's actual, realized cost.
  * @param result.artifactKey - Artifact identity key (planning key + provider + pack version).
  * @param result.contentHash - CAS content hash of the produced artifact.
+ * @param result.mimeType - MIME type of the produced artifact, when known.
  * @example
  * ```ts
  * commitDone(state, itemId, { actualCostUsd: 0.2, artifactKey, contentHash });
@@ -580,15 +595,156 @@ function finishAttempt(state: State, attemptId: number, end: AttemptEnd): void {
 function commitDone(
   state: State,
   itemId: string,
-  result: { actualCostUsd: number; artifactKey: string; contentHash: string }
+  result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
 ): void {
   const driver = requireDriver(state);
   driver.transactionImmediate<void>(() => {
     driver.run(
-      "UPDATE items SET status = 'done', actual_cost_usd = ?, artifact_key = ?, content_hash = ?, updated_at = ? WHERE id = ? AND status = 'dispatching'",
-      [result.actualCostUsd, result.artifactKey, result.contentHash, Date.now(), itemId]
+      "UPDATE items SET status = 'done', actual_cost_usd = ?, artifact_key = ?, content_hash = ?, mime_type = ?, updated_at = ? WHERE id = ? AND status = 'dispatching'",
+      [
+        result.actualCostUsd,
+        result.artifactKey,
+        result.contentHash,
+        result.mimeType ?? SQL_NULL,
+        Date.now(),
+        itemId
+      ]
     );
   });
+}
+
+/**
+ * Finds the newest `done` item with this artifact key, in any run — the
+ * cross-run reuse lookup (a re-run never re-bills a finished artifact).
+ *
+ * @param state - Journal plugin state.
+ * @param artifactKey - Artifact identity key.
+ * @returns The artifact's content hash and mime type, or undefined.
+ * @example
+ * ```ts
+ * const hit = findDoneArtifact(state, artifactKey);
+ * ```
+ */
+function findDoneArtifact(state: State, artifactKey: string): DoneArtifact | undefined {
+  const driver = requireDriver(state);
+  const row = driver.get<{ content_hash: string | null; mime_type: string | null }>(
+    "SELECT content_hash, mime_type FROM items WHERE artifact_key = ? AND status = 'done' AND content_hash IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+    [artifactKey]
+  );
+  if (!row || row.content_hash === null) return undefined;
+  return { contentHash: row.content_hash, mimeType: row.mime_type };
+}
+
+/**
+ * Transitions a `queued` item straight to `done` with an artifact produced
+ * by an earlier item (cost 0). A no-op when the item is not `queued`.
+ *
+ * @param state - Journal plugin state.
+ * @param itemId - Item id to complete.
+ * @param artifact - The reused artifact's content hash and mime type.
+ * @example
+ * ```ts
+ * reuseDone(state, itemId, { contentHash, mimeType: "video/mp4" });
+ * ```
+ */
+function reuseDone(state: State, itemId: string, artifact: DoneArtifact): void {
+  const driver = requireDriver(state);
+  driver.transactionImmediate<void>(() => {
+    driver.run(
+      "UPDATE items SET status = 'done', actual_cost_usd = 0, content_hash = ?, mime_type = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+      [artifact.contentHash, artifact.mimeType, Date.now(), itemId]
+    );
+  });
+}
+
+/**
+ * Records a provider job id and/or its state on an attempt row.
+ *
+ * @param state - Journal plugin state.
+ * @param attemptId - Attempt id, from `recordAttempt`.
+ * @param job - The provider job id (when known) and the job state.
+ * @param job.externalId - Provider job id; omit to keep the stored one.
+ * @param job.jobState - The job's lifecycle state.
+ * @example
+ * ```ts
+ * setAttemptJob(state, attemptId, { externalId: "req-1", jobState: "submitted" });
+ * ```
+ */
+function setAttemptJob(
+  state: State,
+  attemptId: number,
+  job: { externalId?: string; jobState: JobState }
+): void {
+  const driver = requireDriver(state);
+  driver.transactionImmediate<void>(() => {
+    driver.run(
+      "UPDATE attempts SET external_id = COALESCE(?, external_id), job_state = ? WHERE id = ?",
+      [job.externalId ?? SQL_NULL, job.jobState, attemptId]
+    );
+  });
+}
+
+/**
+ * Finds the newest still-`submitted` provider job for any item with this
+ * artifact key, in any run — the job a new attempt adopts instead of
+ * re-submitting.
+ *
+ * @param state - Journal plugin state.
+ * @param artifactKey - Artifact identity key.
+ * @returns The live job's external id, or undefined.
+ * @example
+ * ```ts
+ * const live = findLiveJob(state, artifactKey);
+ * ```
+ */
+function findLiveJob(state: State, artifactKey: string): { externalId: string } | undefined {
+  const driver = requireDriver(state);
+  const row = driver.get<{ external_id: string }>(
+    `SELECT a.external_id AS external_id FROM attempts a JOIN items i ON i.id = a.item_id
+     WHERE i.artifact_key = ? AND a.job_state = 'submitted' AND a.external_id IS NOT NULL
+     ORDER BY a.id DESC LIMIT 1`,
+    [artifactKey]
+  );
+  return row ? { externalId: row.external_id } : undefined;
+}
+
+/**
+ * Finds the newest run of any status.
+ *
+ * @param state - Journal plugin state.
+ * @returns The newest run, or undefined when the journal is empty.
+ * @example
+ * ```ts
+ * const run = latestRun(state);
+ * ```
+ */
+function latestRun(state: State): RunRow | undefined {
+  const driver = requireDriver(state);
+  const row = driver.get<RunDatabaseRow>(
+    "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+  );
+  return row ? mapRun(row) : undefined;
+}
+
+/**
+ * Looks up one item of a run by its planning key.
+ *
+ * @param state - Journal plugin state.
+ * @param runId - Run id the item belongs to.
+ * @param planningKey - The item's planning key.
+ * @returns The item row, or undefined.
+ * @example
+ * ```ts
+ * const dep = getItem(state, runId, planningKey);
+ * ```
+ */
+function getItem(state: State, runId: string, planningKey: string): ItemRow | undefined {
+  const driver = requireDriver(state);
+  const row = driver.get<ItemDatabaseRow>(
+    "SELECT * FROM items WHERE run_id = ? AND planning_key = ?",
+    [runId, planningKey]
+  );
+  return row ? mapItem(row) : undefined;
 }
 
 /**
@@ -883,6 +1039,7 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
    * @param result.actualCostUsd - The item's actual, realized cost.
    * @param result.artifactKey - Artifact identity key (planning key + provider + pack version).
    * @param result.contentHash - CAS content hash of the produced artifact.
+   * @param result.mimeType - MIME type of the produced artifact, when known.
    * @example
    * ```ts
    * api.commitDone(itemId, { actualCostUsd: 0.2, artifactKey, contentHash });
@@ -890,7 +1047,7 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
    */
   const boundCommitDone = (
     itemId: string,
-    result: { actualCostUsd: number; artifactKey: string; contentHash: string }
+    result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
   ): void => {
     commitDone(state, itemId, result);
   };
@@ -1002,6 +1159,78 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     recordAttempt: boundRecordAttempt,
     finishAttempt: boundFinishAttempt,
     commitDone: boundCommitDone,
+    /**
+     * Finds a reusable done artifact by key, in any run. See {@link findDoneArtifact}.
+     *
+     * @param artifactKey - Artifact identity key.
+     * @returns The artifact, or undefined.
+     * @example
+     * ```ts
+     * api.findDoneArtifact(artifactKey);
+     * ```
+     */
+    findDoneArtifact: (artifactKey: string) => findDoneArtifact(state, artifactKey),
+    /**
+     * Completes a queued item with a reused artifact. See {@link reuseDone}.
+     *
+     * @param itemId - Item id to complete.
+     * @param artifact - The reused artifact.
+     * @example
+     * ```ts
+     * api.reuseDone(itemId, artifact);
+     * ```
+     */
+    reuseDone: (itemId: string, artifact: DoneArtifact) => {
+      reuseDone(state, itemId, artifact);
+    },
+    /**
+     * Records a provider job on an attempt. See {@link setAttemptJob}.
+     *
+     * @param attemptId - Attempt id.
+     * @param job - Job id and state.
+     * @param job.externalId - Provider job id; omit to keep the stored one.
+     * @param job.jobState - The job's lifecycle state.
+     * @example
+     * ```ts
+     * api.setAttemptJob(attemptId, { externalId: "req-1", jobState: "submitted" });
+     * ```
+     */
+    setAttemptJob: (attemptId: number, job: { externalId?: string; jobState: JobState }) => {
+      setAttemptJob(state, attemptId, job);
+    },
+    /**
+     * Finds a live provider job for an artifact key. See {@link findLiveJob}.
+     *
+     * @param artifactKey - Artifact identity key.
+     * @returns The job's external id, or undefined.
+     * @example
+     * ```ts
+     * api.findLiveJob(artifactKey);
+     * ```
+     */
+    findLiveJob: (artifactKey: string) => findLiveJob(state, artifactKey),
+    /**
+     * Finds the newest run of any status. See {@link latestRun}.
+     *
+     * @returns The newest run, or undefined.
+     * @example
+     * ```ts
+     * api.latestRun();
+     * ```
+     */
+    latestRun: () => latestRun(state),
+    /**
+     * Looks up one item by run and planning key. See {@link getItem}.
+     *
+     * @param runId - Run id.
+     * @param planningKey - Planning key.
+     * @returns The item row, or undefined.
+     * @example
+     * ```ts
+     * api.getItem(runId, planningKey);
+     * ```
+     */
+    getItem: (runId: string, planningKey: string) => getItem(state, runId, planningKey),
     markFailed: boundMarkFailed,
     markFlagged: boundMarkFlagged,
     setRunStatus: boundSetRunStatus,

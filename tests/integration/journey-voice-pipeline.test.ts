@@ -9,7 +9,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { coreConfig } from "../../src/config";
 import { elevenlabsPlugin, registryPlugin } from "../../src/plugins";
@@ -62,9 +62,9 @@ function createBridgedElevenlabsPlugin() {
 
       registry.register("voiceover", "elevenlabs-bridged", {
         estimate: (request: HandlerRequest) =>
-          real.estimate(request.input as unknown as VoiceoverRequest),
+          real.estimate(request as unknown as VoiceoverRequest),
         execute: async (request: HandlerRequest, opts: { signal?: AbortSignal }) => {
-          const result = await real.execute(request.input as unknown as VoiceoverRequest, opts);
+          const result = await real.execute(request as unknown as VoiceoverRequest, opts);
           return { body: result.audio, mimeType: result.mimeType, costUsd: result.costUsd };
         }
       });
@@ -82,9 +82,9 @@ function createDualShapeVoiceoverHandler(costUsd: number) {
   const inner = createFakeHandler({ costUsd });
   return {
     estimate: inner.estimate,
-    execute: async (request: unknown, opts: { signal?: AbortSignal }) => {
+    execute: async (request: HandlerRequest, opts: { signal?: AbortSignal }) => {
       const result = await inner.execute(request, opts);
-      return { ...result, audio: result.body };
+      return { ...result, audio: result.body ?? new Uint8Array() };
     },
     attempts: inner.attempts
   };
@@ -227,11 +227,10 @@ describe("journey: voice pipeline", () => {
     await app.start();
 
     // Author a TS build file importing defineBuild by relative specifier
-    // (toImportSpecifier pattern from buildfile's own integration test).
+    // (file URL, so macOS /var -> /private/var symlinks cannot break it).
     const testDir = path.dirname(fileURLToPath(import.meta.url));
     const definePath = path.resolve(testDir, "../../src/plugins/buildfile/define.ts");
-    const relative = path.relative(tempDir, definePath).replaceAll("\\", "/");
-    const importSpecifier = relative.startsWith(".") ? relative : `./${relative}`;
+    const importSpecifier = pathToFileURL(definePath).href;
     const tsPath = path.join(tempDir, "build.moku.ts");
     await writeFile(
       tsPath,

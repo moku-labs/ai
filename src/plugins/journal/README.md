@@ -44,6 +44,10 @@ Creates the single `runs` row for one invocation, with status `"active"`. Omit `
 const run = ctx.journal.openRun({ glob: "voice/*.yaml", maxCostUsd: 25 });
 ```
 
+#### `latestRun(): RunRow | undefined`
+
+The newest run of any status (the default for `runner.export()`).
+
 #### `getRun(runId: string): RunRow | undefined`
 
 Looks up one run by id. Returns `undefined` when not found.
@@ -112,12 +116,29 @@ if (!gate.ok) {
 }
 ```
 
-#### `commitDone(itemId: string, result: { actualCostUsd: number; artifactKey: string; contentHash: string }): void`
+#### `commitDone(itemId: string, result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }): void`
 
-Transitions an item `dispatching → done`, recording its realized cost, its artifact identity key, and the CAS content hash of the produced artifact. A no-op if the item is not currently `"dispatching"`.
+Transitions an item `dispatching → done`, recording its realized cost, its artifact identity key, the CAS content hash of the produced artifact and its mime type. A no-op if the item is not currently `"dispatching"`.
 
 ```ts
-ctx.journal.commitDone(item.id, { actualCostUsd: 0.2, artifactKey, contentHash });
+ctx.journal.commitDone(item.id, { actualCostUsd: 0.2, artifactKey, contentHash, mimeType: "video/mp4" });
+```
+
+#### `getItem(runId: string, planningKey: string): ItemRow | undefined`
+
+One item of a run by planning key. The runner reads `$ref` targets with it.
+
+#### `findDoneArtifact(artifactKey: string): { contentHash: string; mimeType: string | null } | undefined`
+
+The newest `done` item with this artifact key, in **any** run — the cross-run reuse lookup.
+
+#### `reuseDone(itemId: string, artifact: { contentHash: string; mimeType: string | null }): void`
+
+Transitions a `queued` item straight to `done` with a reused artifact, `actual_cost_usd = 0`. A no-op when the item is not `queued`.
+
+```ts
+const hit = ctx.journal.findDoneArtifact(item.artifactKey);
+if (hit && (await ctx.store.has(hit.contentHash))) ctx.journal.reuseDone(item.id, hit);
 ```
 
 #### `markFailed(itemId: string, result: { errorClass: ErrorClass; terminal: boolean }): void`
@@ -157,6 +178,14 @@ Records the end of an attempt: `endedAt`, an `outcome` (`"done" | "retryable-err
 ```ts
 ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "done", costUsd: 0.2 });
 ```
+
+#### `setAttemptJob(attemptId: number, job: { externalId?: string; jobState: JobState }): void`
+
+Records a provider job on an attempt: its id (`external_id`) and state (`submitted` → `done` | `failed` | `expired`). The runner writes `submitted` right after `submit()` returns, before any wait.
+
+#### `findLiveJob(artifactKey: string): { externalId: string } | undefined`
+
+The newest still-`submitted` job for any item with this artifact key, in any run. The runner adopts it instead of submitting again, so a crash or pause during a video job never pays twice.
 
 ### Reads and aggregates
 
@@ -274,7 +303,7 @@ if (run) {
 
 ## Internals
 
-- **Schema** (`schema.ts`) — three tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)` and an index on `(run_id, status)`), and `attempts`. Metadata columns only.
+- **Schema** (`schema.ts`) — three tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)`, indexes on `(run_id, status)` and `(artifact_key, status)`, plus `label`, `build_name`, `mime_type`), and `attempts` (plus `external_id`, `job_state` for provider jobs). Metadata columns only. `migrateSchema` adds the newer columns to an older journal file in place (`PRAGMA table_info` → `ALTER TABLE … ADD COLUMN`), so existing `.moku/journal.db` files keep working.
 - **Driver seam** (`driver/`) — a structural `SqliteDriver` interface with two implementations: `better-sqlite3` on Node, `bun:sqlite` on Bun. Selection is `typeof Bun === "undefined"` in `driver/select.ts`, which also applies the durability pragma set to every opened connection.
 - **Durability pragmas** — `journal_mode=WAL`, `synchronous=FULL` (never `NORMAL` — last-commit durability is the product), `fullfsync=1` (macOS `F_FULLFSYNC`; harmless elsewhere), and `busy_timeout`. Every potentially-writing transaction opens with `BEGIN IMMEDIATE`, since `busy_timeout` does not cover read-to-write lock upgrades.
 - **Checkpointing** — the writer runs `wal_checkpoint(TRUNCATE)` on a timer to protect against checkpoint starvation from long-lived `--follow` readers.

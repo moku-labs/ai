@@ -22,7 +22,14 @@ import type {
 import type { LimitsApi } from "../../../limits/types";
 import { registryPlugin } from "../../../registry";
 import type { StoreApi } from "../../../store/types";
-import type { Config, ExecutableHandler, RegistryApi, RunnerContext, State } from "../../types";
+import type {
+  Config,
+  ExecutableHandler,
+  PlannedItem,
+  RegistryApi,
+  RunnerContext,
+  State
+} from "../../types";
 
 /** Ordered log of fake-dependency method calls, for step-ordering assertions. */
 export type CallLog = string[];
@@ -75,7 +82,41 @@ export function fakeItemRow(overrides: Partial<ItemRow> = {}): ItemRow {
     actualCostUsd: FAKE_NULL,
     attemptCount: 0,
     updatedAt: 0,
+    label: "01-fakeTask",
+    buildName: "build",
+    mimeType: FAKE_NULL,
     ...overrides
+  };
+}
+
+/**
+ * Builds a fake `PlannedItem` with an empty flat request and no references,
+ * for driving `executeItem` directly.
+ *
+ * @param maxAttempts - The effective per-item attempt ceiling.
+ * @returns A fake planned item.
+ * @example
+ * ```ts
+ * await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+ * ```
+ */
+export function fakePlan(maxAttempts: number): PlannedItem {
+  return {
+    intent: {
+      planningKey: "pk-1",
+      buildFile: "build.moku.yaml",
+      task: "fakeTask",
+      provider: "fakeProvider",
+      packVersion: FAKE_NULL,
+      estimatedCostUsd: 0.1,
+      label: "01-fakeTask",
+      buildName: "build",
+      artifactKey: "ak-1"
+    },
+    request: {},
+    maxAttempts,
+    refKeys: new Map(),
+    files: new Map()
   };
 }
 
@@ -147,6 +188,8 @@ export function createFakeRunnerContext(
     maxAttempts: 3,
     retryBaseMs: 1000,
     eventBufferSize: 10_000,
+    pollIntervalMs: 0,
+    jobTimeoutMs: 60_000,
     ...overrides.config
   };
   const state: State = { active: FAKE_NULL };
@@ -240,6 +283,16 @@ export function createFakeRunnerContext(
     checkpoint: (): void => {
       log.push("journal.checkpoint");
     },
+    findDoneArtifact: (): undefined => undefined,
+    reuseDone: (itemId: string): void => {
+      log.push(`journal.reuseDone(${itemId})`);
+    },
+    setAttemptJob: (_attemptId: number, job: { jobState: string }): void => {
+      log.push(`journal.setAttemptJob(${job.jobState})`);
+    },
+    findLiveJob: (): undefined => undefined,
+    latestRun: (): RunRow | undefined => undefined,
+    getItem: (): ItemRow | undefined => undefined,
     ...overrides.journal
   };
 

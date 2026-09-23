@@ -98,116 +98,116 @@ describe("planningKeyOf", () => {
 // ---------------------------------------------------------------------------
 
 describe("planItems", () => {
-  it("uses the build item's own provider when set", () => {
+  it("uses the build item's own provider when set", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const build = fakeCompiledBuild([fakeBuildItem({ provider: "explicit-provider" })]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.provider).toBe("explicit-provider");
   });
 
-  it("falls back to the build file's defaults.provider", () => {
+  it("falls back to the build file's defaults.provider", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const build = fakeCompiledBuild([fakeBuildItem()], {
       defaults: { provider: "default-provider" }
     });
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.provider).toBe("default-provider");
   });
 
-  it("falls back to the task's first-registered provider when neither is set", () => {
+  it("falls back to the task's first-registered provider when neither is set", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log, {
       registry: { providers: (): string[] => ["registered-first", "registered-second"] }
     });
     const build = fakeCompiledBuild([fakeBuildItem()]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.provider).toBe("registered-first");
   });
 
-  it("throws a two-line error when no provider is set and none is registered", () => {
+  it("throws a two-line error when no provider is set and none is registered", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log, { registry: { providers: (): string[] => [] } });
     const build = fakeCompiledBuild([fakeBuildItem()]);
 
-    expect(() => planItems(ctx, [build])).toThrow(/^\[ai\] No provider registered/);
+    await expect(planItems(ctx, [build])).rejects.toThrow(/^\[ai\] No provider registered/);
   });
 
-  it("resolves the build file's defaults.maxAttempts over config.maxAttempts", () => {
+  it("resolves the build file's defaults.maxAttempts over config.maxAttempts", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log, { config: { maxAttempts: 3 } });
     const build = fakeCompiledBuild([fakeBuildItem()], { defaults: { maxAttempts: 7 } });
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.maxAttempts).toBe(7);
   });
 
-  it("falls back to config.maxAttempts when the build file sets no default", () => {
+  it("falls back to config.maxAttempts when the build file sets no default", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log, { config: { maxAttempts: 5 } });
     const build = fakeCompiledBuild([fakeBuildItem()]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.maxAttempts).toBe(5);
   });
 
-  it("uses the resolved handler's estimate() for estimatedCostUsd", () => {
+  it("uses the resolved handler's estimate() for estimatedCostUsd", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log, {
       registry: { resolve: (): unknown => fakeHandler(log, { costUsd: 0.42 }) }
     });
     const build = fakeCompiledBuild([fakeBuildItem()]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.estimatedCostUsd).toBe(0.42);
     expect(log).toContain("handler.estimate");
   });
 
-  it("pairs the intent with the item's input/params as the in-memory request", () => {
+  it("pairs the intent with the flat task request (input spread + params)", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const build = fakeCompiledBuild([
       fakeBuildItem({ input: { text: "hi" }, params: { speed: 2 } })
     ]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
-    expect(planned?.request).toEqual({ input: { text: "hi" }, params: { speed: 2 } });
+    expect(planned?.request).toEqual({ text: "hi", params: { speed: 2 } });
   });
 
-  it("defaults packVersion to null when the item has no pack", () => {
+  it("defaults packVersion to null when the item has no pack", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const build = fakeCompiledBuild([fakeBuildItem()]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.packVersion).toBeNull();
   });
 
-  it("carries the item's pack version through when set", () => {
+  it("carries the item's pack version through when set", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const build = fakeCompiledBuild([
       fakeBuildItem({ pack: { name: "pack-a", version: "1.2.3" } })
     ]);
 
-    const [planned] = planItems(ctx, [build]);
+    const [planned] = await planItems(ctx, [build]);
 
     expect(planned?.intent.packVersion).toBe("1.2.3");
   });
 
-  it("expands multiple build files in file then item order", () => {
+  it("expands multiple build files in file then item order", async () => {
     const log: CallLog = [];
     const ctx = createFakeRunnerContext(log);
     const buildA = fakeCompiledBuild([fakeBuildItem({ input: { text: "a1" } })], {
@@ -217,8 +217,8 @@ describe("planItems", () => {
       name: "b"
     });
 
-    const planned = planItems(ctx, [buildA, buildB]);
+    const planned = await planItems(ctx, [buildA, buildB]);
 
-    expect(planned.map(p => p.request.input.text)).toEqual(["a1", "b1"]);
+    expect(planned.map(p => p.request.text)).toEqual(["a1", "b1"]);
   });
 });

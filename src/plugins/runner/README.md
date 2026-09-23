@@ -39,6 +39,8 @@ the same graceful drain with `{ status: "budget-stopped" }`.
 | `maxAttempts` | `number` | `3` | Default max attempts per item. Overridable per build file via `defaults.maxAttempts`. |
 | `retryBaseMs` | `number` | `1000` | Base backoff for retryable errors, ms. Exponential in the attempt number, jittered to 50–100% of the computed value; a provider `Retry-After` hint is honored when larger. |
 | `eventBufferSize` | `number` | `10000` | `events()` per-consumer buffer: max unconsumed item records before overflow coalescing. |
+| `pollIntervalMs` | `number` | `5000` | Delay between two polls of a provider job (`submit` + `poll` handlers). |
+| `jobTimeoutMs` | `number` | `1800000` | A job still pending after this long is marked `expired`; the next attempt submits it again. |
 
 ```ts
 const app = createApp({
@@ -178,28 +180,55 @@ const app = createApp({ plugins: [reporterPlugin] });
 
 ## The pipeline (per item)
 
-1. **Plan** — compile build files (`buildfile.loadGlob`), resolve each item's provider (item
-   `provider` → build `defaults.provider` → the task's first-registered provider), compute the
-   planning key `sha256(canonicalJson({ task, input, params }))` (deliberately excludes
-   `provider`), estimate cost via the handler, `journal.insertItems` as `queued` (idempotent —
-   incremental by default).
-2. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort or open
+1. **Plan** — compile build files (`buildfile.loadGlob`), order each build's items so `$ref`
+   targets come first, resolve each item's provider (item `provider` → build
+   `defaults.provider` → the task's first-registered provider), hash every `$file`, and compute
+   two keys. Planning key = `sha256(canonicalJson({ task, input, params }))` with each `$ref`
+   replaced by its target's planning key and each `$file` by its content hash (deliberately
+   excludes `provider`). Artifact key = the same over `{ task, provider, packVersion, input,
+   params }`, with `$ref`s replaced by the target's artifact key. The request is the flat task
+   request `{ ...input, params }`; the handler estimates it (references unresolved).
+   `journal.insertItems` writes the items `queued` with label (`id`, else `<NN>-<task>`), build
+   name and artifact key (idempotent per run).
+2. **Reuse** — `journal.findDoneArtifact(artifactKey)`: a `done` artifact from any run whose bytes
+   are still in the store completes the item at $0, no provider call.
+3. **References** — wait for the item's `$ref` targets to settle; a target that is not `done`
+   blocks the item (it stays `queued`, the run ends `paused`). Otherwise each `$ref` becomes the
+   target's stored file and each `$file` the local file, as `{ path, mimeType, hash }`.
+4. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort or open
    breaker during the wait exits the item cleanly (it stays `queued`).
-3. **Gate (atomic)** — `journal.gateToDispatching(itemId)`: budget check + planning-key dedup +
-   state transition in ONE transaction. `"budget"` triggers the graceful budget-stop drain;
+5. **Gate (atomic)** — `journal.gateToDispatching(itemId)`: budget check + dedup + state
+   transition in ONE transaction. `"budget"` triggers the graceful budget-stop drain;
    `"duplicate"` releases the lane slot without dispatching (never billed).
-4. **Execute** — `registry.resolve(task, provider)` narrowed through `isExecutableHandler()`
-   (the runner's single audited dynamic boundary), `journal.recordAttempt`, then
-   `handler.execute(request, { signal })`.
-5. **Classify on error** — `classifyError` maps the thrown error into the journal taxonomy
+6. **Execute** — `registry.resolve(task, provider)` narrowed through `isExecutableHandler()`
+   (the runner's single audited dynamic boundary), `journal.recordAttempt`, then either the job
+   path (below) or `handler.execute(request, { signal })`.
+7. **Classify on error** — `classifyError` maps the thrown error into the journal taxonomy
    (see below); `limits.reportOutcome` feeds the breaker (`"ok"` / `"retryable-error"` only).
-6. **Persist** — `store.put(result.body)` → `journal.commitDone(itemId, { actualCostUsd,
-   artifactKey, contentHash })`. Artifact key =
-   `sha256(canonicalJson({ planningKey, provider, packVersion }))`.
-7. **Report** — item record to `events()` subscribers; coalesced `run:progress` on the bus.
+   When the drain signal fired and the error carries no provider hint, the attempt ends
+   `aborted` and the item stays `dispatching` for `resume()`.
+8. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
+   `store.put(bytes)` → `journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash,
+   mimeType })`.
+9. **Report** — item record to `events()` subscribers; coalesced `run:progress` on the bus.
 
 A retryable failure returns the item to `queued` (`markFailed` with `terminal: false`) and
 re-enters admit + gate after the backoff delay, until it settles or exhausts `maxAttempts`.
+
+### Provider jobs (`submit` + `poll`)
+
+A handler with both `submit` and `poll` always runs through the job path:
+
+1. `journal.findLiveJob(artifactKey)` — a job still `submitted` for this artifact key, from any
+   run (a crash, a pause, a timeout of the caller), is **adopted**: no new submit.
+2. Otherwise `submit()`, then `journal.setAttemptJob(attemptId, { externalId: jobId,
+   jobState: "submitted" })` immediately, before any wait.
+3. `poll()` every `pollIntervalMs`. A thrown retryable error (5xx / 429 / timeout / network) is a
+   transport problem and keeps polling. `{ state: "failed", error }` or a thrown terminal error
+   marks the job `failed`; the error is classified as usual, and a retryable one re-submits on
+   the next attempt. `{ state: "done", ... }` marks it `done` and persists as above.
+4. After `jobTimeoutMs` the job is marked `expired` and the attempt fails with a retryable
+   `timeout`, so the next attempt submits a fresh job.
 
 ### Retry taxonomy (contractual)
 
@@ -208,9 +237,10 @@ re-enters admit + gate after the backoff delay, until it settles or exhausts `ma
 | `http-5xx` | `status >= 500` | Retry with backoff |
 | `http-429` | `status === 429` | Retry with backoff (`Retry-After` honored when larger) |
 | `timeout` | `kind: "timeout"` | Retry with backoff |
-| `network` | `kind: "network"`, or no hint at all | Retry with backoff |
+| `network` | `kind: "network"` | Retry with backoff |
 | `http-4xx` | `400 <= status < 500` (except 429) | Terminal `failed` |
 | `content-policy` | `kind: "content-policy"` | Terminal `flagged`, never re-queued |
+| `unknown` | no hint at all (a `TypeError`, a plain `Error`, a string) | Terminal `failed` after one attempt — a programming error must never re-run a paid job |
 
 Provider handlers steer classification by attaching an optional structural hint
 (`ProviderErrorHint`) to their thrown errors — `status?: number`,
@@ -222,16 +252,39 @@ Every registered task/provider handler must satisfy `ExecutableHandler` — vali
 once, before use (the registry itself never types what it transports):
 
 ```ts
+type HandlerRequest = Record<string, unknown>; // { ...item.input, params }
+type HandlerResult = {
+  body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
+  mimeType?: string; costUsd: number; meta?: Record<string, unknown>;
+};
+type JobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & HandlerResult)
+  | { state: "failed"; error: unknown };
+
 type ExecutableHandler = {
-  estimate(request: unknown): { usd: number };
-  execute(
-    request: unknown,
-    opts: { signal?: AbortSignal }
-  ): Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
+  estimate(request: HandlerRequest): { usd: number };
+  execute?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<HandlerResult>;
+  submit?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(jobId: string, request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<JobPoll>;
 };
 ```
 
-The runner calls both with a `HandlerRequest` — `{ input, params }` resolved from the build item.
+`estimate` plus `execute`, or `estimate` plus `submit` + `poll`. The request is the task
+contract's own request (`VoiceoverRequest`, `VideoRequest`, …): the build item's `input` spread
+flat plus `params`. `$ref` / `$file` values arrive as `{ path, mimeType, hash }` in `execute`,
+`submit` and `poll`, and unresolved in `estimate`.
+
+### `export(opts?): Promise<ExportResult>`
+
+Copies every `done` artifact of a run (default: the newest run) to
+`<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`). The extension comes from the
+stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`.
+
+```ts
+const { files } = await app.runner.export({ outDir: "out" });
+// [{ label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }]
+```
 
 ## Usage
 
