@@ -434,8 +434,9 @@ async function submitJob(
 /**
  * First poll of a job adopted after it expired. When the provider reports it
  * failed, or does not know it (a non-retryable poll error), the job is lost:
- * the source attempt is marked `failed` and a new job is submitted in this
- * attempt. Otherwise the poll result is returned for the normal loop.
+ * the source attempt and this attempt are marked `failed` and a new job is
+ * submitted in this attempt. A content-policy verdict, pending and done are
+ * returned for the normal loop.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -468,10 +469,14 @@ async function pollAdoptedExpired(
     if (signal.aborted) throw error;
     poll = { state: "failed", error };
   }
-  if (poll.state !== "failed") return { poll, jobId: job.jobId };
+  // A content-policy verdict ends the item as flagged: the same prompt would be flagged again.
+  const isFlagged = poll.state === "failed" && classifyError(poll.error) === "content-policy";
+  if (poll.state !== "failed" || isFlagged) return { poll, jobId: job.jobId };
 
   // The provider lost or failed the expired job: only now is a second job paid for.
+  // Both rows stop pointing at it, so a failed re-submit never adopts the lost job again.
   ctx.journal.setAttemptJob(job.adoptedFrom, { jobState: "failed" });
+  ctx.journal.setAttemptJob(attemptId, { jobState: "failed" });
   ctx.log.warn("runner:job:resubmitted", { itemId: item.id });
   const jobId = await submitJob(ctx, item, handler, request, attemptId, signal);
   return { poll: { state: "pending" }, jobId };

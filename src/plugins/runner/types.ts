@@ -24,7 +24,7 @@ export type Config = {
   eventBufferSize: number;
   /** Delay between two polls of an async provider job, ms. */
   pollIntervalMs: number;
-  /** An async job still pending after this long is `expired`; the next attempt re-submits. ms. */
+  /** An async job still pending after this long is `expired`; the next attempt polls it again before it submits. ms. */
   jobTimeoutMs: number;
 };
 
