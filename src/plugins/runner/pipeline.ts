@@ -507,7 +507,7 @@ async function runJob(
   attemptId: number,
   signal: AbortSignal
 ): Promise<HandlerResult> {
-  const deadline = Date.now() + ctx.config.jobTimeoutMs;
+  let deadline = Date.now() + ctx.config.jobTimeoutMs;
   const job = await startJob(ctx, item, handler, request, attemptId, signal);
   let jobId = job.jobId;
   let adoptedFrom = job.adoptedFrom;
@@ -528,6 +528,8 @@ async function runJob(
         attemptId,
         signal
       );
+      // A job submitted in place of a lost one gets its own full timeout.
+      if (first.jobId !== jobId) deadline = Date.now() + ctx.config.jobTimeoutMs;
       ({ poll, jobId } = first);
       adoptedFrom = undefined;
     }
