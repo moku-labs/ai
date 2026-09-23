@@ -419,7 +419,7 @@ describe("poll", () => {
     expect(rejection).toBeInstanceOf(RetryableProviderError);
     expect((rejection as RetryableProviderError).status).toBe(503);
     expect((rejection as Error).message).toBe(
-      "[ai] fal finished the job but its result could not be read (HTTP 404).\n  The job stays live; the next poll reads it again."
+      "[ai] fal finished the job but its result could not be read (HTTP 404).\n  Poll the job again; the runner does this on its own."
     );
     expect(ctx.log.warn).toHaveBeenCalledWith("fal:result:unreadable", {
       requestId: "req-1",

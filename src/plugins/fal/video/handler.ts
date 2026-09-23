@@ -316,7 +316,7 @@ function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
 
   ctx.log.warn("fal:result:unreadable", { requestId: job.requestId, status: error.status });
   return new RetryableProviderError(
-    `[ai] fal finished the job but its result could not be read (HTTP ${error.status}).\n  The job stays live; the next poll reads it again.`,
+    `[ai] fal finished the job but its result could not be read (HTTP ${error.status}).\n  Poll the job again; the runner does this on its own.`,
     { status: RETRY_STATUS }
   );
 }

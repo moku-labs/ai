@@ -233,8 +233,8 @@ A handler with both `submit` and `poll` always runs through the job path:
    transport problem and keeps polling. `{ state: "failed", error }` or a thrown classified error
    (4xx, content policy) marks the job `failed`; the error is classified as usual, and a
    retryable one re-submits on the next attempt. A thrown unclassified error (a bug, not the
-   provider's verdict) ends the attempt as `unknown` but leaves the job `submitted`, so the next
-   run adopts it instead of paying again. `{ state: "done", ... }` marks it `done` and persists
+   provider's verdict) ends the attempt as `unknown` and marks the job `expired`, so the next
+   run adopts it instead of paying again; after two expiries a new job is submitted. `{ state: "done", ... }` marks it `done` and persists
    as above.
 4. After `jobTimeoutMs` the job is marked `expired` and the attempt fails with a retryable
    `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never

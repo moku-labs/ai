@@ -54,7 +54,8 @@ export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "fl
 /**
  * Lifecycle of a provider-side async job recorded on an `attempts` row:
  * `submitted` until the provider reports an end state; `expired` when the
- * runner gave up waiting (the next attempt polls it again before it submits).
+ * runner gave up waiting or hit an unclassified poll error (the next attempt
+ * polls it again before it submits; after two expiries it submits anew).
  */
 export type JobState = "submitted" | "done" | "failed" | "expired";
 
