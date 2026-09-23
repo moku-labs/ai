@@ -9,7 +9,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { coreConfig } from "../../src/config";
 import { registryPlugin } from "../../src/plugins";
@@ -85,18 +85,6 @@ function createCannedPromptGenPlugin(handler: PromptGenHandler) {
       ctx.require(registryPlugin).register("prompt-gen", "canned", handler);
     }
   });
-}
-
-/**
- * Converts a relative filesystem path into a valid relative ES module import
- * specifier (ensures a leading "./" or "../") — copied from the compose
- * plugin's own integration test: a temp-dir-written script can't resolve the
- * published "@moku-labs/ai" package name, so the emitted import is patched to
- * the real source file by relative path.
- */
-function toImportSpecifier(relativePath: string): string {
-  const normalized = relativePath.replaceAll("\\", "/");
-  return normalized.startsWith(".") ? normalized : `./${normalized}`;
 }
 
 describe("cross-plugin: compose chains", () => {
@@ -204,7 +192,7 @@ describe("cross-plugin: compose chains", () => {
     // temp-dir script resolves, then compile it through buildfile's TS loader.
     const testDir = path.dirname(fileURLToPath(import.meta.url));
     const definePath = path.resolve(testDir, "../../src/plugins/buildfile/define.ts");
-    const importSpecifier = toImportSpecifier(path.relative(tempDir, definePath));
+    const importSpecifier = pathToFileURL(definePath).href;
     const patchedText = result.text.replace(
       'import { defineBuild } from "@moku-labs/ai";',
       `import { defineBuild } from "${importSpecifier}";`

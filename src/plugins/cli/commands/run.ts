@@ -5,6 +5,7 @@ import { spinnerFrameAt } from "@moku-labs/common/cli";
 import type { RunEvent, RunOptions, RunResult, RunResultStatus } from "../../runner/types";
 import type { CommandContext, CommandFlags } from "../types";
 import { EXIT_CODES } from "../types";
+import { DEFAULT_OUT_DIR, renderExport } from "./export";
 
 /** Terminal run status → exit code (the ratified exit-code contract). */
 const EXIT_BY_STATUS: Record<RunResultStatus, number> = {
@@ -91,6 +92,7 @@ function renderRunEvent(context: CommandContext, startedAt: number, event: RunEv
       `status   ${event.status}`,
       `done     ${event.totals.done}/${event.totals.total}`,
       `failed   ${event.totals.failed}`,
+      `flagged  ${event.totals.flagged}`,
       `spend    $${event.totals.spendUsd.toFixed(4)}`
     ]);
   }
@@ -199,6 +201,16 @@ export async function runRunCommand(
       : runAndRenderProgress(context, options, signal)
   );
 
-  if (dryRun) renderDryRunSummary(context, result);
+  if (dryRun) {
+    renderDryRunSummary(context, result);
+    return EXIT_BY_STATUS[result.status];
+  }
+
+  // Named files for every done item: out/<build>/<label>.<ext>.
+  const exported = await context.runner.export({
+    runId: result.runId,
+    outDir: flags.out ?? DEFAULT_OUT_DIR
+  });
+  renderExport(context, exported);
   return EXIT_BY_STATUS[result.status];
 }

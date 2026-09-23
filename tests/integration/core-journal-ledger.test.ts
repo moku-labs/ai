@@ -22,6 +22,9 @@ function intent(planningKey: string, overrides: Partial<ItemIntent> = {}): ItemI
     // eslint-disable-next-line unicorn/no-null -- ItemIntent.packVersion is typed `string | null`, matching the nullable SQL column
     packVersion: null,
     estimatedCostUsd: 0.1,
+    label: planningKey,
+    buildName: "voice",
+    artifactKey: `ak-${planningKey}`,
     ...overrides
   };
 }

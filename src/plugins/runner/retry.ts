@@ -1,7 +1,8 @@
 /**
  * @file runner retry — error taxonomy + backoff. Owns the contractual
  * classification: retry ONLY 5xx/429/timeout/network; 4xx (except 429) is
- * terminal `failed`; content-policy is terminal `flagged`, never re-queued.
+ * terminal `failed`; content-policy is terminal `flagged`, never re-queued;
+ * an error with no hint is `unknown` and terminal.
  */
 import type { ErrorClass } from "../journal/types";
 import type { ProviderErrorHint } from "./types";
@@ -51,8 +52,10 @@ export function isRetryableErrorClass(errorClass: ErrorClass): boolean {
 /**
  * Classifies a thrown provider error into the journal error taxonomy.
  * Reads the optional {@link ProviderErrorHint} fields (`kind`/`status`) a
- * handler may attach to its thrown error; falls back to `"network"` when
- * neither is present.
+ * handler may attach to its thrown error; falls back to `"unknown"` when
+ * neither is present. `"unknown"` is terminal: a programming error (a
+ * `TypeError`, a wrong request shape) must never re-run a paid job.
+ * Providers tag real transport failures with `kind: "network"`.
  *
  * @param error - The thrown error.
  * @returns The error's taxonomy class.
@@ -62,14 +65,14 @@ export function isRetryableErrorClass(errorClass: ErrorClass): boolean {
  * ```
  */
 export function classifyError(error: unknown): ErrorClass {
-  if (!isProviderErrorHint(error)) return "network";
+  if (!isProviderErrorHint(error)) return "unknown";
   if (error.kind === "content-policy") return "content-policy";
   if (error.kind === "timeout") return "timeout";
   if (error.kind === "network") return "network";
   if (error.status === 429) return "http-429";
   if (typeof error.status === "number" && error.status >= 500) return "http-5xx";
   if (typeof error.status === "number" && error.status >= 400) return "http-4xx";
-  return "network";
+  return "unknown";
 }
 
 /**

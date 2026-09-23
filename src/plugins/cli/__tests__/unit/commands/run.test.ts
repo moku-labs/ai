@@ -81,7 +81,11 @@ describe("runRunCommand — progress rendering", () => {
   it("renders progress and terminal events from runner.events()", async () => {
     const events: RunEvent[] = [
       { type: "progress", totals: { ...ZERO_TOTALS, done: 1, total: 2 } },
-      { type: "terminal", status: "done", totals: { ...ZERO_TOTALS, done: 2, total: 2 } }
+      {
+        type: "terminal",
+        status: "done",
+        totals: { ...ZERO_TOTALS, done: 1, flagged: 1, total: 2 }
+      }
     ];
     const { context, lines } = createFakeCommandContext({
       runner: {
@@ -97,6 +101,7 @@ describe("runRunCommand — progress rendering", () => {
 
     expect(lines.some(line => line.includes("1/2"))).toBe(true);
     expect(lines.some(line => line.includes("done"))).toBe(true);
+    expect(lines.some(line => /flagged\s+1/.test(line))).toBe(true);
   });
 });
 

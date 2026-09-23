@@ -1,0 +1,337 @@
+/**
+ * @file fal video handler — implements the task-owned contract
+ * (`../../video/contract.ts`) over the fal queue API. `submit` uploads the
+ * inputs and queues the job; `poll` reads the status once and, when the job
+ * is done, fetches the result and downloads the clip. There is no `execute`:
+ * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
+ * (`../prices.ts`), so estimate and actual cost always agree.
+ */
+import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
+import { falFetch, jobFailure, parseJson, readString } from "../client";
+import type { ResolvedFalModel } from "../models";
+import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
+import { videoCostUsd } from "../prices";
+import type { FalContext, FalProviderError } from "../types";
+import { FlaggedProviderError, TerminalProviderError } from "../types";
+import { uploadInputs } from "../upload";
+import type { FalJob } from "./job";
+import {
+  decodeJobId,
+  encodeJobId,
+  hasJobError,
+  parseSubmitResponse,
+  parseVideoResult
+} from "./job";
+
+/**
+ * The fal video handler: the async form of the contract (no `execute`).
+ *
+ * @example
+ * ```ts
+ * const handler: FalVideoHandler = createVideoHandler(ctx);
+ * ```
+ */
+export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" | "poll">>;
+
+/** Status values while fal is still working on a job. */
+const PENDING_STATUSES: ReadonlySet<string> = new Set(["IN_QUEUE", "IN_PROGRESS"]);
+
+/** MIME type used when fal reports none. */
+const DEFAULT_VIDEO_MIME = "video/mp4";
+
+/** The one pending poll value. */
+const PENDING: VideoJobPoll = { state: "pending" };
+
+/** Log event for a job that ended with an error. */
+const FAILED_EVENT = "fal:video:failed";
+
+/**
+ * Reads the fal key through the injected env API (MC3).
+ *
+ * @param ctx - Plugin context.
+ * @returns The key.
+ * @throws {Error} A plain (terminal) two-line error when the key is not set.
+ * @example
+ * ```ts
+ * const apiKey = resolveApiKey(ctx);
+ * ```
+ */
+function resolveApiKey(ctx: FalContext): string {
+  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error(
+      `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
+    );
+  }
+  return apiKey;
+}
+
+/**
+ * Returns the request's first frame; every current alias needs one.
+ *
+ * @param model - The resolved catalog row.
+ * @param request - The video request.
+ * @returns The first frame.
+ * @throws {Error} A plain (terminal) two-line error when there is no image.
+ * @example
+ * ```ts
+ * const image = requireImage(model, request);
+ * ```
+ */
+function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile {
+  if (request.image === undefined) {
+    throw new Error(
+      `[ai] fal model "${model.alias}" needs an image.\n  Set input.image to a $ref or $file.`
+    );
+  }
+  return request.image;
+}
+
+/**
+ * Keeps the refs the model accepts, warning when some are dropped.
+ *
+ * @param ctx - Plugin context (log).
+ * @param model - The resolved catalog row.
+ * @param references - The request's reference images.
+ * @returns At most `model.maxRefs` refs.
+ * @example
+ * ```ts
+ * capReferences(ctx, resolveFalModel("kling-o3-ref"), references); // first 4
+ * ```
+ */
+function capReferences(
+  ctx: FalContext,
+  model: ResolvedFalModel,
+  references: readonly VideoFile[]
+): readonly VideoFile[] {
+  if (references.length <= model.maxRefs) return references;
+  ctx.log.warn("fal:refs:truncated", {
+    model: model.alias,
+    given: references.length,
+    max: model.maxRefs
+  });
+  return references.slice(0, model.maxRefs);
+}
+
+/**
+ * Loggable fields of a failure: class, status and kind only.
+ *
+ * @param error - The classified error.
+ * @returns Redacted log fields.
+ * @example
+ * ```ts
+ * ctx.log.warn("fal:video:failed", { requestId, ...redacted(error) });
+ * ```
+ */
+function redacted(error: FalProviderError): {
+  errorType: "retryable" | "terminal" | "flagged";
+  status?: number | undefined;
+  kind?: string;
+} {
+  if (error instanceof FlaggedProviderError) return { errorType: "flagged", kind: error.kind };
+  if (error instanceof TerminalProviderError)
+    return { errorType: "terminal", status: error.status };
+  return { errorType: "retryable", status: error.status };
+}
+
+/**
+ * Uploads the inputs, POSTs the mapped body to the model's endpoint, and
+ * encodes fal's queue answer as the job id.
+ *
+ * @param ctx - Plugin context.
+ * @param request - The video request.
+ * @param signal - Caller abort signal.
+ * @returns The opaque job id.
+ * @example
+ * ```ts
+ * const { jobId } = await submitJob(ctx, request, signal);
+ * ```
+ */
+async function submitJob(
+  ctx: FalContext,
+  request: VideoRequest,
+  signal: AbortSignal | undefined
+): Promise<{ jobId: string }> {
+  const model = resolveFalModel(request.model);
+  const image = requireImage(model, request);
+  const apiKey = resolveApiKey(ctx);
+
+  const references = capReferences(ctx, model, request.refs ?? []);
+  const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
+  const response = await falFetch({
+    url: `${ctx.config.queueUrl}/${model.endpoint}`,
+    method: "POST",
+    apiKey,
+    json: buildFalBody(model, request, urls),
+    timeoutMs: ctx.config.timeoutMs,
+    signal
+  });
+
+  const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
+  ctx.log.info("fal:video:submitted", {
+    model: model.alias,
+    endpoint: job.endpoint,
+    requestId: job.requestId
+  });
+  return { jobId: encodeJobId(job) };
+}
+
+/**
+ * Fetches a finished job's result and downloads the clip. A 4xx on either
+ * call (a content-policy 422 included) becomes `failed`; 5xx, network and
+ * timeout errors are thrown so the runner keeps polling.
+ *
+ * @param ctx - Plugin context.
+ * @param job - The job.
+ * @param request - The request the job was submitted with.
+ * @param apiKey - The fal key (result call only; the CDN download goes without it).
+ * @param signal - Caller abort signal.
+ * @returns A done or failed poll.
+ * @example
+ * ```ts
+ * return fetchResult(ctx, job, request, apiKey, signal);
+ * ```
+ */
+async function fetchResult(
+  ctx: FalContext,
+  job: FalJob,
+  request: VideoRequest,
+  apiKey: string,
+  signal: AbortSignal | undefined
+): Promise<VideoJobPoll> {
+  const timeoutMs = ctx.config.timeoutMs;
+  try {
+    const result = await falFetch({
+      url: job.responseUrl,
+      method: "GET",
+      apiKey,
+      timeoutMs,
+      signal
+    });
+    const video = parseVideoResult(parseJson(result, "result"));
+    const download = await falFetch({ url: video.url, method: "GET", timeoutMs, signal });
+
+    ctx.log.info("fal:video:done", { requestId: job.requestId, bytes: download.body.length });
+    return {
+      state: "done",
+      video: download.body,
+      mimeType: video.contentType ?? DEFAULT_VIDEO_MIME,
+      costUsd: videoCostUsd(ctx, request),
+      meta: { endpoint: job.endpoint, requestId: job.requestId, seconds: requestSeconds(request) }
+    };
+  } catch (error) {
+    const isFinal = error instanceof TerminalProviderError || error instanceof FlaggedProviderError;
+    if (!isFinal) throw error;
+    ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
+    return { state: "failed", error };
+  }
+}
+
+/**
+ * Polls a job once: pending, failed with fal's classified job error, or
+ * done with the downloaded clip.
+ *
+ * @param ctx - Plugin context.
+ * @param jobId - The id `submit` returned.
+ * @param request - The request the job was submitted with.
+ * @param signal - Caller abort signal.
+ * @returns The poll result.
+ * @example
+ * ```ts
+ * const status = await pollJob(ctx, jobId, request, signal);
+ * ```
+ */
+async function pollJob(
+  ctx: FalContext,
+  jobId: string,
+  request: VideoRequest,
+  signal: AbortSignal | undefined
+): Promise<VideoJobPoll> {
+  const job = decodeJobId(jobId);
+  const apiKey = resolveApiKey(ctx);
+  const response = await falFetch({
+    url: job.statusUrl,
+    method: "GET",
+    apiKey,
+    timeoutMs: ctx.config.timeoutMs,
+    signal
+  });
+
+  const body = parseJson(response, "status response");
+  const status = readString(body, "status");
+  if (status !== undefined && PENDING_STATUSES.has(status)) return PENDING;
+  if (status !== "COMPLETED") {
+    ctx.log.warn("fal:poll:unknown-status", { requestId: job.requestId, status });
+    return PENDING;
+  }
+
+  if (hasJobError(body)) {
+    const error = jobFailure(body);
+    ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
+    return { state: "failed", error };
+  }
+  return fetchResult(ctx, job, request, apiKey, signal);
+}
+
+/**
+ * Creates the fal video handler registered under `("video", "fal")`.
+ *
+ * @param ctx - Plugin context (config, state, env, log).
+ * @returns The handler: estimate, submit and poll.
+ * @example
+ * ```ts
+ * registry.register("video", "fal", createVideoHandler(ctx));
+ * ```
+ */
+export function createVideoHandler(ctx: FalContext): FalVideoHandler {
+  return {
+    /**
+     * Estimates cost without any network or file access.
+     *
+     * @param request - The video request (may still hold unresolved `$ref`s).
+     * @returns The cost in USD.
+     * @example
+     * ```ts
+     * handler.estimate({ model: "minimax-h3", prompt: "push-in" }); // => { usd: 0.3 }
+     * ```
+     */
+    estimate(request: VideoRequest): { usd: number } {
+      return { usd: videoCostUsd(ctx, request) };
+    },
+    /**
+     * Uploads the inputs and queues the job.
+     *
+     * @param request - The resolved video request.
+     * @param opts - Options.
+     * @param opts.signal - Caller abort signal.
+     * @returns The opaque job id to journal.
+     * @example
+     * ```ts
+     * const { jobId } = await handler.submit(request, {});
+     * ```
+     */
+    submit(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> {
+      return submitJob(ctx, request, opts.signal);
+    },
+    /**
+     * Polls a submitted job once.
+     *
+     * @param jobId - The id `submit` returned.
+     * @param request - The request the job was submitted with.
+     * @param opts - Options.
+     * @param opts.signal - Caller abort signal.
+     * @returns Pending, done with the clip, or failed with a classified error.
+     * @example
+     * ```ts
+     * const status = await handler.poll(jobId, request, {});
+     * ```
+     */
+    poll(
+      jobId: string,
+      request: VideoRequest,
+      opts: { signal?: AbortSignal }
+    ): Promise<VideoJobPoll> {
+      return pollJob(ctx, jobId, request, opts.signal);
+    }
+  };
+}

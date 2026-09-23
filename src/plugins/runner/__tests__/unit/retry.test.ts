@@ -40,12 +40,13 @@ describe("classifyError", () => {
     );
   });
 
-  it("classifies a plain Error with no hint as network (default fallback)", () => {
-    expect(classifyError(new Error("mystery failure"))).toBe("network");
+  it("classifies a plain Error with no hint as unknown (terminal, never retried)", () => {
+    expect(classifyError(new Error("mystery failure"))).toBe("unknown");
+    expect(classifyError(new TypeError("x is not a function"))).toBe("unknown");
   });
 
-  it("classifies a non-object thrown value as network", () => {
-    expect(classifyError("just a string")).toBe("network");
+  it("classifies a non-object thrown value as unknown", () => {
+    expect(classifyError("just a string")).toBe("unknown");
   });
 });
 
@@ -74,7 +75,7 @@ describe("retryAfterMsOf", () => {
 
 describe("isRetryableErrorClass", () => {
   const retryableClasses: ErrorClass[] = ["http-5xx", "http-429", "timeout", "network"];
-  const terminalClasses: ErrorClass[] = ["http-4xx", "content-policy"];
+  const terminalClasses: ErrorClass[] = ["http-4xx", "content-policy", "unknown"];
 
   it.each(retryableClasses)("treats %s as retryable", errorClass => {
     expect(isRetryableErrorClass(errorClass)).toBe(true);

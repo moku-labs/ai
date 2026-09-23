@@ -37,6 +37,10 @@ None. The plugin takes no config options; its state is an empty
 
 ## API reference
 
+The surface is exported as a type, `RegistryApi`, from `registry/index.ts`. Dependent plugins
+import it (`import type { RegistryApi } from "../registry"`) instead of redeclaring it, so one
+edit here updates every `ctx.require(registryPlugin)` call site.
+
 Available as `app.registry.*` on a started app, or `ctx.require(registryPlugin)`
 inside a plugin that declares `depends: [registryPlugin]`.
 

@@ -11,6 +11,51 @@
 import { createPlugin } from "../../config";
 
 /**
+ * Public surface of the `registry` plugin (`app.registry`, `ctx.require(registryPlugin)`).
+ * The single declaration every dependent plugin imports (`import type { RegistryApi }
+ * from "../registry"`), so `ctx.require(registryPlugin)` is typed without widening
+ * to `unknown` (spec/09 R9). The registry never types what it transports: `resolve`
+ * returns `unknown`, narrowed by each task plugin at its own audited cast site.
+ *
+ * @example
+ * ```ts
+ * const registry: RegistryApi = ctx.require(registryPlugin);
+ * registry.providers("video"); // => ["fal"]
+ * ```
+ */
+export type RegistryApi = {
+  /**
+   * Registers a handler for a (task, provider) pair.
+   *
+   * @param task - Task key, e.g. "voiceover".
+   * @param provider - Provider name, e.g. "elevenlabs".
+   * @param handler - Opaque handler; narrowed by the owning task plugin.
+   */
+  register(task: string, provider: string, handler: unknown): void;
+  /**
+   * Resolves a registered handler.
+   *
+   * @param task - Task key.
+   * @param provider - Provider name.
+   * @returns The registered handler, or undefined when unregistered.
+   */
+  resolve(task: string, provider: string): unknown;
+  /**
+   * Provider names registered for a task, in registration order.
+   *
+   * @param task - Task key.
+   * @returns Provider names, first-registered first (the task default).
+   */
+  providers(task: string): string[];
+  /**
+   * All registered task names.
+   *
+   * @returns Task names in registration order.
+   */
+  tasks(): string[];
+};
+
+/**
  * registry — Nano plugin. Dumb task→provider→handler transport; resolve()
  * returns unknown, narrowed by each task plugin at its own audited cast site.
  *

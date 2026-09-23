@@ -10,6 +10,7 @@ import { composePlugin } from "../compose";
 import { runnerPlugin } from "../runner";
 import { runComposeCommand } from "./commands/compose";
 import { runEstimateCommand } from "./commands/estimate";
+import { runExportCommand } from "./commands/export";
 import { runNewCommand } from "./commands/new";
 import { runRunCommand } from "./commands/run";
 import { runStatusCommand } from "./commands/status";
@@ -51,9 +52,18 @@ const COMMAND_REGISTRY: CommandDefinition[] = [
     description: "Run matched build files",
     flags: {
       "max-cost": { type: "string", description: "Maximum spend in USD before the run stops" },
-      "dry-run": { type: "boolean", description: "Estimate without executing" }
+      "dry-run": { type: "boolean", description: "Estimate without executing" },
+      out: { type: "string", description: 'Directory for named artifacts (default "out")' }
     },
     run: runRunCommand
+  },
+  {
+    name: "export",
+    description: "Copy a run's artifacts to out/<build>/<label>.<ext>",
+    flags: {
+      out: { type: "string", description: 'Output directory (default "out")' }
+    },
+    run: runExportCommand
   },
   {
     name: "status",

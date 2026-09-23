@@ -11,7 +11,13 @@ import { createRunnerApi } from "./api";
 import { createRunnerState } from "./state";
 import type { Config, RunnerEvents } from "./types";
 
-const defaultConfig: Config = { maxAttempts: 3, retryBaseMs: 1000, eventBufferSize: 10_000 };
+const defaultConfig: Config = {
+  maxAttempts: 3,
+  retryBaseMs: 1000,
+  eventBufferSize: 10_000,
+  pollIntervalMs: 5000,
+  jobTimeoutMs: 1_800_000
+};
 
 /**
  * runner — Complex tier plugin. Durable run orchestrator; the only event

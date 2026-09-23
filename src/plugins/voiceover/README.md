@@ -225,8 +225,8 @@ type Config = Voiceover.Config;
 
 `voiceover` declares `depends: [registryPlugin]` and reaches it via real
 `ctx.require(registryPlugin)` calls — `resolve("voiceover", provider)` in `generate()`/
-`estimate()` and `providers("voiceover")` in `providers()`. Because `registry` is Nano tier and
-ships no `types.ts`, this plugin redeclares its surface as `RegistryApi` in `types.ts` so the
+`estimate()` and `providers("voiceover")` in `providers()`. `RegistryApi` is declared once in
+`registry/index.ts` (Nano tier, no `types.ts`); `types.ts` imports and re-exports it so the
 dependency is fully typed inside the domain files.
 
 ### Provider plugins (elevenlabs, openai)

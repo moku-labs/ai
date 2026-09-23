@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ItemIntent, RunSnapshot } from "../../src/plugins/journal/types";
-import { artifactKeyOf } from "../../src/plugins/runner/pipeline";
 import {
   buildFileYaml,
   buildFramework,
@@ -33,6 +32,9 @@ function intent(planningKey: string, overrides: Partial<ItemIntent> = {}): ItemI
     // eslint-disable-next-line unicorn/no-null -- ItemIntent.packVersion is typed `string | null`, matching the nullable SQL column
     packVersion: null,
     estimatedCostUsd: 0.1,
+    label: planningKey,
+    buildName: "voice",
+    artifactKey: `ak-${planningKey}`,
     ...overrides
   };
 }
@@ -103,11 +105,12 @@ describe("cross-plugin store/journal artifact integrity", () => {
       const bytes = await store.read(row.contentHash);
       expect(store.hashOf(bytes)).toBe(row.contentHash);
 
-      // artifact_key is the runner's identity digest over
-      // {planningKey, provider, packVersion} — NOT the store path; the store
-      // path is derived from contentHash alone (shard = first two hex chars).
+      // artifact_key is the runner's identity digest over {task, provider,
+      // packVersion, keyed input, params}, written at planning — NOT the store
+      // path; the store path is derived from contentHash alone (shard = first
+      // two hex chars).
       expect(row.artifactKey).toMatch(SHA256_HEX);
-      expect(row.artifactKey).toBe(artifactKeyOf(row.planningKey, row.provider, row.packVersion));
+      expect(row.artifactKey).not.toBe(row.planningKey);
       expect(store.pathOf(row.contentHash)).toBe(
         path.join(tempDir, "store", row.contentHash.slice(0, 2), row.contentHash)
       );

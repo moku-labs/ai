@@ -8,7 +8,13 @@ import {
   resolveHandler
 } from "../../pipeline";
 import type { ActiveRun, RunEvent } from "../../types";
-import { type CallLog, createFakeRunnerContext, fakeHandler, fakeItemRow } from "./fixtures";
+import {
+  type CallLog,
+  createFakeRunnerContext,
+  fakeHandler,
+  fakeItemRow,
+  fakePlan
+} from "./fixtures";
 
 /**
  * Builds a fake `ActiveRun` with an empty subscriber set, for `executeItem`
@@ -146,7 +152,7 @@ describe("executeItem", () => {
     const active = fakeActiveRun();
     const { report, events } = collectReports();
 
-    await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
     expect(log).toEqual([
       "limits.acquire",
@@ -178,7 +184,7 @@ describe("executeItem", () => {
     const active = fakeActiveRun();
     const { report, events } = collectReports();
 
-    await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
     expect(log).toEqual([
       "limits.acquire",
@@ -201,7 +207,7 @@ describe("executeItem", () => {
     const active = fakeActiveRun();
     const { report } = collectReports();
 
-    await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
     expect(drain.budgetStopped).toBe(true);
     expect(drain.signal.aborted).toBe(true);
@@ -230,7 +236,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -273,7 +279,7 @@ describe("executeItem", () => {
       const { report, events } = collectReports();
 
       const startedAt = Date.now();
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
       const elapsedMs = Date.now() - startedAt;
 
       expect(events.at(-1)?.type).toBe("item:done");
@@ -301,7 +307,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.at(-1)?.type).toBe("item:done");
     });
@@ -313,7 +319,7 @@ describe("executeItem", () => {
         execute: async () => {
           executeCalls += 1;
           if (executeCalls === 1) {
-            throw new Error("dns failure");
+            throw Object.assign(new Error("dns failure"), { kind: "network" });
           }
           return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
         }
@@ -327,7 +333,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.at(-1)?.type).toBe("item:done");
     });
@@ -345,7 +351,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -369,7 +375,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -396,7 +402,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 2, drain, active, report);
+      await executeItem(ctx, item, fakePlan(2), drain, active, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -421,7 +427,7 @@ describe("executeItem", () => {
       const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(log).toEqual([]);
       expect(events.map(event => event.type)).toEqual(["item:queued"]);
@@ -455,7 +461,7 @@ describe("executeItem", () => {
         if (event.type === "item:retry") controller.abort();
       };
 
-      await executeItem(ctx, item, { input: {}, params: {} }, 3, drain, active, report);
+      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",

@@ -5,7 +5,7 @@
 ## Purpose
 
 `cli` is the Complex-tier plugin that puts a terminal in front of the build system. It owns the
-six `moku` commands (`new`, `validate`, `estimate`, `run`, `status`, `compose`), parses argv with
+seven `moku` commands (`new`, `validate`, `estimate`, `run`, `export`, `status`, `compose`), parses argv with
 `node:util`'s `parseArgs`, routes to one command module, and renders everything through the
 branded console from `@moku-labs/common/cli` (MC1) — no hand-rolled ANSI escapes, box-drawing, or
 spinner animations anywhere in the plugin.
@@ -93,14 +93,16 @@ moku estimate
 
 Exit: `0`.
 
-### `moku run [glob] [--max-cost <usd>] [--dry-run]`
+### `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>]`
 
-Runs matched build files via `runner.run` with a SIGINT-wired `AbortSignal`.
+Runs matched build files via `runner.run` with a SIGINT-wired `AbortSignal`, then exports every
+done artifact to `<out>/<build>/<label>.<ext>` and prints one line per file (`label  $cost  path`).
 
 | Flag | Type | Description |
 |------|------|-------------|
 | `--max-cost <usd>` | string | Maximum spend in USD before the run stops. A non-numeric or negative value is a usage error (exit `3`). |
 | `--dry-run` | boolean | Estimate without executing. |
+| `--out <dir>` | string | Export directory. Default `out`. |
 
 Progress is rendered by draining `runner.events()` — the event stream is opened synchronously
 right after `runner.run()` is called, which is required to observe the run's active subscription
@@ -118,6 +120,7 @@ moku run "assets/**/*.moku.yaml" --max-cost 5
 │ status   done      │
 │ done     12/12     │
 │ failed   0         │
+│ flagged  0         │
 │ spend    $0.5012   │
 └────────────────────┘
 ```
@@ -139,6 +142,18 @@ moku run --dry-run
 
 Exit: the run's terminal status mapped to the contract — `done`→`0`, `failed`→`1`, `paused`→`4`,
 `budget-stopped`→`5`; bad `--max-cost`→`3`.
+
+### `moku export [runId] [--out <dir>]`
+
+Copies a run's done artifacts (default: the newest run) to `<out>/<build>/<label>.<ext>` via
+`runner.export`. The label is the build item's `id`, else `<NN>-<task>`; the extension comes from
+the stored mime type.
+
+```bash
+moku export --out out
+```
+
+Exit: `0`; `1` when the run does not exist.
 
 ### `moku status [runId] [--follow]`
 

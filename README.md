@@ -35,12 +35,16 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `translate`, `prompt-gen`); provider plugins (`elevenlabs`, `openai`)
-  register handlers with a dumb registry. Neither imports the other — consumer apps
+  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`); provider plugins
+  (`elevenlabs`, `openai`, `codex`, `fal`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
-- **Incremental by default.** Items are identified by a canonical planning key
-  (`sha256` of task + input + params) and artifacts land in a content-addressed store.
-  Re-running a build re-bills nothing that is already done.
+- **Incremental by default.** Every item has an artifact key (`sha256` of task,
+  provider, input, params, and the keys of everything it references). A done artifact
+  is reused by any later run for $0, so re-running a build re-bills nothing that is
+  already done — and changing one keyframe re-renders only that shot.
+- **Long provider jobs survive crashes.** Video handlers `submit` and `poll`; the
+  provider job id is journaled before anything waits on it, so a crash, Ctrl-C or
+  timeout is resumed by polling the same job, never by paying for it twice.
 - **A build system, not an SDK wrapper.** No streaming chat helpers, no agent loops —
   build files in, integrity-verified artifacts and a durable cost ledger out.
 
@@ -55,7 +59,8 @@ bun add @moku-labs/ai
 > `@moku-labs/common`, `better-sqlite3`, `openai`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` before executing (estimates and
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY`, or put them in a `.env.local`
+> file in the working directory (the shell wins over the file), before executing (estimates and
 > validation never need a key).
 
 ## Quick start
@@ -158,7 +163,11 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`; price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
-| [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — six commands, branded rendering, a ratified exit-code contract. |
+| [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
+| [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
+| [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5, MiniMax H3, Kling 3; per-second price table. |
+| [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
 
@@ -170,7 +179,8 @@ The package `bin` (`"moku"`) is a plain Layer-3 consumer:
 | `moku new [name]` | Write a starter build file + its JSON Schema (editor autocomplete via modeline). |
 | `moku validate [glob]` | Compile every matched build file through the zod IR; offline, no providers needed. |
 | `moku estimate [glob]` | Per-task/provider cost breakdown + total — the same math the budget gate uses. |
-| `moku run [glob] [--max-cost <usd>] [--dry-run]` | Execute matched build files with live progress; SIGINT drains to a clean pause. |
+| `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>]` | Execute matched build files with live progress; SIGINT drains to a clean pause. Done artifacts are exported to `<out>/<build>/<label>.<ext>` (default `out/`). |
+| `moku export [runId] [--out <dir>]` | Copy a run's done artifacts (default: the newest run) to named files. |
 | `moku status [runId] [--follow]` | Snapshot (or 1s-poll) a run's totals — safe from a second process. |
 | `moku compose "<prompt>" [--emit build\|script] [--out <path>]` | Generate a build file from natural language. |
 
@@ -249,7 +259,41 @@ const app = createApp({ plugins: [acmeTtsPlugin] });
 The same shape registers a whole new *task*: pick a task key, define an
 `estimate`/`execute` handler contract, register it — build files can name it
 immediately (`task: my-task`), and the runner executes it through the same durable
-pipeline.
+pipeline. The runner hands every handler the item's `input` spread flat plus
+`params` — exactly the task contract's request.
+
+A handler for a long provider job exposes `submit` + `poll` instead of (or next to)
+`execute`. The runner journals the returned job id before it waits, polls every
+`runner.pollIntervalMs`, and after a crash or pause polls that job again instead of
+re-submitting it. Throw errors with `status` or `kind: "timeout" | "network" |
+"content-policy"` to have them retried or flagged; an error without a hint is a
+programming error and fails the item after one attempt.
+
+### Images, video and references
+
+Items reference each other with `$ref` (another item's artifact, by `id`) and local
+files with `$file` (relative to the build file). The runner runs references first
+and hands the handler a `{ path, mimeType, hash }` file:
+
+```yaml
+version: 1
+name: ep01
+items:
+  - id: s01.key
+    task: image
+    provider: codex
+    input: { prompt: "patisserie counter at night, warm lamps", aspect: "9:16",
+             refs: [{ $file: refs/akari.png }] }
+  - id: s01.h3
+    task: video
+    provider: fal
+    input: { model: minimax-h3, prompt: "slow push-in", image: { $ref: s01.key }, seconds: 5 }
+```
+
+`moku run ep01.moku.yaml --max-cost 10` renders the keyframe, then the clip, and
+writes `out/ep01/s01.key.png` and `out/ep01/s01.h3.mp4`. The fal models and their
+per-second prices are listed in the [fal README](./src/plugins/fal/README.md); a
+model with no price fails the estimate instead of counting as $0.
 
 ## Configuration
 
@@ -271,6 +315,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | `runner` | `maxAttempts` | `number` | `3` |
 | | `retryBaseMs` | `number` | `1000` |
 | | `eventBufferSize` | `number` | `10_000` |
+| | `pollIntervalMs` | `number` | `5000` |
+| | `jobTimeoutMs` | `number` | `1_800_000` |
 | `voiceover` | `defaultProvider` | `string` | `"elevenlabs"` |
 | | `defaultFormat` | `"mp3" \| "wav" \| "ogg"` | `"mp3"` |
 | `translate` | `defaultProvider` | `string` | `"openai"` |
@@ -285,6 +331,20 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `models` | `{ tts: string; chat: string }` | `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` |
 | | `timeoutMs` | `number` | `60_000` |
 | | `priceOverrides` | `Record<string, { inputPerM?; outputPerM?; ttsPerMChars? }>` | `{}` |
+| `image` | `defaultProvider` | `string` | `"codex"` |
+| `video` | `defaultProvider` | `string` | `"fal"` |
+| | `pollIntervalMs` | `number` | `5000` |
+| `codex` | `bin` | `string` | `"codex"` |
+| | `model` | `string` | `"gpt-6-astra"` |
+| | `reasoningEffort` | `string` | `"low"` |
+| | `timeoutMs` | `number` | `600_000` |
+| | `workDir` | `string` | `".moku/tmp"` |
+| | `priceOverrides` | `Record<string, number>` | `{}` |
+| `fal` | `apiKeyEnv` | `string` | `"FAL_KEY"` |
+| | `queueUrl` | `string` | `"https://queue.fal.run"` |
+| | `upload` | `"storage" \| "data-uri"` | `"storage"` |
+| | `timeoutMs` | `number` | `60_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` |
 | `compose` | `provider` | `string` | `"openai"` |
 | | `maxRepairAttempts` | `number` | `2` |
 | `cli` | `plain` | `boolean` | `false` (auto-true when !TTY or `NO_COLOR`) |
@@ -369,7 +429,7 @@ Layer-3 consumers.
 - Plugins live in `src/plugins/<name>/` — `index.ts` (definition), `types.ts`,
   `api.ts`, plus colocated `__tests__/unit/` and `__tests__/integration/`. Root
   `tests/` is for framework-level integration only.
-- 522 tests across unit + integration projects, 90% coverage threshold.
+- 812 tests across unit + integration projects, 90% coverage threshold.
 - Follow the family conventions: branded CLI output via `@moku-labs/common/cli`,
   `ctx.log` (never `console.*`), `ctx.env` (never `process.env`).
 

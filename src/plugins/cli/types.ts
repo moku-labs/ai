@@ -100,7 +100,7 @@ export type CommandContext = {
   ui: BrandConsole;
   /** `app.buildfile` — compile/loadGlob/jsonSchema/template. */
   buildfile: BuildfileApi;
-  /** `app.runner` — run/resume/estimate/status/events. */
+  /** `app.runner` — run/resume/estimate/status/events/export. */
   runner: RunnerApi;
   /** `app.compose` — compose. */
   compose: ComposeApi;

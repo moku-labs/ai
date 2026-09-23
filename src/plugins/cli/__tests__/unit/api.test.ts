@@ -91,7 +91,7 @@ describe("createCliApi().dispatch — routing", () => {
 // ---------------------------------------------------------------------------
 
 describe("createCliApi().commands", () => {
-  it("returns a stable tree naming all six commands", () => {
+  it("returns a stable tree naming all seven commands", () => {
     const ctx = createFakeCliContext();
     const api = createCliApi(ctx);
 
@@ -103,6 +103,7 @@ describe("createCliApi().commands", () => {
       "validate",
       "estimate",
       "run",
+      "export",
       "status",
       "compose"
     ]);

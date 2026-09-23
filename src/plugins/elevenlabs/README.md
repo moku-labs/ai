@@ -280,7 +280,7 @@ try {
 | File | Role |
 | --- | --- |
 | `index.ts` | Plugin definition (`createPlugin`), defaults, `onInit` registration. |
-| `types.ts` | `Config` / `State` / `ElevenlabsApi`, the three provider error classes, `RegistryApi` redeclaration, `ElevenlabsContext`. |
+| `types.ts` | `Config` / `State` / `ElevenlabsApi`, the three provider error classes, `RegistryApi` re-export (declared once in `registry/index.ts`), `ElevenlabsContext`. |
 | `api.ts` | `createElevenlabsApi` — the `info()` surface. |
 | `client.ts` | Thin generic fetch client: request execution, timeout/signal merging, HTTP failure classification. |
 | `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state). |

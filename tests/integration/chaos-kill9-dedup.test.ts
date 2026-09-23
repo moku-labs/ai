@@ -35,7 +35,7 @@ const COST = 0.1;
 
 /** Extracts the `text` input marker the runner passed to a handler. */
 function markerOf(request: unknown): string {
-  return String((request as HandlerRequest).input.text);
+  return String((request as HandlerRequest).text);
 }
 
 /** Deterministic artifact bytes per marker — identical across runs, for CAS dedup. */
@@ -423,17 +423,13 @@ describe("chaos suite — kill-9 durability, budget bounds, multi-build dedup", 
       reason: "duplicate"
     });
 
-    // Facet (b) — a NEW run with the same file. PINNED real semantics (per
-    // corrections): cross-run planning-key dedup does NOT auto-complete —
-    // run B opens fresh queued rows that re-execute and re-bill in run B's
-    // ledger. The dedup that DOES happen cross-run is content-level: identical
-    // bytes land on the same CAS path (store first-committer-wins), so the
-    // store object count is unchanged.
+    // Facet (b) — a NEW run with the same file reuses run A's done artifacts
+    // by artifact key (D2): zero executions, zero spend, same CAS objects.
     const runB = await app.runner.run({ files });
     expect(runB.runId).not.toBe(runA.runId);
     expect(runB).toMatchObject({ status: "done", totals: { total: 3, done: 3 } });
-    expect(runB.totals.spendUsd).toBeCloseTo(3 * COST);
-    expect(executed).toHaveLength(6);
+    expect(runB.totals.spendUsd).toBe(0);
+    expect(executed).toHaveLength(3);
     expect(await countStoreObjects(storeDir)).toBe(3);
 
     // Run-B rows carry run-A's artifact identity: same planningKey → same
@@ -527,14 +523,14 @@ describe("chaos suite — kill-9 durability, budget bounds, multi-build dedup", 
     expect(healthyExecuted).toHaveLength(2);
     expect(brittleExecuted).toHaveLength(1);
 
-    // Fixtures rebuilt: the brittle provider is now healthy. PINNED real
-    // semantics (per corrections): run B is a NEW run, so ALL of its rows
-    // re-execute — items 1–2 re-bill in run B's ledger (no cross-run
-    // auto-complete), and item 3 finally commits done exactly once.
+    // Fixtures rebuilt: the brittle provider is now healthy. Run B is a NEW
+    // run: items 1–2 reuse run A's artifacts for free (D2, no re-execution),
+    // and item 3 — never done before — executes and commits exactly once.
     brittleHealthy = true;
     const runB = await app.runner.run({ files });
     expect(runB).toMatchObject({ status: "done", totals: { total: 3, done: 3, failed: 0 } });
-    expect(runB.totals.spendUsd).toBeCloseTo(3 * COST);
+    expect(runB.totals.spendUsd).toBeCloseTo(COST);
+    expect(healthyExecuted).toHaveLength(2);
     expect(brittleExecuted).toEqual(["c", "c"]);
 
     // Item 3 committed once with its cost; nothing was double-charged WITHIN

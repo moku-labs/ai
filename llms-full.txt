@@ -97,8 +97,9 @@ Value exports:
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
 - Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
   Elevenlabs, Openai, Compose, Cli
-(registry is Nano tier and ships no types.ts — its 4-method surface is redeclared as
-`RegistryApi` inside the types.ts of each plugin that depends on it.)
+(registry is Nano tier and ships no types.ts — its 4-method surface is declared once as
+`RegistryApi` in `src/plugins/registry/index.ts`, and each dependent's types.ts
+re-exports it: `export type { RegistryApi } from "../registry"`.)
 
 Package entry: ESM + CJS with bundled .d.ts. Bin: `"moku": "./dist/bin.mjs"`.
 Dependencies: @moku-labs/common 0.3.0, @moku-labs/core 1.5.0, better-sqlite3, openai,
@@ -141,7 +142,7 @@ export type State = {
 export type RunStatus = "active" | "done" | "failed" | "paused" | "budget-stopped";
 export type ItemStatus = "queued" | "dispatching" | "done" | "failed" | "flagged";
 export type ErrorClass =
-  | "http-5xx" | "http-429" | "timeout" | "network" | "http-4xx" | "content-policy";
+  | "http-5xx" | "http-429" | "timeout" | "network" | "http-4xx" | "content-policy" | "unknown";
 export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged";
 
 export type RunRow = {
@@ -199,7 +200,13 @@ export type JournalApi = {
   recordAttempt(itemId: string, attempt: AttemptStart): number;
   finishAttempt(attemptId: number, end: AttemptEnd): void;
   commitDone(itemId: string,
-    result: { actualCostUsd: number; artifactKey: string; contentHash: string }): void;
+    result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }): void;
+  findDoneArtifact(artifactKey: string): { contentHash: string; mimeType: string | null } | undefined;
+  reuseDone(itemId: string, artifact: { contentHash: string; mimeType: string | null }): void;
+  setAttemptJob(attemptId: number, job: { externalId?: string; jobState: "submitted" | "done" | "failed" | "expired" }): void;
+  findLiveJob(artifactKey: string): { externalId: string } | undefined;
+  latestRun(): RunRow | undefined;
+  getItem(runId: string, planningKey: string): ItemRow | undefined;
   markFailed(itemId: string, result: { errorClass: ErrorClass; terminal: boolean }): void;
     // terminal:true → failed; terminal:false → back to queued, attemptCount++
   markFlagged(itemId: string): void;          // content-policy terminal, never re-queued
@@ -313,7 +320,7 @@ cast. PERMANENT CONSTRAINT: must stay a regular plugin (core-plugin ctx has no
 require/depends, and providers need `depends: [registryPlugin]`).
 
 ```ts
-// API (inferred; redeclared as RegistryApi in dependents' types.ts)
+// API (inferred; declared once as RegistryApi in registry/index.ts, re-exported by dependents)
 register(task: string, provider: string, handler: unknown): void;
   // throws on duplicate: `[ai] Provider "<provider>" is already registered for task "<task>".
   //   Register each task/provider pair exactly once.`
@@ -372,21 +379,29 @@ export function defineBuild(spec: BuildSpec): BuildSpec;
 4.3 runner — app.runner (Complex tier; depends: [registryPlugin, buildfilePlugin])
 --------------------------------------------------------------------------------
 The durable orchestrator. Per-item pipeline:
-1. Plan — buildfile.loadGlob(files); resolve provider (item.provider →
+1. Plan — buildfile.loadGlob(files); order items by $ref; resolve provider (item.provider →
    defaults.provider → registry.providers(task)[0]); planning key =
-   sha256(canonicalJson({ task, input, params })) (provider excluded); estimate via
-   handler.estimate(); journal.insertItems as queued (idempotent → incremental).
+   sha256(canonicalJson({ task, input, params })) (provider excluded; $ref → target planning
+   key, $file → file sha256); artifact key = same over { task, provider, packVersion, input,
+   params } ($ref → target artifact key); request = { ...input, params }; estimate via
+   handler.estimate(request); journal.insertItems as queued with label/buildName/artifactKey.
+1a. Reuse — journal.findDoneArtifact(artifactKey) from ANY run, bytes in store → reuseDone
+   ($0, no provider call).
+1b. References — wait for $ref targets; not done → item stays queued, run ends paused;
+   $ref/$file resolve to { path, mimeType, hash }.
 2. Admit — limits.acquire("{task}/{provider}/default", { signal }); abort/breaker-open
    exits cleanly (item stays queued).
 3. Gate — journal.gateToDispatching(itemId): budget + dedup + transition in ONE
    transaction. "budget" → graceful budget-stop drain; "duplicate" → release slot.
 4. Execute — registry.resolve(task, provider) narrowed by isExecutableHandler() (the
-   runner's single audited cast); journal.recordAttempt; handler.execute(request, { signal }).
+   runner's single audited cast); journal.recordAttempt; submit+poll when the handler has both
+   (job id journaled via setAttemptJob before any wait; a live job for the same artifact key
+   is adopted, never re-submitted; poll every pollIntervalMs; expired after jobTimeoutMs),
+   else handler.execute(request, { signal }).
 5. Classify — classifyError maps thrown errors onto the taxonomy;
    limits.reportOutcome("ok" | "retryable-error").
-6. Persist — store.put(result.body) THEN journal.commitDone(itemId, { actualCostUsd,
-   artifactKey, contentHash }). Artifact key = sha256(canonicalJson({ planningKey,
-   provider, packVersion })).
+6. Persist — normalize (body | audio | image | video | text), store.put(bytes) THEN
+   journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash, mimeType }).
 7. Report — item record to events() subscribers; coalesced run:progress on the bus.
 
 Named constraints: per-item events NEVER on the bus; redaction boundary (raw
@@ -429,12 +444,26 @@ export type RunnerEvents = {
   "run:paused": { runId: string; drained: number };
 };
 
-export type ExecutableHandler = {
-  estimate(request: unknown): { usd: number };
-  execute(request: unknown, opts: { signal?: AbortSignal }):
-    Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
+export type HandlerRequest = Record<string, unknown>; // { ...item.input, params }
+export type ResolvedFile = { path: string; mimeType: string; hash: string };
+export type HandlerResult = {
+  body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
+  mimeType?: string; costUsd: number; meta?: Record<string, unknown>;
 };
-export type HandlerRequest = { input: Record<string, unknown>; params: Record<string, unknown> };
+export type JobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & HandlerResult)
+  | { state: "failed"; error: unknown };
+export type ExecutableHandler = {
+  estimate(request: HandlerRequest): { usd: number };
+  execute?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<HandlerResult>;
+  submit?(request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(jobId: string, request: HandlerRequest, opts: { signal?: AbortSignal }): Promise<JobPoll>;
+};
+export type ExportResult = {
+  runId: string; outDir: string; skipped: string[];
+  files: Array<{ label: string; path: string; bytes: number; costUsd: number; mimeType: string }>;
+};
 export type ProviderErrorHint = {
   status?: number;
   kind?: "timeout" | "network" | "content-policy"; // overrides status-based inference
@@ -459,8 +488,9 @@ export type RunnerApi = {
 ```
 
 Retry taxonomy (contractual): http-5xx (status>=500) retry · http-429 retry
-(Retry-After honored when larger) · timeout (kind) retry · network (kind, or no hint)
-retry · http-4xx (except 429) terminal failed · content-policy (kind) terminal flagged.
+(Retry-After honored when larger) · timeout (kind) retry · network (kind) retry ·
+http-4xx (except 429) terminal failed · unknown (no hint) terminal failed after one
+attempt · content-policy (kind) terminal flagged.
 
 --------------------------------------------------------------------------------
 4.4 voiceover — app.voiceover (Standard tier; depends: [registryPlugin]; stateless)
@@ -1064,7 +1094,8 @@ try {
 Pattern 2 — structural classification (how the runner does it; no class imports).
 Provider errors carry ProviderErrorHint fields read by shape: `status?: number`,
 `kind?: "timeout" | "network" | "content-policy"` (kind overrides status),
-`retryAfterMs?: number`. An error with no hint classifies as "network" (retryable).
+`retryAfterMs?: number`. An error with no hint classifies as "unknown" (terminal: a
+programming error never re-runs a paid job); tag real transport failures kind "network".
 Custom providers steer retry behavior by attaching these fields to thrown errors.
 
 Pattern 3 — breaker-open (tag, not message):
@@ -1183,31 +1214,34 @@ runner validates the handler shape at dispatch, not the task name at compile):
 ```ts
 import { createPlugin, registryPlugin } from "@moku-labs/ai";
 
-type ImageRequest = { prompt: string; size?: string };
-type ImageHandler = {
-  estimate(request: ImageRequest): { usd: number };
-  execute(request: ImageRequest, opts: { signal?: AbortSignal }):
+type StickerRequest = { prompt: string; size?: string };
+type StickerHandler = {
+  estimate(request: StickerRequest): { usd: number };
+  execute(request: StickerRequest, opts: { signal?: AbortSignal }):
     Promise<{ body: Uint8Array; mimeType: string; costUsd: number }>;
-    // For runner-driven tasks the execute result MUST satisfy ExecutableHandler's
-    // { body, mimeType, costUsd } shape (the runner stores `body` in the CAS).
+    // The runner calls it with the flat request ({ ...input, params }) and stores
+    // body | audio | image | video | text bytes in the CAS with the mime type.
 };
 
-const imageHandler: ImageHandler = {
+const stickerHandler: StickerHandler = {
   estimate: () => ({ usd: 0.04 }),
   execute: async request => ({ body: await renderPng(request), mimeType: "image/png", costUsd: 0.04 })
 };
 
-export const imageProviderPlugin = createPlugin("imageProvider", {
+export const stickerProviderPlugin = createPlugin("stickerProvider", {
   depends: [registryPlugin],
-  onInit: ctx => ctx.require(registryPlugin).register("image", "acme", imageHandler)
+  onInit: ctx => ctx.require(registryPlugin).register("sticker", "acme", stickerHandler)
 });
 ```
 
 ```yaml
 items:
-  - task: image
+  - task: sticker
     input: { prompt: "a neon city skyline", size: "1024x1024" }
 ```
+
+The built-in `image` (codex) and `video` (fal) tasks follow the same pattern; a video
+handler exposes `submit` + `poll` so the provider job id is journaled.
 
 10.3 Event-consumer plugin (bus subscription — the only way; no app.on):
 

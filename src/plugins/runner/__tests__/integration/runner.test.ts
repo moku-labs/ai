@@ -209,7 +209,7 @@ describe("runner plugin integration", () => {
       execute: async (
         request
       ): Promise<{ body: Uint8Array; mimeType: string; costUsd: number }> => {
-        const input = (request as { input: { id: string } }).input;
+        const input = request as { id: string };
         if (input.id === "slow") {
           slowAttempts.count += 1;
           await slowGate.promise;

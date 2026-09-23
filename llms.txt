@@ -40,8 +40,23 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 
 ### Runs, items, planning keys
 - Planning key = sha256(canonicalJson({ task, input, params })) — provider deliberately
-  excluded, key-order-independent. Artifact key = sha256(canonicalJson({ planningKey,
-  provider, packVersion })).
+  excluded, key-order-independent; `$ref` values are replaced by the target's planning
+  key and `$file` values by the file's sha256. Artifact key = sha256(canonicalJson({
+  task, provider, packVersion, input, params })) with `$ref` → target artifact key;
+  written at insert.
+- Cross-run reuse: before gating, a `done` artifact with the same artifact key from ANY
+  run (bytes still in the store) completes the item at $0. Re-running a build re-bills
+  nothing already done.
+- Handlers receive the flat task request `{ ...item.input, params }`; results may carry
+  `body` | `audio` | `image` | `video` bytes or `text`, plus `mimeType` and `costUsd`.
+- Long jobs: a handler with `submit` + `poll` gets its job id journaled on the attempt
+  (`external_id`, `job_state`) before any wait; a live job is adopted by resume or a
+  later run instead of re-submitted. `jobTimeoutMs` expires a job (next attempt re-submits).
+- `$ref: <item id>` (same build file) and `$file: <path>` (relative to the build file)
+  inputs resolve to `{ path, mimeType, hash }`; references run first; a failed target
+  leaves dependents queued and the run `paused`.
+- `runner.export({ runId?, outDir? })` copies done artifacts to
+  `<outDir>/<build name>/<label>.<ext>` (label = item id, else `<NN>-<task>`).
 - The atomic gate (`journal.gateToDispatching`) verifies still-queued + projected spend
   within `maxCostUsd` + transitions to dispatching, in ONE transaction.
 
@@ -60,7 +75,8 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 
 ### Retry taxonomy (contractual, runner-owned)
 - Retry with jittered exponential backoff: http-5xx, http-429 (Retry-After honored when
-  larger), timeout, network. Terminal `failed`: other http-4xx. Terminal `flagged`
+  larger), timeout, network. Terminal `failed`: other http-4xx, and `unknown` (an error
+  with no status/kind hint — a programming error runs once). Terminal `flagged`
   (never re-queued): content-policy.
 - Providers steer classification by throwing Errors with structural hint fields
   (`status?`, `kind?: "timeout"|"network"|"content-policy"`, `retryAfterMs?`).
@@ -186,35 +202,44 @@ Runtime deps: @moku-labs/common, @moku-labs/core, better-sqlite3, openai, yaml, 
 ## Plugins
 
 Core (registered in createCoreConfig; no events, no depends; injected as ctx.*):
-- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, insertItems, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, commitDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot, checkpoint | events: none
+- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot, checkpoint | events: none
 - store: content-addressed artifact store (never lose a byte, never serve a wrong one) | Standard | put, has, pathOf, read, hashOf, gc | events: none
 - limits: per-lane token bucket + FIFO concurrency + circuit breaker (timer-free lazy math) | Standard | acquire, reportOutcome, laneConfig, snapshot, lanes | events: none
 
 Regular (in registration/dependency order; APIs on app.<name>):
 - registry: dumb task→provider→handler map; handlers transported as unknown | Nano | register, resolve, providers, tasks | events: none
 - buildfile: YAML + defineBuild() → validated BuildSpec IR via one zod schema; stateless pure compiler, works offline | Standard | compile, loadGlob, jsonSchema, template (+ standalone defineBuild) | events: none
-- runner (deps: registry, buildfile): the durable orchestrator — plan → admit → gate → execute → persist → report; owns resume, budget stop, clean pause, retry taxonomy | Complex | run, resume, estimate, status, events | events: run:progress, run:done, run:failed, run:budget-stop, run:paused
+- runner (deps: registry, buildfile): the durable orchestrator — plan → admit → gate → execute → persist → report; owns resume, budget stop, clean pause, retry taxonomy | Complex | run, resume, estimate, status, events, export | events: run:progress, run:done, run:failed, run:budget-stop, run:paused
 - voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params | Standard | generate, estimate, providers | events: none
 - translate (deps: registry): owns "translate" contract + one-off facade | Standard | generate, estimate, providers | events: none
 - promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose | Standard | generate, estimate, providers | events: none
 - elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs"); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
 - openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
+- image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
+- video (deps: registry): owns "video" contract (execute, or submit + poll) + one-off facade | Standard | generate, estimate, providers | events: none
+- codex (deps: registry): image provider over the local Codex CLI (`codex exec`, plan-billed, explicit $0 price) — registers ("image","codex") | Standard | info | events: none
+- fal (deps: registry): video provider over the fal queue API — registers ("video","fal") as submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, kling-3-pro, kling-o3-ref; per-second price table, unknown price throws | Complex | info | events: none
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
-- cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
+- cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, export, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
 
 Config defaults (per plugin, override regular plugins via createApp pluginConfigs):
 - journal: path=".moku/journal.db", checkpointIntervalMs=30000, busyTimeoutMs=5000
 - store: dir=".moku/store", algo="sha256"
 - limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={}
 - buildfile: defaultGlob="**/*.moku.yaml", schemaPath=".moku/build.schema.json"
-- runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000
+- runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000
 - voiceover: defaultProvider="elevenlabs", defaultFormat="mp3"
 - translate: defaultProvider="openai"
 - promptGen: defaultProvider="openai"
 - elevenlabs: apiKeyEnv="ELEVENLABS_API_KEY", baseUrl="https://api.elevenlabs.io", defaultModel="eleven_multilingual_v2", timeoutMs=60000, priceOverrides={}
 - openai: apiKeyEnv="OPENAI_API_KEY", baseUrl=undefined, models={tts:"gpt-4o-mini-tts", chat:"gpt-4o-mini"}, timeoutMs=60000, priceOverrides={}
+- image: defaultProvider="codex"
+- video: defaultProvider="fal", pollIntervalMs=5000
+- codex: bin="codex", model="gpt-6-astra", reasoningEffort="low", timeoutMs=600000, workDir=".moku/tmp", priceOverrides={}
+- fal: apiKeyEnv="FAL_KEY", queueUrl="https://queue.fal.run", upload="storage", timeoutMs=60000, priceOverrides={}
 - compose: provider="openai", maxRepairAttempts=2
 - cli: plain=false
+- env (core, from @moku-labs/common): providers=[processEnv(), dotenv(".env.local")] — provider keys come from the shell first, then .env.local in the cwd
 
 See llms-full.txt for verbatim TypeScript interfaces, the complete event catalog,
 error-handling patterns, and extension recipes. Per-plugin READMEs live at

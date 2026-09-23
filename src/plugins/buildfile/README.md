@@ -151,11 +151,34 @@ emits) are stripped by zod, not rejected.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `task` | `string` | yes | Task name — `"voiceover"`, `"translate"`, `"prompt-gen"`, or any registered task (open set; existence is checked by the runner, not here). |
-| `id` | `string` | no | Human label; not identity. |
+| `id` | `string` | no | Human label (export file name) and `$ref` target. Unique within a build file. Not identity. |
 | `provider` | `string` | no | Provider override; the runner falls back to `defaults.provider`, else the task's first registered provider. |
-| `input` | `Record<string, unknown>` | yes | Task-specific request payload; the task plugin validates it at dispatch. |
+| `input` | `Record<string, unknown>` | yes | Task-specific request payload, handed to the provider flat (`{ ...input, params }`). May hold `$ref` / `$file` values. |
 | `params` | `Record<string, unknown>` | no | Output-relevant parameters — part of the runner's planning key. |
 | `pack` | `{ name: string; version: string }` | no | Asset-pack association. |
+
+### References: `$ref` and `$file`
+
+Any value inside `input` (nested objects and arrays included) may be a reference:
+
+| Value | Means |
+|---|---|
+| `{ $ref: "<item id>" }` | The artifact of another item in the same build file. It runs first. |
+| `{ $file: "<path>" }` | A local file, relative to the build file (absolute allowed). Its content hash is part of the item's keys. |
+
+`compile()` rejects a duplicate `id`, a `$ref` to an unknown id, a `$ref` cycle, and a
+reference value that is not a non-empty string, with the usual two-line error, for example
+`items.1.input: unknown $ref "s01.key"`. A missing `$file` is reported by the runner when it plans.
+
+```yaml
+items:
+  - id: s01.key
+    task: image
+    input: { prompt: "patisserie at night", refs: [{ $file: refs/akari.png }] }
+  - id: s01.clip
+    task: video
+    input: { model: minimax-h3, prompt: "slow push-in", image: { $ref: s01.key } }
+```
 
 ### Annotated example
 

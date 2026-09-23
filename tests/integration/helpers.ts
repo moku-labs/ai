@@ -43,7 +43,7 @@ export type FakeHandlerOptions = {
 /** Builds a fake `ExecutableHandler` with scripted failures and an attempt counter. */
 export function createFakeHandler(
   options: FakeHandlerOptions
-): ExecutableHandler & { attempts: () => number } {
+): ExecutableHandler & Required<Pick<ExecutableHandler, "execute">> & { attempts: () => number } {
   let attempts = 0;
   const bodyFor =
     options.body ?? ((attempt: number) => new TextEncoder().encode(`artifact-${attempt}`));
