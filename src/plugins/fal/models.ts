@@ -394,13 +394,13 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     resolution: SEEDANCE_RESOLUTION,
     audio: true,
     maxRefs: 29,
-    maxAudioRefs: 0,
+    maxAudioRefs: 10,
     body: seedanceReferenceBody
   },
   "minimax-h3": {
     endpoint: "minimax/h3/image-to-video",
     resolution: MINIMAX_RESOLUTION,
-    audio: false,
+    audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
     body: minimaxImageBody
@@ -410,7 +410,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     resolution: MINIMAX_RESOLUTION,
     audio: true,
     maxRefs: 8,
-    maxAudioRefs: 0,
+    maxAudioRefs: 3,
     body: minimaxMaxReferenceBody
   },
   "kling-3-pro": {
@@ -514,7 +514,7 @@ export function modelResolution(model: FalModel, request: VideoRequest): string 
  * @returns True when the clip gets native audio.
  * @example
  * ```ts
- * modelAudio(resolveFalModel("minimax-h3"), { ...request, audio: true }); // => false
+ * modelAudio(resolveFalModel("kling-o3-ref"), { ...request, audio: true }); // => true
  * ```
  */
 export function modelAudio(model: FalModel, request: VideoRequest): boolean {

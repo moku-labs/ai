@@ -72,7 +72,7 @@ describe("modelResolution / modelAudio", () => {
   it("turns audio on only when requested and the model can make it", () => {
     const withAudio: VideoRequest = { model: "x", prompt: "p", audio: true };
     expect(modelAudio(resolveFalModel("kling-3-pro"), withAudio)).toBe(true);
-    expect(modelAudio(resolveFalModel("minimax-h3"), withAudio)).toBe(false);
+    expect(modelAudio(resolveFalModel("minimax-h3"), withAudio)).toBe(true);
     expect(modelAudio(resolveFalModel("kling-3-pro"), { model: "x", prompt: "p" })).toBe(false);
   });
 });
