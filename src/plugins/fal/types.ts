@@ -246,11 +246,6 @@ export type { RegistryApi } from "../registry";
  * `video/handler.ts` — `PluginCtx` supplies `config`/`state`/`emit`;
  * `require` is narrowed to the registry, and `env`/`log` are the injected
  * core APIs this plugin reads the key and logs redacted diagnostics through.
- *
- * @example
- * ```ts
- * export const createFalApi = (ctx: FalContext): FalApi => ({ ... });
- * ```
  */
 export type FalContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

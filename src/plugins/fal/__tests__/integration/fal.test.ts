@@ -173,7 +173,7 @@ describe("fal integration", () => {
     await second.stop();
   });
 
-  it("reuses an uploaded keyframe across submits until app.stop() clears the upload cache", async () => {
+  it("reuses an uploaded keyframe across submits, and still after app.stop()", async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes("/storage/upload/initiate")) {
         return json(200, {
@@ -198,7 +198,7 @@ describe("fal integration", () => {
 
     await app.stop();
     await handler.submit?.(request, {});
-    expect(initiates()).toBe(2);
+    expect(initiates()).toBe(1);
   });
 
   it("a content-policy failure surfaces as FlaggedProviderError through the facade", async () => {

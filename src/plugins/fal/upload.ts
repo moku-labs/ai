@@ -34,11 +34,6 @@ export type UploadOptions = {
 
 /**
  * Where one file goes in fal storage.
- *
- * @example
- * ```ts
- * const target: StorageTarget = { uploadUrl: "https://upload/put", fileUrl: "https://cdn/file" };
- * ```
  */
 type StorageTarget = {
   /** Presigned PUT URL. */
@@ -50,11 +45,6 @@ type StorageTarget = {
 /**
  * Mutable mode of one upload call: starts at `config.upload` and drops to
  * `"data-uri"` after an upload failure.
- *
- * @example
- * ```ts
- * const session: UploadSession = { mode: "storage" };
- * ```
  */
 type UploadSession = { mode: UploadMode };
 
@@ -365,14 +355,17 @@ export async function uploadInputs(
   references: SplitReferences,
   options: UploadOptions
 ): Promise<UploadedUrls> {
+  // The first frame goes first, alone; a failure here flips the session to data-uri
   const session: UploadSession = { mode: ctx.config.upload };
   const imageUrl = await uploadOne(ctx, session, image, options);
 
+  // Every ref in parallel, UPLOAD_SLOTS at a time, in request order
   const files = [...references.images, ...references.audio, ...references.videos];
   const urls = await mapInSlots(files, UPLOAD_SLOTS, file =>
     uploadOne(ctx, session, file, options)
   );
 
+  // Slice the flat URL list back into the three groups
   const audioStart = references.images.length;
   const videoStart = audioStart + references.audio.length;
   return {

@@ -23,14 +23,7 @@ import {
   parseVideoResult
 } from "./job";
 
-/**
- * The fal video handler: the async form of the contract (no `execute`).
- *
- * @example
- * ```ts
- * const handler: FalVideoHandler = createVideoHandler(ctx);
- * ```
- */
+/** The fal video handler: the async form of the contract (no `execute`). */
 export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" | "poll">>;
 
 /** Status values while fal is still working on a job. */
@@ -181,17 +174,20 @@ function tooManyReferencesError(
  * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
  * @example
  * ```ts
- * splitReferences(resolveFalModel("kling-o3-ref"), references); // throws for 5+ image refs
+ * splitReferences(resolveFalModel("kling-o3-ref"), [{ mime: "video/mp4", bytes }]);
+ * // throws: [ai] fal model "kling-o3-ref" takes no video references, got 1.
  * ```
  */
 export function splitReferences(
   model: ResolvedFalModel,
   references: readonly VideoFile[]
 ): SplitReferences {
+  // Split by MIME, keeping request order inside each group
   const images = references.filter(file => isImageReference(file));
   const audio = references.filter(file => isAudioReference(file));
   const videos = references.filter(file => isVideoReference(file));
 
+  // Check each group against the catalog row before any upload
   if (images.length > model.maxRefs) {
     throw tooManyReferencesError(model, "reference images", model.maxRefs, images.length);
   }
@@ -408,6 +404,9 @@ async function pollJob(
 
 /**
  * Creates the fal video handler registered under `("video", "fal")`.
+ * `estimate` touches no network. `submit` uploads the inputs and queues the
+ * job; an abort stops the uploads, but once the queue POST is sent it runs to
+ * the end, so a billed job always returns its id.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, submit and poll.
@@ -418,56 +417,13 @@ async function pollJob(
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
-    /**
-     * Estimates cost without any network access. Reads only the headers of
-     * resolved reference images, for models billed by reference tokens.
-     *
-     * @param request - The video request (may still hold unresolved `$ref`s).
-     * @returns The cost in USD.
-     * @example
-     * ```ts
-     * handler.estimate({ model: "minimax-h3", prompt: "push-in" }); // => { usd: 0.3 }
-     * ```
-     */
-    estimate(request: VideoRequest): { usd: number } {
-      return { usd: videoCostUsd(ctx, request) };
-    },
-    /**
-     * Uploads the inputs and queues the job. An abort stops the uploads; once
-     * the queue POST is sent it runs to the end, so a billed job always
-     * returns its id.
-     *
-     * @param request - The resolved video request.
-     * @param opts - Options.
-     * @param opts.signal - Caller abort signal (uploads only).
-     * @returns The opaque job id to journal.
-     * @example
-     * ```ts
-     * const { jobId } = await handler.submit(request, {});
-     * ```
-     */
-    submit(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> {
-      return submitJob(ctx, request, opts.signal);
-    },
-    /**
-     * Polls a submitted job once.
-     *
-     * @param jobId - The id `submit` returned.
-     * @param request - The request the job was submitted with.
-     * @param opts - Options.
-     * @param opts.signal - Caller abort signal.
-     * @returns Pending, done with the clip, or failed with a classified error.
-     * @example
-     * ```ts
-     * const status = await handler.poll(jobId, request, {});
-     * ```
-     */
-    poll(
+    estimate: (request: VideoRequest): { usd: number } => ({ usd: videoCostUsd(ctx, request) }),
+    submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
+      submitJob(ctx, request, opts.signal),
+    poll: (
       jobId: string,
       request: VideoRequest,
       opts: { signal?: AbortSignal }
-    ): Promise<VideoJobPoll> {
-      return pollJob(ctx, jobId, request, opts.signal);
-    }
+    ): Promise<VideoJobPoll> => pollJob(ctx, jobId, request, opts.signal)
   };
 }
