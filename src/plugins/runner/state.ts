@@ -27,11 +27,6 @@ export function createRunnerState(): State {
  * @param runId - The run's id.
  * @param signal - The caller's abort signal, if any.
  * @returns The run's live bookkeeping.
- * @example
- * ```ts
- * const active = addActiveRun(createRunnerState(), "run-1", undefined);
- * active.stop.signal.aborted; // false until app.stop()
- * ```
  */
 export function addActiveRun(
   state: State,
@@ -59,10 +54,6 @@ export function addActiveRun(
  *
  * @param state - Runner state.
  * @returns Resolves once every active run settled; at once when none is active.
- * @example
- * ```ts
- * await stopActiveRuns(state); // state.active is empty, every run resolved paused
- * ```
  */
 export async function stopActiveRuns(state: State): Promise<void> {
   const stopped = new Set<ActiveRun>();
@@ -93,10 +84,6 @@ export async function stopActiveRuns(state: State): Promise<void> {
  *
  * @param state - Runner state.
  * @param runId - The run that ended.
- * @example
- * ```ts
- * removeActiveRun(state, "run-1"); // state.active no longer has "run-1"
- * ```
  */
 export function removeActiveRun(state: State, runId: string): void {
   state.active.delete(runId);
@@ -113,11 +100,6 @@ export function removeActiveRun(state: State, runId: string): void {
  * @param artifactKey - The item's artifact key.
  * @param itemId - The claiming item.
  * @returns Settles the claim with the item's verdict.
- * @example
- * ```ts
- * const settle = openClaim(state, "ak-1", "item-1"); // state.claims.get("ak-1")?.itemId === "item-1"
- * settle({ kind: "done" }); // key freed; followers reuse the artifact
- * ```
  */
 export function openClaim(
   state: State,

@@ -184,6 +184,12 @@ export type OpenaiApi = {
    * throwing, plus the default models per capability.
    *
    * @returns The provider info snapshot.
+   * @example
+   * ```ts
+   * // Before a run, check OPENAI_API_KEY is set; no SDK client is built by this call.
+   * const { configured, models } = app.openai.info();
+   * // configured: false without the key, models: { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }
+   * ```
    */
   info(): { provider: "openai"; configured: boolean; models: { tts: string; chat: string } };
 };

@@ -320,10 +320,6 @@ function follows(subscriber: Subscriber, runId: string): boolean {
  *
  * @param state - Runner state (its `subscribers`).
  * @param event - The record to deliver.
- * @example
- * ```ts
- * broadcastEvent(state, { type: "item:dispatching", runId: "run-1", itemId: "i1" });
- * ```
  */
 export function broadcastEvent(state: State, event: RunEvent): void {
   for (const subscriber of state.subscribers) {
@@ -338,10 +334,6 @@ export function broadcastEvent(state: State, event: RunEvent): void {
  *
  * @param state - Runner state.
  * @param runId - The run that ended.
- * @example
- * ```ts
- * closeSubscribers(state, "run-1"); // run-1 consumers end; all-runs ones end too if nothing else runs
- * ```
  */
 export function closeSubscribers(state: State, runId: string): void {
   const noRunActive = state.active.size === 0;

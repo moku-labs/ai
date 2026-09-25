@@ -93,6 +93,12 @@ export type BuildfileApi = {
    *
    * @param source - A file path (YAML or TS) or inline YAML text.
    * @returns The source's label and its validated `BuildSpec`.
+   * @example
+   * ```ts
+   * // Check a build file an editor just saved, before paying for a run.
+   * const { file, spec } = await app.buildfile.compile({ text: "version: 1\nname: demo\nitems: []\n", lang: "yaml" });
+   * // file: "<inline>", spec: { version: 1, name: "demo", items: [] }
+   * ```
    */
   compile(source: BuildfileSource): Promise<CompiledBuild>;
   /**
@@ -101,6 +107,12 @@ export type BuildfileApi = {
    *
    * @param pattern - Glob pattern; defaults to `config.defaultGlob`.
    * @returns One `CompiledBuild` per matched file, in sorted path order.
+   * @example
+   * ```ts
+   * // The runner loads the build files a run names; no pattern means `config.defaultGlob`.
+   * const builds = await ctx.require(buildfilePlugin).loadGlob("ep01/**\/*.moku.yaml");
+   * builds.map(build => build.file); // ["ep01/a.moku.yaml", "ep01/sub/b.moku.yaml"]: sorted
+   * ```
    */
   loadGlob(pattern?: string): Promise<CompiledBuild[]>;
   /**
@@ -108,6 +120,12 @@ export type BuildfileApi = {
    * for `moku new` to write and the modeline to point at.
    *
    * @returns The JSON Schema object.
+   * @example
+   * ```ts
+   * // `moku new` writes this next to the starter file for editor autocomplete.
+   * const schema = app.buildfile.jsonSchema();
+   * schema.required; // ["version", "name", "items"]
+   * ```
    */
   jsonSchema(): Record<string, unknown>;
   /**
@@ -118,6 +136,12 @@ export type BuildfileApi = {
    * @param opts - Template options.
    * @param opts.name - The `name:` field of the generated build file.
    * @returns The starter build-file text.
+   * @example
+   * ```ts
+   * // `moku new demo` writes this text to demo.moku.yaml; it compiles as it is.
+   * const text = app.buildfile.template({ name: "demo" });
+   * text.split("\n")[0]; // "# yaml-language-server: $schema=.moku/build.schema.json"
+   * ```
    */
   template(opts: { name: string }): string;
 };

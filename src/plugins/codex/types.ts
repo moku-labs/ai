@@ -85,6 +85,12 @@ export type CodexApi = {
    * Provider health/info for `moku status` and docs.
    *
    * @returns Whether the CLI is found, and the models with a known price.
+   * @example
+   * ```ts
+   * // Before a keyframe run, check the Codex CLI is installed.
+   * const { configured, models } = app.codex.info();
+   * // configured: false when "codex" is not on PATH, models: ["gpt-6-astra"]
+   * ```
    */
   info(): CodexInfo;
 };
