@@ -106,7 +106,9 @@ export default [
         "error",
         {
           require: {
-            ArrowFunctionExpression: true,
+            // API methods are documented on the members of the public `Api` types (block 6b), not
+            // on the arrow functions that implement them.
+            ArrowFunctionExpression: false,
             ClassDeclaration: true,
             FunctionDeclaration: true,
             FunctionExpression: true,
@@ -120,9 +122,43 @@ export default [
       "jsdoc/require-param-description": "error",
       "jsdoc/require-returns": "error",
       "jsdoc/require-returns-description": "error",
-      "jsdoc/require-example": "error",
+      // An example is required only where a consumer reads it: see block 6b. A required example on
+      // a private function becomes a copy of its signature.
+      "jsdoc/require-example": "off",
       "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
       "unicorn/require-module-specifiers": "off"
+    }
+  },
+
+  // 6b. The public contract carries the docs and a scenario example. Only `types.ts` ships in the
+  // `.d.mts`, so a consumer reads the members of the `…Api` types, never the implementation. API
+  // means public, so there is no exemption: a member with no honest example moves off the API into a
+  // plain function, or is deleted. Both member forms are covered: `navigate(path: string): R` and
+  // `navigate: (path: string) => R`.
+  {
+    files: ["src/**/types.ts"],
+    rules: {
+      "jsdoc/require-jsdoc": [
+        "error",
+        {
+          require: { FunctionDeclaration: true, ClassDeclaration: true, MethodDefinition: true },
+          contexts: [
+            "TSInterfaceDeclaration",
+            "TSTypeAliasDeclaration",
+            "TSTypeAliasDeclaration[id.name=/Api$/] > TSTypeLiteral > :matches(TSMethodSignature, TSPropertySignature)",
+            "TSInterfaceDeclaration[id.name=/Api$/] > TSInterfaceBody > :matches(TSMethodSignature, TSPropertySignature)"
+          ]
+        }
+      ],
+      "jsdoc/require-example": [
+        "error",
+        {
+          contexts: [
+            "TSTypeAliasDeclaration[id.name=/Api$/] > TSTypeLiteral > :matches(TSMethodSignature, TSPropertySignature)",
+            "TSInterfaceDeclaration[id.name=/Api$/] > TSInterfaceBody > :matches(TSMethodSignature, TSPropertySignature)"
+          ]
+        }
+      ]
     }
   },
 
