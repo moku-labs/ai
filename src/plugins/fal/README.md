@@ -121,7 +121,8 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
    once as `fal:upload:fallback`.
    **Upload cache.** Each storage URL is kept for the process in `state.uploads`, keyed
    `storage:<mime>:<sha256 of the bytes>`. The same face or tail clip is uploaded once, across items,
-   attempts and runs, under any path. A data-URI fallback is never cached. `app.stop()` clears the cache.
+   attempts and runs, under any path. A data-URI fallback is never cached. The cache lives as long as the
+   process; `app.stop()` keeps it.
 2. **Submit.** `POST <queueUrl>/<endpoint>` with `Authorization: Key <FAL_KEY>`. The job id is JSON
    `{ endpoint, requestId, statusUrl, responseUrl }`; status and result URLs are used as fal returned them.
 3. **Poll.** `GET statusUrl`: `IN_QUEUE` / `IN_PROGRESS` → pending. `COMPLETED` with `error` →

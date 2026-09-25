@@ -23,11 +23,10 @@ const defaultConfig: Config = {
 /**
  * fal — Complex tier provider plugin. Registers `("video", "fal")` in onInit.
  * Depends on registry only, like the elevenlabs/openai providers; the `video`
- * contract is a type-only import. `app.stop()` clears the upload cache.
+ * contract is a type-only import. The upload cache lives for the process.
  *
  * @see README.md
  */
-// @no-resource-check — onStop clears the per-process cache of fal storage URLs (state.uploads) (spec/03)
 export const falPlugin = createPlugin("fal", {
   depends: [registryPlugin],
   config: defaultConfig,
@@ -44,18 +43,5 @@ export const falPlugin = createPlugin("fal", {
    */
   onInit: ctx => {
     ctx.require(registryPlugin).register("video", "fal", createVideoHandler(ctx));
-  },
-  /**
-   * Forgets the fal storage URLs of this process.
-   *
-   * @param ctx - Teardown context; only the fal state is used.
-   * @param ctx.state - fal state.
-   * @example
-   * ```ts
-   * await app.stop(); // the next submit uploads its files again
-   * ```
-   */
-  onStop: ({ state }) => {
-    state.uploads.clear();
   }
 });
