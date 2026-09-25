@@ -86,6 +86,12 @@ const MAX_ERROR_TEXT = 300;
 /** Marker fal uses in error types and texts for a content-policy rejection. */
 const CONTENT_POLICY = "content_policy";
 
+/**
+ * Words in fal's text that name a content-policy rejection even without the
+ * `content_policy` marker. Case-insensitive.
+ */
+const CONTENT_POLICY_WORDS = /sensitive|likeness|nsfw|moderation/i;
+
 /** Job `error_type`s that are transient: the next attempt re-submits. */
 const TRANSIENT_JOB_ERRORS: ReadonlySet<string> = new Set([
   "generation_timeout",
@@ -204,18 +210,22 @@ export function describeFalError(body: unknown): FalErrorInfo {
 }
 
 /**
- * Whether fal named a content-policy rejection, by type or by text.
+ * Whether fal named a content-policy rejection: by type, by the
+ * `content_policy` marker in its text, or by one of {@link CONTENT_POLICY_WORDS}.
  *
  * @param info - The narrowed error.
  * @returns True for a content-policy rejection.
  * @example
  * ```ts
  * isContentPolicy({ types: ["content_policy_violation"], text: undefined }); // => true
+ * isContentPolicy({ types: [], text: "NSFW content detected" }); // => true
  * ```
  */
 function isContentPolicy(info: FalErrorInfo): boolean {
+  const text = info.text ?? "";
   const namedByType = info.types.some(type => type.includes(CONTENT_POLICY));
-  return namedByType || (info.text?.includes(CONTENT_POLICY) ?? false);
+  const namedByText = text.includes(CONTENT_POLICY) || CONTENT_POLICY_WORDS.test(text);
+  return namedByType || namedByText;
 }
 
 /**

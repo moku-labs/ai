@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { GateResult } from "../../../journal/types";
+import { describe, expect, it, vi } from "vitest";
+import type { DoneArtifact, GateResult } from "../../../journal/types";
 import {
   artifactKeyOf,
   createDrainController,
@@ -7,7 +7,8 @@ import {
   isExecutableHandler,
   resolveHandler
 } from "../../pipeline";
-import type { ActiveRun, RunEvent } from "../../types";
+import { openClaim } from "../../state";
+import type { ActiveRun, ClaimVerdict, UnstampedRunEvent } from "../../types";
 import {
   type CallLog,
   createFakeRunnerContext,
@@ -17,8 +18,8 @@ import {
 } from "./fixtures";
 
 /**
- * Builds a fake `ActiveRun` with an empty subscriber set, for `executeItem`
- * tests (only `inFlight`/`signal` are exercised).
+ * Builds a fake `ActiveRun`, for `executeItem` tests (only `inFlight`/`signal`
+ * are exercised; the stop controller and settle promise are inert).
  *
  * @param signal - Optional abort signal to attach.
  * @returns A fake active-run record.
@@ -28,7 +29,15 @@ import {
  * ```
  */
 function fakeActiveRun(signal?: AbortSignal): ActiveRun {
-  return { runId: "run-1", signal, subscribers: new Set(), inFlight: 0 };
+  const { promise, resolve } = Promise.withResolvers<void>();
+  return {
+    runId: "run-1",
+    signal,
+    inFlight: 0,
+    stop: new AbortController(),
+    settled: promise,
+    settle: resolve
+  };
 }
 
 /**
@@ -42,14 +51,30 @@ function fakeActiveRun(signal?: AbortSignal): ActiveRun {
  * await executeItem(ctx, item, request, 3, drain, active, report);
  * ```
  */
-function collectReports(): { report: (event: RunEvent) => void; events: RunEvent[] } {
-  const events: RunEvent[] = [];
+function collectReports(): {
+  report: (event: UnstampedRunEvent) => void;
+  events: UnstampedRunEvent[];
+} {
+  const events: UnstampedRunEvent[] = [];
   return {
-    report: (event: RunEvent): void => {
+    report: (event: UnstampedRunEvent): void => {
       events.push(event);
     },
     events
   };
+}
+
+/**
+ * Lets pending promise callbacks and timers run, so an item reaches its next wait.
+ *
+ * @returns Resolves on the next macrotask.
+ * @example
+ * ```ts
+ * await flush();
+ * ```
+ */
+function flush(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -451,12 +476,12 @@ describe("executeItem", () => {
       const item = fakeItemRow();
       const drain = createDrainController(controller.signal);
       const active = fakeActiveRun();
-      const events: RunEvent[] = [];
+      const events: UnstampedRunEvent[] = [];
       // Aborts as soon as the retry is reported — synchronously before the
       // pending `delay()` wait starts, so the wait resolves immediately and
       // the loop exits on its next abort check instead of waiting out the
       // (deliberately huge) retryBaseMs.
-      const report = (event: RunEvent): void => {
+      const report = (event: UnstampedRunEvent): void => {
         events.push(event);
         if (event.type === "item:retry") controller.abort();
       };
@@ -472,6 +497,317 @@ describe("executeItem", () => {
       // stopped the NEXT admission, never a second execute() call.
       expect(executeCalls).toBe(1);
       expect(active.inFlight).toBe(0);
+    });
+  });
+});
+
+/**
+ * Runs one leader item and returns the verdict its claim settled with.
+ *
+ * @param options - Handler error hint, attempt ceiling and gate override.
+ * @param options.hint - Error fields the handler throws with; omit for success.
+ * @param options.maxAttempts - Attempt ceiling. Default 3.
+ * @param options.gate - Gate result override.
+ * @returns The verdict and whether the claim map is empty afterwards.
+ * @example
+ * ```ts
+ * const { verdict } = await leaderVerdict({ hint: { status: 400 } });
+ * ```
+ */
+async function leaderVerdict(
+  options: { hint?: object; maxAttempts?: number; gate?: GateResult } = {}
+): Promise<{ verdict: ClaimVerdict | undefined; claimsLeft: number }> {
+  const log: CallLog = [];
+  const handler = fakeHandler(log, {
+    execute: async () => {
+      if (options.hint) throw Object.assign(new Error("provider said no"), options.hint);
+      return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
+    }
+  });
+  const gate = options.gate;
+  const ctx = createFakeRunnerContext(log, {
+    config: { retryBaseMs: 1 },
+    registry: { resolve: (): unknown => handler },
+    ...(gate ? { journal: { gateToDispatching: () => gate } } : {})
+  });
+  const claimed = vi.spyOn(ctx.state.claims, "set");
+
+  await executeItem(
+    ctx,
+    fakeItemRow({ artifactKey: "ak-1" }),
+    fakePlan(options.maxAttempts ?? 3),
+    createDrainController(undefined),
+    fakeActiveRun(),
+    collectReports().report,
+    Promise.resolve()
+  );
+
+  const verdict = await claimed.mock.calls[0]?.[1].settled;
+  return { verdict, claimsLeft: ctx.state.claims.size };
+}
+
+// ---------------------------------------------------------------------------
+// executeItem — cross-run dedupe: one item per artifact key reaches the provider
+// ---------------------------------------------------------------------------
+
+describe("executeItem — cross-run dedupe claim", () => {
+  const LEADER = "leader-item";
+
+  it("waits on the leader's claim and reuses its artifact when it settles done", async () => {
+    const log: CallLog = [];
+    let artifact: DoneArtifact | undefined;
+    const ctx = createFakeRunnerContext(log, {
+      journal: { findDoneArtifact: () => artifact },
+      store: { has: async () => true }
+    });
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    expect(log).toEqual([]);
+
+    artifact = { contentHash: "hash-leader", mimeType: "video/mp4" };
+    settleLeader({ kind: "done" });
+
+    await expect(following).resolves.toBe("settled");
+    expect(log).toEqual([`journal.reuseDone(${item.id})`]);
+    expect(events).toEqual([
+      { type: "item:queued", itemId: item.id, task: item.task, provider: item.provider },
+      { type: "item:done", itemId: item.id, costUsd: 0, contentHash: "hash-leader" }
+    ]);
+    expect(ctx.log.info).toHaveBeenCalledWith("runner:dedupe:wait", {
+      itemId: item.id,
+      leader: LEADER
+    });
+  });
+
+  it.each<[string, ClaimVerdict, string, string]>([
+    ["flagged", { kind: "flagged" }, "journal.markFlagged(item-1)", "item:flagged"],
+    [
+      "failed",
+      { kind: "failed", errorClass: "http-4xx" },
+      "journal.markFailed(item-1,terminal)",
+      "item:failed"
+    ]
+  ])("copies a %s verdict through the gate with no attempt and no lane", async (_name, verdict, journalCall, recordType) => {
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log);
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader(verdict);
+
+    await expect(following).resolves.toBe("settled");
+    expect(log).toEqual([`journal.gateToDispatching(${item.id})`, journalCall]);
+    expect(events.map(event => event.type)).toEqual(["item:queued", recordType]);
+    expect(events.at(-1)).toMatchObject(
+      verdict.kind === "failed" ? { errorClass: verdict.errorClass } : {}
+    );
+    expect(ctx.log.info).toHaveBeenCalledWith("runner:dedupe:shared", {
+      itemId: item.id,
+      verdict: verdict.kind
+    });
+  });
+
+  it("a budget refusal while copying a verdict budget-stops the run and records nothing", async () => {
+    const log: CallLog = [];
+    const gateToDispatching = (itemId: string): GateResult => {
+      log.push(`journal.gateToDispatching(${itemId})`);
+      return { ok: false, reason: "budget" };
+    };
+    const ctx = createFakeRunnerContext(log, { journal: { gateToDispatching } });
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const drain = createDrainController(undefined);
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      drain,
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "flagged" });
+    await following;
+
+    expect(log).toEqual([`journal.gateToDispatching(${item.id})`]);
+    expect(drain.budgetStopped).toBe(true);
+    expect(events.map(event => event.type)).toEqual(["item:queued"]);
+  });
+
+  it("an open verdict makes it the next claimant, and it runs the provider itself", async () => {
+    const log: CallLog = [];
+    const claimedBy: string[] = [];
+    const handler = fakeHandler(log, {
+      execute: async () => {
+        claimedBy.push(ctx.state.claims.get("ak-1")?.itemId ?? "nobody");
+        return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
+      }
+    });
+    const ctx = createFakeRunnerContext(log, { registry: { resolve: (): unknown => handler } });
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "open" });
+    await following;
+
+    expect(claimedBy).toEqual([item.id]);
+    expect(log).toContain(`journal.commitDone(${item.id})`);
+    expect(events.at(-1)?.type).toBe("item:done");
+    expect(ctx.state.claims.size).toBe(0);
+  });
+
+  it("a done verdict whose bytes left the store is treated as open", async () => {
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log, {
+      journal: { findDoneArtifact: () => ({ contentHash: "gone", mimeType: "text/plain" }) },
+      store: { has: async () => false }
+    });
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "done" });
+    await following;
+
+    expect(log).toContain("handler.execute");
+    expect(log).not.toContain(`journal.reuseDone(${item.id})`);
+    expect(events.at(-1)?.type).toBe("item:done");
+  });
+
+  it("an abort while waiting returns settled and leaves the item queued", async () => {
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log);
+    openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const controller = new AbortController();
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(controller.signal),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    controller.abort();
+
+    await expect(following).resolves.toBe("settled");
+    expect(log).toEqual([]);
+    expect(events.map(event => event.type)).toEqual(["item:queued"]);
+    expect(ctx.state.claims.get("ak-1")?.itemId).toBe(LEADER);
+  });
+
+  it("an item with no artifact key never claims", async () => {
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log);
+    const claimed = vi.spyOn(ctx.state.claims, "set");
+    const { report } = collectReports();
+
+    await executeItem(
+      ctx,
+      fakeItemRow(),
+      fakePlan(3),
+      createDrainController(undefined),
+      fakeActiveRun(),
+      report,
+      Promise.resolve()
+    );
+
+    expect(claimed).not.toHaveBeenCalled();
+  });
+
+  describe("the leader settles its own claim with its verdict", () => {
+    it("done", async () => {
+      expect(await leaderVerdict()).toEqual({ verdict: { kind: "done" }, claimsLeft: 0 });
+    });
+
+    it("flagged on a content-policy rejection", async () => {
+      const { verdict } = await leaderVerdict({ hint: { kind: "content-policy" } });
+      expect(verdict).toEqual({ kind: "flagged" });
+    });
+
+    it("failed with the class of a terminal failure", async () => {
+      const { verdict } = await leaderVerdict({ hint: { status: 400 } });
+      expect(verdict).toEqual({ kind: "failed", errorClass: "http-4xx" });
+    });
+
+    it("open once attempts are exhausted on a retryable class, so a follower tries itself", async () => {
+      const { verdict } = await leaderVerdict({ hint: { status: 503 }, maxAttempts: 1 });
+      expect(verdict).toEqual({ kind: "open" });
+    });
+
+    it("open when the gate refuses it", async () => {
+      const { verdict } = await leaderVerdict({ gate: { ok: false, reason: "budget" } });
+      expect(verdict).toEqual({ kind: "open" });
+    });
+
+    it("open when a bug throws, and the error still propagates", async () => {
+      const ctx = createFakeRunnerContext([], { registry: { resolve: (): unknown => undefined } });
+      const claimed = vi.spyOn(ctx.state.claims, "set");
+
+      await expect(
+        executeItem(
+          ctx,
+          fakeItemRow({ artifactKey: "ak-1" }),
+          fakePlan(3),
+          createDrainController(undefined),
+          fakeActiveRun(),
+          collectReports().report,
+          Promise.resolve()
+        )
+      ).rejects.toThrow(/^\[ai\] No executable handler registered/);
+      await expect(claimed.mock.calls[0]?.[1].settled).resolves.toEqual({ kind: "open" });
+      expect(ctx.state.claims.size).toBe(0);
     });
   });
 });

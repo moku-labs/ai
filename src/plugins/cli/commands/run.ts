@@ -142,8 +142,8 @@ function renderDryRunSummary(context: CommandContext, result: RunResult): void {
 /**
  * Starts the run and concurrently drains + renders its event stream.
  * `runner.events()` is opened synchronously right after `runner.run()` is
- * called (before any `await` in this function), which is required to
- * observe the run's `state.active` subscription window.
+ * called (before any `await` in this function). With no runId it follows
+ * every active run and closes once none is left, so it sees this run whole.
  *
  * @param context - CommandContext (branded console + required plugin APIs).
  * @param options - The run's options (glob, budget cap, dry-run).

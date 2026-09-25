@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJournalApi } from "../../api";
 import { openSqliteDriver } from "../../driver/select";
 import type { SqliteDriver } from "../../driver/types";
@@ -47,6 +47,29 @@ function jobAttempt(
   });
   api.setAttemptJob(attemptId, { externalId, jobState });
   return attemptId;
+}
+
+/** Opens a run with a pinned `created_at`, so newest-first order is deterministic. */
+function openRunAt(api: JournalApi, createdAt: number, glob: string): string {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(createdAt);
+  const run = api.openRun({ glob });
+  clock.mockRestore();
+  return run.id;
+}
+
+/** Records one successful attempt on an admitted item and commits it as done. */
+function completeItem(api: JournalApi, itemId: string, costUsd: number): void {
+  const attemptId = api.recordAttempt(itemId, {
+    provider: "elevenlabs",
+    account: "default",
+    startedAt: 1
+  });
+  api.finishAttempt(attemptId, { endedAt: 2, outcome: "done", costUsd });
+  api.commitDone(itemId, {
+    actualCostUsd: costUsd,
+    artifactKey: `ak-${itemId}`,
+    contentHash: `ch-${itemId}`
+  });
 }
 
 describe("journal api", () => {
@@ -116,6 +139,75 @@ describe("journal api", () => {
       api.setRunStatus(run.id, "done");
 
       expect(api.latestResumableRun()).toBeUndefined();
+    });
+
+    it("skips excluded runs and returns the next newest resumable run", () => {
+      const oldest = openRunAt(api, 1000, "a/*.yaml");
+      const middle = openRunAt(api, 2000, "b/*.yaml");
+      const newest = openRunAt(api, 3000, "c/*.yaml");
+      api.setRunStatus(middle, "paused");
+
+      expect(api.latestResumableRun({ exclude: [newest] })?.id).toBe(middle);
+      expect(api.latestResumableRun({ exclude: [newest, middle] })?.id).toBe(oldest);
+    });
+
+    it("returns undefined when every resumable run is excluded", () => {
+      const first = openRunAt(api, 1000, "a/*.yaml");
+      const second = openRunAt(api, 2000, "b/*.yaml");
+
+      expect(api.latestResumableRun({ exclude: [first, second] })).toBeUndefined();
+    });
+
+    it("treats an omitted or empty exclude list as no filter", () => {
+      openRunAt(api, 1000, "a/*.yaml");
+      const newest = openRunAt(api, 2000, "b/*.yaml");
+
+      expect(api.latestResumableRun()?.id).toBe(newest);
+      expect(api.latestResumableRun({})?.id).toBe(newest);
+      expect(api.latestResumableRun({ exclude: [] })?.id).toBe(newest);
+    });
+
+    it("ignores excluded ids that match no run", () => {
+      const newest = openRunAt(api, 1000, "a/*.yaml");
+
+      expect(api.latestResumableRun({ exclude: ["unknown-run"] })?.id).toBe(newest);
+    });
+  });
+
+  describe("two runs in one process", () => {
+    it("keeps per-run totals correct when their writes interleave", () => {
+      const runA = api.openRun({ glob: "a/*.yaml", maxCostUsd: 10 });
+      const runB = api.openRun({ glob: "b/*.yaml", maxCostUsd: 10 });
+      const itemsA = api.insertItems(runA.id, [intent("a-1"), intent("a-2")]);
+      const itemsB = api.insertItems(runB.id, [intent("b-1"), intent("b-2")]);
+      const [a1, a2] = itemsA.map(item => item.id);
+      const [b1, b2] = itemsB.map(item => item.id);
+
+      expect(api.gateToDispatching(mustExist(a1))).toEqual({ ok: true });
+      expect(api.gateToDispatching(mustExist(b1))).toEqual({ ok: true });
+      expect(api.gateToDispatching(mustExist(a2))).toEqual({ ok: true });
+      expect(api.gateToDispatching(mustExist(b2))).toEqual({ ok: true });
+      completeItem(api, mustExist(b1), 0.3);
+      completeItem(api, mustExist(a1), 0.2);
+      api.markFailed(mustExist(b2), { errorClass: "http-4xx", terminal: true });
+      completeItem(api, mustExist(a2), 0.5);
+
+      expect(api.totals(runA.id)).toMatchObject({
+        total: 2,
+        queued: 0,
+        dispatching: 0,
+        done: 2,
+        failed: 0,
+        spendUsd: 0.7
+      });
+      expect(api.totals(runB.id)).toMatchObject({
+        total: 2,
+        queued: 0,
+        dispatching: 0,
+        done: 1,
+        failed: 1,
+        spendUsd: 0.3
+      });
     });
   });
 

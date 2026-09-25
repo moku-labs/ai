@@ -38,7 +38,27 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "kling-3-pro": 0.112,
   "kling-3-pro+audio": 0.168,
   "kling-o3-ref": 0.112,
-  "kling-o3-ref+audio": 0.14
+  "kling-o3-ref+audio": 0.14,
+  "seedance-2.0-mini@480p": 0.0721,
+  "seedance-2.0-mini@720p": 0.1547,
+  "seedance-2.0-mini-ref@480p": 0.0721,
+  "seedance-2.0-mini-ref@720p": 0.1547,
+  "seedance-2.0-ref@720p": 0.3034,
+  "seedance-2.0-ref@1080p": 0.682,
+  "wan-3.0-ref@480p": 0.05,
+  "wan-3.0-ref@720p": 0.1,
+  "wan-3.0-ref@1080p": 0.2,
+  "veo-3.1-fast@4k": 0.35,
+  "veo-3.1-fast+audio": 0.15,
+  "veo-3.1-fast": 0.1,
+  "vidu-q3@360p": 0.07,
+  "vidu-q3@540p": 0.07,
+  "vidu-q3@720p": 0.154,
+  "vidu-q3@1080p": 0.154,
+  "vidu-q3-ref@360p": 0.07,
+  "vidu-q3-ref@540p": 0.07,
+  "vidu-q3-ref@720p": 0.154,
+  "vidu-q3-ref@1080p": 0.154
 };
 
 /** Cost precision: results are rounded to micro-dollars so 5 x 0.06 is 0.3, not 0.30000000000000004. */

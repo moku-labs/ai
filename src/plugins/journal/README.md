@@ -56,12 +56,15 @@ Looks up one run by id. Returns `undefined` when not found.
 const run = ctx.journal.getRun(runId);
 ```
 
-#### `latestResumableRun(): RunRow | undefined`
+#### `latestResumableRun(opts?: { exclude?: readonly string[] }): RunRow | undefined`
 
 Returns the most recently created run whose status is `"active"`, `"paused"`, or `"budget-stopped"` — the candidate for `resume`. Returns `undefined` when none exists.
 
+`exclude` skips runs by id. The runner passes the runs it drives now, so `resume()` never picks a run that is already running in this process. Omitted or empty, it skips nothing.
+
 ```ts
 const resumable = ctx.journal.latestResumableRun();
+const other = ctx.journal.latestResumableRun({ exclude: [activeRunId] });
 ```
 
 #### `setRunStatus(runId: string, status: RunStatus): void`

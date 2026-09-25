@@ -1,25 +1,28 @@
 /**
- * @file runner pipeline — per-item execution: admit(limits) → gate(journal,
- * atomic) → execute(handler) → persist(store+journal) → report. Owns the
- * runner's single audited dynamic boundary (`isExecutableHandler`) and the
- * per-item retry loop (a retryable attempt re-enters admit+gate, per the
- * durable state machine — `markFailed` returns the item to `queued`).
+ * @file runner pipeline — per-item execution: claim(artifact key) →
+ * admit(limits) → gate(journal, atomic) → execute(handler) →
+ * persist(store+journal) → report. Owns the runner's single audited dynamic
+ * boundary (`isExecutableHandler`) and the per-item retry loop: a retryable
+ * attempt re-enters admit+gate, per the durable state machine (`markFailed`
+ * returns the item to `queued`). The cross-run dedupe claim lives in claim.ts.
  */
 import type { AttemptOutcome, ErrorClass, ItemRow } from "../journal/types";
 import { registryPlugin } from "../registry";
+import { claimArtifact, OPEN_VERDICT, tryReuse } from "./claim";
 import { canonicalJson, sha256Hex } from "./keys";
 import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import { backoffMs, classifyError, isRetryableErrorClass, retryAfterMsOf } from "./retry";
 import type {
   ActiveRun,
+  ClaimVerdict,
   DrainController,
   ExecutableHandler,
   HandlerRequest,
   HandlerResult,
   PlannedItem,
   ResolvedFile,
-  RunEvent,
-  RunnerContext
+  RunnerContext,
+  UnstampedRunEvent
 } from "./types";
 
 /** Discriminated outcome of a single provider attempt. */
@@ -704,8 +707,13 @@ async function runHandler(
   );
 }
 
-/** Sentinel returned by {@link applyOutcome}: `true` means the item reached a terminal state. */
-type OutcomeApplied = { terminal: true } | { terminal: false; attempt: number; waitMs: number };
+/**
+ * Result of {@link applyOutcome}: the item stopped (with the verdict its
+ * artifact claim settles with), or it retries after `waitMs`.
+ */
+type OutcomeApplied =
+  | { terminal: true; verdict: ClaimVerdict }
+  | { terminal: false; attempt: number; waitMs: number };
 
 /**
  * Applies one attempt's outcome: reports the matching stream event for a
@@ -713,8 +721,11 @@ type OutcomeApplied = { terminal: true } | { terminal: false; attempt: number; w
  * `aborted` (the item stays `dispatching` for resume), or — for a
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
- * computed backoff delay. Extracted from {@link executeItem} to keep its
- * loop body flat.
+ * computed backoff delay. A stop carries the item's claim verdict: `done`,
+ * `flagged`, `failed` with its class for a non-retryable failure, or `open`
+ * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
+ * timeout error can pass on a later try, so a follower tries for itself.
+ * Extracted from {@link executeItem} to keep its loop body flat.
  *
  * @param ctx - Runner domain context.
  * @param item - The item the attempt belongs to.
@@ -725,7 +736,9 @@ type OutcomeApplied = { terminal: true } | { terminal: false; attempt: number; w
  * @returns Whether the item reached a terminal state, or the next attempt count and backoff delay.
  * @example
  * ```ts
- * const applied = applyOutcome(ctx, item, maxAttempts, attempt, outcome, report);
+ * // Attempt 1 of 3 hit a retryable 503: the item is re-queued with a backoff.
+ * const retryable = { kind: "retryable", errorClass: "http-5xx", retryAfterMs: undefined } as const;
+ * applyOutcome(ctx, item, 3, 0, retryable, report); // { terminal: false, attempt: 1, waitMs: 500..1000 }
  * ```
  */
 function applyOutcome(
@@ -734,9 +747,10 @@ function applyOutcome(
   maxAttempts: number,
   attempt: number,
   outcome: AttemptOutcomeResult,
-  report: (event: RunEvent) => void
+  report: (event: UnstampedRunEvent) => void
 ): OutcomeApplied {
-  if (outcome.kind === "aborted") return { terminal: true };
+  // Terminal outcomes: report the matching record and stop the item.
+  if (outcome.kind === "aborted") return { terminal: true, verdict: OPEN_VERDICT };
   if (outcome.kind === "done") {
     report({
       type: "item:done",
@@ -744,22 +758,23 @@ function applyOutcome(
       costUsd: outcome.costUsd,
       contentHash: outcome.contentHash
     });
-    return { terminal: true };
+    return { terminal: true, verdict: { kind: "done" } };
   }
   if (outcome.kind === "flagged") {
     report({ type: "item:flagged", itemId: item.id });
-    return { terminal: true };
+    return { terminal: true, verdict: { kind: "flagged" } };
   }
   if (outcome.kind === "terminal-failed") {
     report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { terminal: true };
+    return { terminal: true, verdict: { kind: "failed", errorClass: outcome.errorClass } };
   }
 
+  // Retryable: out of attempts is a terminal failure, else re-queue with a backoff.
   const nextAttempt = attempt + 1;
   if (nextAttempt >= maxAttempts) {
     ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: true });
     report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { terminal: true };
+    return { terminal: true, verdict: OPEN_VERDICT };
   }
 
   ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: false });
@@ -771,36 +786,6 @@ function applyOutcome(
   });
   const waitMs = backoffMs(nextAttempt, ctx.config.retryBaseMs, outcome.retryAfterMs);
   return { terminal: false, attempt: nextAttempt, waitMs };
-}
-
-/**
- * Cross-run reuse (D2): when a `done` artifact with this item's artifact key
- * exists in any run and its bytes are still in the store, completes the item
- * with it at cost 0 — no provider call, no budget reservation.
- *
- * @param ctx - Runner domain context.
- * @param item - The queued item.
- * @param report - Stream callback.
- * @returns True when the item was completed by reuse.
- * @example
- * ```ts
- * if (await tryReuse(ctx, item, report)) return;
- * ```
- */
-async function tryReuse(
-  ctx: RunnerContext,
-  item: ItemRow,
-  report: (event: RunEvent) => void
-): Promise<boolean> {
-  if (item.artifactKey === null) return false;
-
-  const artifact = ctx.journal.findDoneArtifact(item.artifactKey);
-  if (!artifact || !(await ctx.store.has(artifact.contentHash))) return false;
-
-  ctx.journal.reuseDone(item.id, artifact);
-  ctx.log.info("runner:reused", { itemId: item.id });
-  report({ type: "item:done", itemId: item.id, costUsd: 0, contentHash: artifact.contentHash });
-  return true;
 }
 
 /**
@@ -839,18 +824,82 @@ function resolveReferenceFiles(
   return refFiles;
 }
 
+/**
+ * The per-item attempt loop: admit(limits.acquire) → gate(journal,
+ * atomic) → attempt → apply the outcome, looping on retryable failures until
+ * the item stops. Returns the verdict its artifact claim settles with: `open`
+ * when it stopped without a final provider verdict (lane refused, gate
+ * refused, drained, aborted mid-attempt, retryable attempts exhausted).
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The queued item.
+ * @param plan - The item's plan (maxAttempts).
+ * @param request - The resolved request.
+ * @param drain - The run's drain controller.
+ * @param active - The run's live bookkeeping (in-flight counter).
+ * @param report - Stream callback.
+ * @returns The item's claim verdict.
+ * @example
+ * ```ts
+ * const verdict = await runAttempts(ctx, item, plan, request, drain, active, report); // { kind: "done" }
+ * ```
+ */
+async function runAttempts(
+  ctx: RunnerContext,
+  item: ItemRow,
+  plan: PlannedItem,
+  request: HandlerRequest,
+  drain: DrainController,
+  active: ActiveRun,
+  report: (event: UnstampedRunEvent) => void
+): Promise<ClaimVerdict> {
+  let attempt = item.attemptCount;
+  while (!drain.signal.aborted) {
+    active.inFlight += 1;
+    try {
+      const lane = laneOf(item);
+      const admission = await acquireLane(ctx, lane, drain.signal);
+      if (!admission) return OPEN_VERDICT;
+
+      try {
+        const gate = ctx.journal.gateToDispatching(item.id);
+        if (!gate.ok) {
+          if (gate.reason === "budget") drain.triggerBudgetStop();
+          return OPEN_VERDICT;
+        }
+        report({ type: "item:dispatching", itemId: item.id });
+
+        const outcome = await attemptOnce(ctx, item, request, drain.signal);
+        const applied = applyOutcome(ctx, item, plan.maxAttempts, attempt, outcome, report);
+        if (applied.terminal) return applied.verdict;
+
+        attempt = applied.attempt;
+        await delay(applied.waitMs, drain.signal);
+      } finally {
+        admission.release();
+      }
+    } finally {
+      active.inFlight -= 1;
+    }
+  }
+  return OPEN_VERDICT;
+}
+
 /** How {@link executeItem} ended for an item that did not reach a provider outcome. */
 export type ItemSettlement = "settled" | "blocked";
 
 /**
  * Drives one item through the durable pipeline to a terminal outcome:
  * reuse(journal, D2) → wait for `$ref` targets (D10) → resolve references →
- * admit(limits.acquire) → gate(journal.gateToDispatching, atomic) → execute
- * or submit+poll → persist → report, looping on retryable failures (each
- * retry re-enters admit+gate, since `markFailed` returns the item to
- * `queued`) until it reaches `done`/`failed`/`flagged`, exhausts
- * `maxAttempts`, or the drain signal aborts (leaving it `queued`, or
- * `dispatching` when a job was in flight, for a future resume). Reports every
+ * claim the artifact key (cross-run dedupe: wait for, and copy, the verdict
+ * of an item of another run that holds it) → admit(limits.acquire) →
+ * gate(journal.gateToDispatching, atomic) → execute or submit+poll →
+ * persist → report, looping on retryable failures (each retry re-enters
+ * admit+gate, since `markFailed` returns the item to `queued`) until it
+ * reaches `done`/`failed`/`flagged`, exhausts `maxAttempts`, or the drain
+ * signal aborts (leaving it `queued`, or `dispatching` when a job was in
+ * flight, for a future resume). The claim is settled with the item's
+ * verdict in a `finally`, so a thrown bug settles it `open`. Reports every
  * transition via `report`, including the initial `item:queued` marker.
  *
  * @param ctx - Runner domain context.
@@ -858,12 +907,12 @@ export type ItemSettlement = "settled" | "blocked";
  * @param plan - The item's plan (request, maxAttempts, references).
  * @param drain - The run's drain controller (abort + budget-stop signal).
  * @param active - The active run's live bookkeeping (in-flight counter).
- * @param report - Callback invoked with every per-item stream record.
+ * @param report - Callback invoked with every per-item stream record; the run stamps its runId.
  * @param dependencies - Settles once every `$ref` target of this item has settled.
  * @returns `"blocked"` when a `$ref` target did not finish `done`, else `"settled"`.
  * @example
  * ```ts
- * await executeItem(ctx, item, plan, drain, active, report, Promise.resolve());
+ * await executeItem(ctx, item, plan, drain, active, report, Promise.resolve()); // "settled"
  * ```
  */
 export async function executeItem(
@@ -872,7 +921,7 @@ export async function executeItem(
   plan: PlannedItem,
   drain: DrainController,
   active: ActiveRun,
-  report: (event: RunEvent) => void,
+  report: (event: UnstampedRunEvent) => void,
   dependencies: Promise<unknown>
 ): Promise<ItemSettlement> {
   report({ type: "item:queued", itemId: item.id, task: item.task, provider: item.provider });
@@ -885,34 +934,15 @@ export async function executeItem(
   if (!refFiles) return "blocked";
   const request = resolveReferences(plan.request, refFiles, plan.files) as HandlerRequest;
 
-  let attempt = item.attemptCount;
-  while (!drain.signal.aborted) {
-    active.inFlight += 1;
-    try {
-      const lane = laneOf(item);
-      const admission = await acquireLane(ctx, lane, drain.signal);
-      if (!admission) return "settled";
+  // One item per artifact key reaches the provider, across every active run.
+  const settleClaim = await claimArtifact(ctx, item, drain, report);
+  if (!settleClaim) return "settled";
 
-      try {
-        const gate = ctx.journal.gateToDispatching(item.id);
-        if (!gate.ok) {
-          if (gate.reason === "budget") drain.triggerBudgetStop();
-          return "settled";
-        }
-        report({ type: "item:dispatching", itemId: item.id });
-
-        const outcome = await attemptOnce(ctx, item, request, drain.signal);
-        const applied = applyOutcome(ctx, item, plan.maxAttempts, attempt, outcome, report);
-        if (applied.terminal) return "settled";
-
-        attempt = applied.attempt;
-        await delay(applied.waitMs, drain.signal);
-      } finally {
-        admission.release();
-      }
-    } finally {
-      active.inFlight -= 1;
-    }
+  let verdict = OPEN_VERDICT;
+  try {
+    verdict = await runAttempts(ctx, item, plan, request, drain, active, report);
+    return "settled";
+  } finally {
+    settleClaim(verdict);
   }
-  return "settled";
 }

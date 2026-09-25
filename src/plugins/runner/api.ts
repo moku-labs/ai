@@ -1,9 +1,9 @@
 /**
  * @file runner API factory — assembles `run`/`resume`/`estimate`/`status`/
  * `events`/`export` from the domain modules (plan, pipeline, retry, stream,
- * export). Owns run-
- * level orchestration: opening/resuming the single `runs` row, driving every
- * queued item concurrently, coalesced progress, and the terminal transition.
+ * export). Owns run-level orchestration: the `maxActiveRuns` guards,
+ * opening/resuming a `runs` row, driving every queued item concurrently,
+ * coalesced progress, the terminal transition, and closing the run's streams.
  */
 import { buildfilePlugin } from "../buildfile";
 import type { ItemRow, RunRow, RunTotals } from "../journal/types";
@@ -11,19 +11,27 @@ import { exportRun } from "./export";
 import type { ItemSettlement } from "./pipeline";
 import { createDrainController, executeItem } from "./pipeline";
 import { planItems } from "./plan";
-import { clearActiveRun } from "./state";
-import { broadcastEvent, closeAllSubscribers, createEventQueue } from "./stream";
+import { addActiveRun, removeActiveRun } from "./state";
+import { broadcastEvent, closeSubscribers, createEventQueue, stampRunId } from "./stream";
 import type {
   ActiveRun,
   EstimateResult,
   PlannedItem,
+  RunEvent,
   RunnerApi,
   RunnerContext,
   RunOptions,
   RunResult,
   RunResultStatus,
-  RunStatusReport
+  RunStatusReport,
+  Subscriber,
+  UnstampedRunEvent
 } from "./types";
+
+/** Options `run()` accepts next to its {@link RunOptions}. */
+type RunCallOptions = { signal?: AbortSignal; onStart?: (runId: string) => void };
+/** Options `resume()` accepts. */
+type ResumeOptions = RunCallOptions & { runId?: string };
 
 /** Label recorded as a run's `glob` when the caller omitted an explicit pattern. */
 const DEFAULT_GLOB_LABEL = "(default)";
@@ -50,22 +58,109 @@ export function shouldEmitProgress(lastProgressAt: number, now: number): boolean
 }
 
 /**
- * Guards against starting a second concurrent run in this process (M0:
- * single active run per process).
+ * Whether a `maxActiveRuns` value is usable: a whole number of at least 1.
  *
- * @param ctx - Runner domain context.
- * @throws {Error} When a run is already active.
+ * @param value - The configured cap.
+ * @returns True for 1, 2, 3, …
  * @example
  * ```ts
- * ensureNoActiveRun(ctx);
+ * isValidRunCap(1.5); // false
  * ```
  */
-function ensureNoActiveRun(ctx: RunnerContext): void {
-  if (ctx.state.active) {
+function isValidRunCap(value: number): boolean {
+  return Number.isInteger(value) && value >= 1;
+}
+
+/**
+ * The first two guards of `run()` and `resume()`, in order: the cap must be
+ * a whole number >= 1, and fewer than `maxActiveRuns` runs may be active.
+ * With the default cap of 1 the refusal's first line is the one-run message.
+ *
+ * @param ctx - Runner domain context.
+ * @throws {Error} When `maxActiveRuns` is invalid or already reached.
+ * @example
+ * ```ts
+ * ensureRunCapacity(ctx); // throws "[ai] A run is already active: run-a." at the default cap
+ * ```
+ */
+function ensureRunCapacity(ctx: RunnerContext): void {
+  const cap = ctx.config.maxActiveRuns;
+  if (!isValidRunCap(cap)) {
     throw new Error(
-      `[ai] A run is already active: ${ctx.state.active.runId}.\n  Wait for it to finish before starting another run() or resume().`
+      `[ai] runner.maxActiveRuns must be a whole number >= 1, got ${String(cap)}.\n  Fix the runner config.`
     );
   }
+
+  if (ctx.state.active.size >= cap) {
+    const activeIds = [...ctx.state.active.keys()].join(", ");
+    throw new Error(
+      `[ai] A run is already active: ${activeIds}.\n  maxActiveRuns is ${cap}. Wait for a run to finish, or raise runner.maxActiveRuns.`
+    );
+  }
+}
+
+/**
+ * The third guard of `resume()`: a run this process drives now is followed,
+ * never resumed a second time. Reachable only when the cap is above 1.
+ *
+ * @param ctx - Runner domain context.
+ * @param runId - The run asked for.
+ * @throws {Error} When `runId` is active in this process.
+ * @example
+ * ```ts
+ * ensureNotActive(ctx, "run-a"); // throws while run-a is active here
+ * ```
+ */
+function ensureNotActive(ctx: RunnerContext, runId: string): void {
+  if (ctx.state.active.has(runId)) {
+    throw new Error(
+      `[ai] Run is already active in this process: ${runId}.\n  Follow it with events({ runId }) instead of resuming it.`
+    );
+  }
+}
+
+/**
+ * Registers a run as active and tells the caller its id. `onStart` runs
+ * synchronously, before the first `await` of `run()`/`resume()`, so a stream
+ * it opens sees every record of the run. Call it inside the run's `try`: a
+ * throwing `onStart` fails the run like any other error.
+ *
+ * @param ctx - Runner domain context.
+ * @param runId - The run starting now.
+ * @param opts - The caller's signal and start callback.
+ * @returns The run's live bookkeeping.
+ * @example
+ * ```ts
+ * const active = startActiveRun(ctx, run.id, opts); // opts.onStart(run.id) already ran
+ * ```
+ */
+function startActiveRun(
+  ctx: RunnerContext,
+  runId: string,
+  opts: RunCallOptions | undefined
+): ActiveRun {
+  const active = addActiveRun(ctx.state, runId, opts?.signal);
+  opts?.onStart?.(runId);
+  return active;
+}
+
+/**
+ * Ends a run in this process: frees its slot, closes its streams (and the
+ * all-runs streams when it was the last active run), then resolves the run's
+ * `settled`, so a waiting `app.stop()` continues.
+ *
+ * @param ctx - Runner domain context.
+ * @param runId - The run that ended.
+ * @example
+ * ```ts
+ * finishActiveRun(ctx, run.id); // events({ runId: run.id }) consumers complete
+ * ```
+ */
+function finishActiveRun(ctx: RunnerContext, runId: string): void {
+  const active = ctx.state.active.get(runId);
+  removeActiveRun(ctx.state, runId);
+  closeSubscribers(ctx.state, runId);
+  active?.settle();
 }
 
 /**
@@ -91,20 +186,20 @@ function requireRun(ctx: RunnerContext, runId: string): RunRow {
 }
 
 /**
- * Computes this run's totals, pushes a `"progress"` stream record to every
- * subscriber, and emits the coalesced `run:progress` bus event.
+ * Computes this run's totals, pushes a `"progress"` stream record to the
+ * consumers that follow the run, and emits the coalesced `run:progress` bus
+ * event.
  *
  * @param ctx - Runner domain context.
  * @param runId - The run to compute totals for.
- * @param active - The active run's live bookkeeping.
  * @example
  * ```ts
- * pushProgress(ctx, runId, active);
+ * pushProgress(ctx, run.id); // consumers get { type: "progress", runId: run.id, totals }
  * ```
  */
-function pushProgress(ctx: RunnerContext, runId: string, active: ActiveRun): void {
+function pushProgress(ctx: RunnerContext, runId: string): void {
   const totals = ctx.journal.totals(runId);
-  broadcastEvent(active, { type: "progress", totals });
+  broadcastEvent(ctx.state, { type: "progress", runId, totals });
   ctx.emit("run:progress", {
     runId,
     total: totals.total,
@@ -122,21 +217,19 @@ function pushProgress(ctx: RunnerContext, runId: string, active: ActiveRun): voi
  *
  * @param ctx - Runner domain context.
  * @param run - The run that failed.
- * @param active - The active run's live bookkeeping.
  * @param error - The caught error.
  * @returns The failed run's result.
  * @example
  * ```ts
- * return failRun(ctx, run, active, error);
+ * return failRun(ctx, run, error); // { runId: run.id, status: "failed", totals }
  * ```
  */
-function failRun(ctx: RunnerContext, run: RunRow, active: ActiveRun, error: unknown): RunResult {
+function failRun(ctx: RunnerContext, run: RunRow, error: unknown): RunResult {
   const totals = ctx.journal.totals(run.id);
   ctx.journal.setRunStatus(run.id, "failed");
   const message = error instanceof Error ? error.message : String(error);
 
-  broadcastEvent(active, { type: "terminal", status: "failed", totals });
-  closeAllSubscribers(active);
+  broadcastEvent(ctx.state, { type: "terminal", runId: run.id, status: "failed", totals });
   ctx.emit("run:failed", { runId: run.id, error: message });
 
   return { runId: run.id, status: "failed", totals };
@@ -174,7 +267,7 @@ function finalStatusOf(
  * @param planned - Planned items, dependencies first.
  * @param drain - The run's drain controller.
  * @param active - The active run's live bookkeeping.
- * @param report - Stream callback.
+ * @param report - Stream callback; the run stamps its runId.
  * @returns One settlement per started item.
  * @example
  * ```ts
@@ -187,7 +280,7 @@ function startItems(
   planned: PlannedItem[],
   drain: ReturnType<typeof createDrainController>,
   active: ActiveRun,
-  report: (event: Parameters<typeof broadcastEvent>[1]) => void
+  report: (event: UnstampedRunEvent) => void
 ): Promise<ItemSettlement[]> {
   const queuedByKey = new Map(queued.map(item => [item.planningKey, item] as const));
   const settledByKey = new Map<string, Promise<ItemSettlement>>();
@@ -217,7 +310,7 @@ function startItems(
 /**
  * Drives every queued item of a run concurrently to a terminal outcome,
  * coalescing progress and delivering the final `"terminal"` stream record
- * and bus event.
+ * and bus event. The drain fires on the caller's signal or on `app.stop()`.
  *
  * @param ctx - Runner domain context.
  * @param run - The run row (used for its id and `maxCostUsd`).
@@ -238,38 +331,40 @@ async function drivePipeline(
   planned: PlannedItem[]
 ): Promise<RunResult> {
   const queued = items.filter(item => item.status === "queued");
-  const drain = createDrainController(active.signal);
+  // A caller abort and app.stop() drain the run the same way.
+  const stopSignals = active.signal ? [active.signal, active.stop.signal] : [active.stop.signal];
+  const drain = createDrainController(AbortSignal.any(stopSignals));
 
   let lastProgressAt = 0;
   /**
-   * Broadcasts one per-item stream record to every subscriber, then
-   * opportunistically flushes a throttled `run:progress` update (≤1 per
-   * {@link PROGRESS_COALESCE_MS}).
+   * Stamps one per-item record with this run's id and broadcasts it to the
+   * consumers that follow the run, then opportunistically flushes a
+   * throttled `run:progress` update (≤1 per {@link PROGRESS_COALESCE_MS}).
    *
-   * @param event - The per-item stream record to broadcast.
+   * @param event - The per-item stream record, without its runId.
    * @example
    * ```ts
-   * report({ type: "item:dispatching", itemId: "i1" });
+   * report({ type: "item:dispatching", itemId: "i1" }); // consumers get it with runId: run.id
    * ```
    */
-  const report = (event: Parameters<typeof broadcastEvent>[1]): void => {
-    broadcastEvent(active, event);
+  const report = (event: UnstampedRunEvent): void => {
+    const stamped: RunEvent = stampRunId(run.id, event);
+    broadcastEvent(ctx.state, stamped);
     const now = Date.now();
     if (!shouldEmitProgress(lastProgressAt, now)) return;
     lastProgressAt = now;
-    pushProgress(ctx, run.id, active);
+    pushProgress(ctx, run.id);
   };
 
   const settlements = await startItems(ctx, queued, planned, drain, active, report);
   const blocked = settlements.filter(settlement => settlement === "blocked").length;
 
-  pushProgress(ctx, run.id, active);
+  pushProgress(ctx, run.id);
   const totals = ctx.journal.totals(run.id);
   const status = finalStatusOf(drain, blocked);
   ctx.journal.setRunStatus(run.id, status);
 
-  broadcastEvent(active, { type: "terminal", status, totals });
-  closeAllSubscribers(active);
+  broadcastEvent(ctx.state, { type: "terminal", runId: run.id, status, totals });
 
   if (status === "budget-stopped") {
     ctx.emit("run:budget-stop", {
@@ -325,24 +420,27 @@ async function dryRunEstimate(ctx: RunnerContext, options: RunOptions): Promise<
  * Executes one durable run: opens a single `runs` journal row spanning
  * every glob-matched build file, plans and inserts every item, then drives
  * the pipeline to completion. `dryRun: true` short-circuits to
- * {@link dryRunEstimate} — no journal writes.
+ * {@link dryRunEstimate} — no journal writes. The run is active from before
+ * its first `await` until it settles; `opts.onStart` gets its id then.
  *
  * @param ctx - Runner domain context.
  * @param options - Run options (glob, budget cap, dry-run).
- * @param opts - Optional external abort signal for a clean pause.
+ * @param opts - Optional external abort signal and start callback.
  * @param opts.signal - Abort signal; on abort, stop admitting queued items and resolve `{ status: "paused" }` once in-flight items drain.
+ * @param opts.onStart - Called once, synchronously, with the new run id.
  * @returns The run's final result.
+ * @throws {Error} When `maxActiveRuns` is invalid or already reached.
  * @example
  * ```ts
- * const result = await run(ctx, { files: "voice/*.moku.yaml" });
+ * const result = await run(ctx, { files: "voice/*.moku.yaml" }); // { runId, status: "done", totals }
  * ```
  */
 async function run(
   ctx: RunnerContext,
   options: RunOptions,
-  opts?: { signal?: AbortSignal }
+  opts?: RunCallOptions
 ): Promise<RunResult> {
-  ensureNoActiveRun(ctx);
+  ensureRunCapacity(ctx);
   if (options.dryRun) return dryRunEstimate(ctx, options);
 
   const globLabel = options.files ?? DEFAULT_GLOB_LABEL;
@@ -351,15 +449,8 @@ async function run(
       ? ctx.journal.openRun({ glob: globLabel })
       : ctx.journal.openRun({ glob: globLabel, maxCostUsd: options.maxCostUsd });
 
-  const active: ActiveRun = {
-    runId: openedRun.id,
-    signal: opts?.signal,
-    subscribers: new Set(),
-    inFlight: 0
-  };
-  ctx.state.active = active;
-
   try {
+    const active = startActiveRun(ctx, openedRun.id, opts);
     const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
     const planned = await planItems(ctx, builds);
     const items = ctx.journal.insertItems(
@@ -368,50 +459,61 @@ async function run(
     );
     return await drivePipeline(ctx, openedRun, items, active, planned);
   } catch (error) {
-    return failRun(ctx, openedRun, active, error);
+    return failRun(ctx, openedRun, error);
   } finally {
-    clearActiveRun(ctx.state);
+    finishActiveRun(ctx, openedRun.id);
   }
 }
 
 /**
- * Continues the latest resumable run (or a specific one by id):
- * `requeueDispatching` re-queues any items left mid-flight, then re-enters
- * the pipeline for every currently queued item. Re-planning is idempotent
- * (`insertItems` no-ops on existing planning keys), so already-`done` items
- * are never re-billed.
+ * Picks the run `resume()` continues: the given id, else the newest
+ * resumable run that this process does not drive now.
  *
  * @param ctx - Runner domain context.
- * @param opts - Optional run id (else the latest resumable run) and abort signal.
- * @param opts.runId - Run id to resume; defaults to the latest resumable run.
- * @param opts.signal - Abort signal; on abort, stop admitting queued items and resolve `{ status: "paused" }` once in-flight items drain.
- * @returns The run's final result.
- * @throws {Error} When no resumable run exists.
+ * @param runId - The run asked for, if any.
+ * @returns The target run row.
+ * @throws {Error} When the given run does not exist, or no run can be resumed.
  * @example
  * ```ts
- * const result = await resume(ctx);
+ * resumeTarget(ctx, undefined); // the newest paused run, skipping the active ones
  * ```
  */
-async function resume(
-  ctx: RunnerContext,
-  opts?: { runId?: string; signal?: AbortSignal }
-): Promise<RunResult> {
-  ensureNoActiveRun(ctx);
-  const targetRun = opts?.runId ? requireRun(ctx, opts.runId) : ctx.journal.latestResumableRun();
+function resumeTarget(ctx: RunnerContext, runId: string | undefined): RunRow {
+  const exclude = [...ctx.state.active.keys()];
+  const targetRun = runId ? requireRun(ctx, runId) : ctx.journal.latestResumableRun({ exclude });
   if (!targetRun) {
     throw new Error("[ai] No resumable run found.\n  Start a new run with run() instead.");
   }
+  return targetRun;
+}
+
+/**
+ * Continues the latest resumable run (or a specific one by id), also while
+ * other runs are active: `requeueDispatching` re-queues any items left
+ * mid-flight, then re-enters the pipeline for every currently queued item.
+ * Re-planning is idempotent (`insertItems` no-ops on existing planning
+ * keys), so already-`done` items are never re-billed.
+ *
+ * @param ctx - Runner domain context.
+ * @param opts - Optional run id (else the newest resumable run not active here), abort signal and start callback.
+ * @param opts.runId - Run id to resume; defaults to the newest resumable run this process does not drive.
+ * @param opts.signal - Abort signal; on abort, stop admitting queued items and resolve `{ status: "paused" }` once in-flight items drain.
+ * @param opts.onStart - Called once, synchronously, with the run id.
+ * @returns The run's final result.
+ * @throws {Error} When `maxActiveRuns` is invalid or reached, the run is already active here, or no resumable run exists.
+ * @example
+ * ```ts
+ * const result = await resume(ctx); // continues the newest paused run
+ * ```
+ */
+async function resume(ctx: RunnerContext, opts?: ResumeOptions): Promise<RunResult> {
+  ensureRunCapacity(ctx);
+  if (opts?.runId) ensureNotActive(ctx, opts.runId);
+  const targetRun = resumeTarget(ctx, opts?.runId);
   ctx.journal.requeueDispatching(targetRun.id);
 
-  const active: ActiveRun = {
-    runId: targetRun.id,
-    signal: opts?.signal,
-    subscribers: new Set(),
-    inFlight: 0
-  };
-  ctx.state.active = active;
-
   try {
+    const active = startActiveRun(ctx, targetRun.id, opts);
     const pattern = targetRun.glob === DEFAULT_GLOB_LABEL ? undefined : targetRun.glob;
     const builds = await ctx.require(buildfilePlugin).loadGlob(pattern);
     const planned = await planItems(ctx, builds);
@@ -422,9 +524,9 @@ async function resume(
     const items = ctx.journal.listItems(targetRun.id, { status: "queued" });
     return await drivePipeline(ctx, targetRun, items, active, planned);
   } catch (error) {
-    return failRun(ctx, targetRun, active, error);
+    return failRun(ctx, targetRun, error);
   } finally {
-    clearActiveRun(ctx.state);
+    finishActiveRun(ctx, targetRun.id);
   }
 }
 
@@ -470,20 +572,21 @@ async function estimate(ctx: RunnerContext, options: { files?: string }): Promis
 
 /**
  * Reads a read-only status snapshot for a run: the given `runId`, else the
- * active run, else the latest resumable run. Uses `journal.readSnapshot`,
- * which is safe to call from a second process.
+ * newest active run, else the latest resumable run. Uses
+ * `journal.readSnapshot`, which is safe to call from a second process.
  *
  * @param ctx - Runner domain context.
- * @param runId - Run id to report on; defaults to the active/latest resumable run.
+ * @param runId - Run id to report on; defaults to the newest active/latest resumable run.
  * @returns The run's status report.
  * @throws {Error} When no run id is given and none can be inferred.
  * @example
  * ```ts
- * const report = status(ctx);
+ * const report = status(ctx); // { runId, status: "active", totals, updatedAt }
  * ```
  */
 function status(ctx: RunnerContext, runId?: string): RunStatusReport {
-  const targetId = runId ?? ctx.state.active?.runId ?? ctx.journal.latestResumableRun()?.id;
+  const newestActive = [...ctx.state.active.keys()].at(-1);
+  const targetId = runId ?? newestActive ?? ctx.journal.latestResumableRun()?.id;
   if (!targetId) {
     throw new Error("[ai] No run to report status for.\n  Pass a runId, or start a run first.");
   }
@@ -499,103 +602,141 @@ function status(ctx: RunnerContext, runId?: string): RunStatusReport {
 }
 
 /**
- * Opens a per-item detail stream for the active run. Returns an
- * already-closed empty stream when no run is active. See stream.ts for the
- * bounded-buffer/overflow/coalescing contract.
+ * Whether a stream opened now has records to follow: the given run is
+ * active, or (no run id) any run is active.
  *
  * @param ctx - Runner domain context.
+ * @param runId - The run to follow, or undefined for every run.
+ * @returns True when the stream stays open.
+ * @example
+ * ```ts
+ * hasRunToFollow(ctx, "run-unknown"); // false
+ * ```
+ */
+function hasRunToFollow(ctx: RunnerContext, runId: string | undefined): boolean {
+  return runId === undefined ? ctx.state.active.size > 0 : ctx.state.active.has(runId);
+}
+
+/**
+ * Opens a per-item detail stream: one run's records (closed after that run
+ * ends), or every run's records (closed once no run is active). Returns an
+ * already-closed empty stream when there is nothing to follow. See stream.ts
+ * for the bounded-buffer/overflow/coalescing contract.
+ *
+ * @param ctx - Runner domain context.
+ * @param opts - Optional run to follow.
+ * @param opts.runId - Follow only this run.
  * @returns An async iterable of per-item stream records.
  * @example
  * ```ts
- * for await (const event of events(ctx)) ctx.log.debug("runner:event", event);
+ * for await (const event of events(ctx, { runId })) ctx.log.debug("runner:event", event);
  * ```
  */
-function events(ctx: RunnerContext): ReturnType<typeof createEventQueue> {
-  const queue = createEventQueue(ctx.config.eventBufferSize);
-  if (ctx.state.active) {
-    ctx.state.active.subscribers.add(queue);
-  } else {
+function events(
+  ctx: RunnerContext,
+  opts?: { runId?: string }
+): ReturnType<typeof createEventQueue> {
+  const runId = opts?.runId;
+  /**
+   * Removes this consumer from runner state when it stops iterating early.
+   *
+   * @example
+   * ```ts
+   * for await (const event of events(ctx)) break; // the consumer is no longer broadcast to
+   * ```
+   */
+  const detach = (): void => {
+    ctx.state.subscribers.delete(subscriber);
+  };
+  const queue = createEventQueue(ctx.config.eventBufferSize, detach);
+  const subscriber: Subscriber = { queue, runId };
+  if (!hasRunToFollow(ctx, runId)) {
     queue.close();
+    return queue;
   }
+
+  ctx.state.subscribers.add(subscriber);
   return queue;
 }
 
 /**
  * Creates the runner API surface (run/resume/estimate/status/events/export),
- * binding each method to the domain context.
+ * binding each method to the domain context. The contract of each method is
+ * documented on {@link RunnerApi}.
  *
  * @param ctx - Runner domain context (config, state, emit, require, core APIs).
  * @returns The runner's public API.
  * @example
  * ```ts
- * const api = createRunnerApi(ctx);
+ * createPlugin("runner", { api: ctx => createRunnerApi(ctx) }); // app.runner.run(...)
  * ```
  */
 export function createRunnerApi(ctx: RunnerContext): RunnerApi {
   return {
     /**
-     * Executes one durable run. See {@link run}.
+     * Executes one durable run. See {@link RunnerApi.run}.
      *
      * @param options - Run options (glob, budget cap, dry-run).
-     * @param opts - Optional external abort signal for a clean pause.
+     * @param opts - Optional abort signal and start callback.
      * @returns The run's final result.
      * @example
      * ```ts
-     * await app.runner.run({ files: "voice/*.moku.yaml" });
+     * await app.runner.run({ files: "voice/*.moku.yaml" }); // { runId, status: "done", totals }
      * ```
      */
     run: (options, opts) => run(ctx, options, opts),
     /**
-     * Continues the latest (or a specific) resumable run. See {@link resume}.
+     * Continues a resumable run. See {@link RunnerApi.resume}.
      *
-     * @param opts - Optional run id and abort signal.
+     * @param opts - Optional run id, abort signal and start callback.
      * @returns The run's final result.
      * @example
      * ```ts
-     * await app.runner.resume();
+     * await app.runner.resume({ runId: "7f3c…" }); // { runId: "7f3c…", status: "done", totals }
      * ```
      */
     resume: opts => resume(ctx, opts),
     /**
-     * Computes the same per-item estimate the budget gate uses. See {@link estimate}.
+     * Computes the budget gate's per-item estimate. See {@link RunnerApi.estimate}.
      *
      * @param options - Glob options.
      * @returns The per-task/provider cost breakdown and its total.
      * @example
      * ```ts
-     * await app.runner.estimate({ files: "voice/*.moku.yaml" });
+     * await app.runner.estimate({ files: "voice/*.moku.yaml" }); // { lines, totalUsd }
      * ```
      */
     estimate: options => estimate(ctx, options),
     /**
-     * Reads a read-only status snapshot. See {@link status}.
+     * Reads a read-only status snapshot. See {@link RunnerApi.status}.
      *
-     * @param runId - Run id to report on; defaults to the active/latest resumable run.
+     * @param runId - Run id; default the newest active run, else the latest resumable run.
      * @returns The run's status report.
      * @example
      * ```ts
-     * app.runner.status();
+     * app.runner.status(); // { runId, status: "active", totals, updatedAt }
      * ```
      */
     status: runId => status(ctx, runId),
     /**
-     * Opens a per-item detail stream for the active run. See {@link events}.
+     * Opens a per-item stream for one run or all runs. See {@link RunnerApi.events}.
      *
+     * @param opts - Optional run to follow.
      * @returns An async iterable of per-item stream records.
      * @example
      * ```ts
-     * for await (const event of app.runner.events()) ctx.log.debug("runner:event", event);
+     * for await (const event of app.runner.events({ runId: "7f3c…" })) render(event);
      * ```
      */
-    events: () => events(ctx),
+    events: opts => events(ctx, opts),
     /**
-     * Copies a run's done artifacts to named files. See {@link exportRun}.
+     * Copies a run's done artifacts to named files. See {@link RunnerApi.export}.
      *
      * @param opts - Run id (default: the newest run) and output directory (default "out").
      * @returns The files written and the labels skipped.
      * @example
      * ```ts
-     * await app.runner.export({ outDir: "out" });
+     * await app.runner.export({ outDir: "out" }); // { runId, outDir, files, skipped }
      * ```
      */
     export: opts => exportRun(ctx, opts)

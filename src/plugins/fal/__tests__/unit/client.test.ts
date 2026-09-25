@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FalRequest } from "../../client";
-import { falFetch, parseJson } from "../../client";
+import { falFetch, jobFailure, parseJson } from "../../client";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
 import { callsOf, jsonResponse, stubFetch, TEST_KEY } from "./fixtures";
 
@@ -220,5 +220,36 @@ describe("parseJson", () => {
     expect(() => parseJson(response, "submit response")).toThrow(
       /^\[ai\] fal returned an unreadable submit response\./
     );
+  });
+});
+
+describe("content-policy words in fal's text", () => {
+  it.each([
+    "The image contains sensitive content.",
+    "Real-person LIKENESS is not allowed.",
+    "NSFW content detected",
+    "Rejected by Moderation."
+  ])("an HTTP error with text %j is flagged", async text => {
+    stubFetch(jsonResponse(400, { detail: text }));
+    const error = await rejectionOf();
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect((error as FlaggedProviderError).kind).toBe("content-policy");
+  });
+
+  it("a finished job whose error names moderation is flagged", () => {
+    const error = jobFailure({ status: "COMPLETED", error: "Output blocked by moderation" });
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+  });
+
+  it("unrelated text stays terminal", async () => {
+    stubFetch(jsonResponse(400, { detail: "duration must be one of 4s, 6s, 8s" }));
+    const error = await rejectionOf();
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).not.toBeInstanceOf(FlaggedProviderError);
+  });
+
+  it("an error with no text stays terminal", async () => {
+    stubFetch(jsonResponse(400, {}));
+    expect(await rejectionOf()).toBeInstanceOf(TerminalProviderError);
   });
 });

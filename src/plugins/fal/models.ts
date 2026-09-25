@@ -20,7 +20,14 @@ export type FalAlias =
   | "minimax-h3"
   | "minimax-h3-max-ref"
   | "kling-3-pro"
-  | "kling-o3-ref";
+  | "kling-o3-ref"
+  | "seedance-2.0-mini"
+  | "seedance-2.0-mini-ref"
+  | "seedance-2.0-ref"
+  | "wan-3.0-ref"
+  | "veo-3.1-fast"
+  | "vidu-q3"
+  | "vidu-q3-ref";
 
 /**
  * Everything a body builder needs, already resolved: uploaded URLs,
@@ -72,7 +79,8 @@ export type SeedanceImageBody = {
 };
 
 /**
- * Request body of `bytedance/seedance-2.5/reference-to-video`.
+ * Request body of `bytedance/seedance-2.5/reference-to-video`, also sent to
+ * the Seedance 2.0 and 2.0 Mini reference-to-video endpoints.
  *
  * @example
  * ```ts
@@ -163,6 +171,104 @@ export type KlingReferenceBody = {
 };
 
 /**
+ * Request body of `bytedance/seedance-2.0/image-to-video` and its Mini variant:
+ * like Seedance 2.5 plus `aspect_ratio`.
+ *
+ * @example
+ * ```ts
+ * const body: Seedance20ImageBody = {
+ *   prompt: "p", image_url: "u", duration: "5", resolution: "720p", aspect_ratio: "9:16", generate_audio: false
+ * };
+ * ```
+ */
+export type Seedance20ImageBody = {
+  prompt: string;
+  image_url: string;
+  duration: string;
+  resolution: string;
+  aspect_ratio: string;
+  generate_audio: boolean;
+};
+
+/**
+ * Request body of `alibaba/wan-3.0/reference-to-video`: no first-frame field,
+ * so the first frame leads `reference_image_urls`.
+ *
+ * @example
+ * ```ts
+ * const body: WanReferenceBody = {
+ *   prompt: "p", reference_image_urls: ["u"], duration: 5, resolution: "720p", aspect_ratio: "9:16", audio: false
+ * };
+ * ```
+ */
+export type WanReferenceBody = {
+  prompt: string;
+  reference_image_urls: string[];
+  reference_audio_urls?: string[];
+  duration: number;
+  resolution: string;
+  aspect_ratio: string;
+  audio: boolean;
+};
+
+/**
+ * Request body of `fal-ai/veo3.1/fast/image-to-video`: duration in the form "8s".
+ *
+ * @example
+ * ```ts
+ * const body: VeoImageBody = {
+ *   prompt: "p", image_url: "u", duration: "8s", resolution: "720p", aspect_ratio: "9:16", generate_audio: false
+ * };
+ * ```
+ */
+export type VeoImageBody = {
+  prompt: string;
+  image_url: string;
+  duration: `${number}s`;
+  resolution: string;
+  aspect_ratio: string;
+  generate_audio: boolean;
+  negative_prompt?: string;
+};
+
+/**
+ * Request body of `fal-ai/vidu/q3/image-to-video`: no aspect field, the clip
+ * takes the first frame's aspect.
+ *
+ * @example
+ * ```ts
+ * const body: ViduImageBody = { prompt: "p", image_url: "u", duration: 5, resolution: "720p", audio: false };
+ * ```
+ */
+export type ViduImageBody = {
+  prompt: string;
+  image_url: string;
+  duration: number;
+  resolution: string;
+  audio: boolean;
+};
+
+/**
+ * Request body of `fal-ai/vidu/q3/reference-to-video/mix`: the first frame
+ * leads `reference_image_urls`.
+ *
+ * @example
+ * ```ts
+ * const body: ViduReferenceBody = {
+ *   prompt: "p", reference_image_urls: ["u"], duration: 5, resolution: "720p", aspect_ratio: "9:16", audio: false
+ * };
+ * ```
+ */
+export type ViduReferenceBody = {
+  prompt: string;
+  reference_image_urls: string[];
+  duration: number;
+  resolution: string;
+  aspect_ratio: string;
+  audio: boolean;
+};
+
+/**
  * Any model's typed request body, before `request.params` is merged in.
  *
  * @example
@@ -176,7 +282,12 @@ export type FalBody =
   | MinimaxImageBody
   | MinimaxMaxReferenceBody
   | KlingImageBody
-  | KlingReferenceBody;
+  | KlingReferenceBody
+  | Seedance20ImageBody
+  | WanReferenceBody
+  | VeoImageBody
+  | ViduImageBody
+  | ViduReferenceBody;
 
 /**
  * One catalog row: fal endpoint, default resolution, audio capability,
@@ -238,6 +349,15 @@ const MINIMAX_RESOLUTION = "768P";
 /** MiniMax H3 Max prompt rewriting mode: required by the schema; fal's documented default. */
 const MINIMAX_PROMPT_EXPANSION = "balanced";
 
+/** Wan 3.0 default resolution (fal's own default is the pricier 1080p). */
+const WAN_RESOLUTION = "720p";
+
+/** Veo 3.1 Fast default resolution. */
+const VEO_RESOLUTION = "720p";
+
+/** Vidu Q3 default resolution. */
+const VIDU_RESOLUTION = "720p";
+
 /** Aspect ratio used when the request names none. */
 const DEFAULT_ASPECT = "9:16";
 
@@ -265,7 +385,8 @@ function seedanceImageBody(input: BodyInput): SeedanceImageBody {
 }
 
 /**
- * Seedance 2.5 reference-to-video body: the first frame leads `image_urls`.
+ * Seedance reference-to-video body (2.5, 2.0 and 2.0 Mini): the first frame
+ * leads `image_urls`; `audio_urls` only when there are audio refs.
  *
  * @param input - Resolved body input.
  * @returns The request body.
@@ -373,6 +494,116 @@ function klingReferenceBody(input: BodyInput): KlingReferenceBody {
 }
 
 /**
+ * Seedance 2.0 (and 2.0 Mini) image-to-video body: string duration, `aspect_ratio` sent.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * seedance20ImageBody(input); // => { prompt, image_url, duration: "5", resolution: "720p", aspect_ratio: "9:16", generate_audio }
+ * ```
+ */
+function seedance20ImageBody(input: BodyInput): Seedance20ImageBody {
+  return {
+    prompt: input.prompt,
+    image_url: input.imageUrl,
+    duration: String(input.seconds),
+    resolution: input.resolution ?? SEEDANCE_RESOLUTION,
+    aspect_ratio: input.aspect,
+    generate_audio: input.audio
+  };
+}
+
+/**
+ * Wan 3.0 reference-to-video body: the first frame leads `reference_image_urls`,
+ * integer duration, `reference_audio_urls` only when there are audio refs.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * wanReferenceBody(input); // => { prompt, reference_image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
+ * ```
+ */
+function wanReferenceBody(input: BodyInput): WanReferenceBody {
+  const body: WanReferenceBody = {
+    prompt: input.prompt,
+    reference_image_urls: [input.imageUrl, ...input.refUrls],
+    duration: input.seconds,
+    resolution: input.resolution ?? WAN_RESOLUTION,
+    aspect_ratio: input.aspect,
+    audio: input.audio
+  };
+  if (input.audioRefUrls.length > 0) body.reference_audio_urls = input.audioRefUrls;
+  return body;
+}
+
+/**
+ * Veo 3.1 Fast image-to-video body: duration as "4s" | "6s" | "8s",
+ * `negative_prompt` only when given.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * veoImageBody(input); // => { prompt, image_url, duration: "8s", resolution: "720p", aspect_ratio: "9:16", generate_audio }
+ * ```
+ */
+function veoImageBody(input: BodyInput): VeoImageBody {
+  const body: VeoImageBody = {
+    prompt: input.prompt,
+    image_url: input.imageUrl,
+    duration: `${input.seconds}s`,
+    resolution: input.resolution ?? VEO_RESOLUTION,
+    aspect_ratio: input.aspect,
+    generate_audio: input.audio
+  };
+  if (input.negative !== undefined) body.negative_prompt = input.negative;
+  return body;
+}
+
+/**
+ * Vidu Q3 image-to-video body: integer duration, the aspect follows the image.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * viduImageBody(input); // => { prompt, image_url, duration: 5, resolution: "720p", audio }
+ * ```
+ */
+function viduImageBody(input: BodyInput): ViduImageBody {
+  return {
+    prompt: input.prompt,
+    image_url: input.imageUrl,
+    duration: input.seconds,
+    resolution: input.resolution ?? VIDU_RESOLUTION,
+    audio: input.audio
+  };
+}
+
+/**
+ * Vidu Q3 mix reference-to-video body: the first frame leads `reference_image_urls`.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * viduReferenceBody(input); // => { prompt, reference_image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
+ * ```
+ */
+function viduReferenceBody(input: BodyInput): ViduReferenceBody {
+  return {
+    prompt: input.prompt,
+    reference_image_urls: [input.imageUrl, ...input.refUrls],
+    duration: input.seconds,
+    resolution: input.resolution ?? VIDU_RESOLUTION,
+    aspect_ratio: input.aspect,
+    audio: input.audio
+  };
+}
+
+/**
  * The model catalog, in the order `info().models` and error messages list it.
  *
  * @example
@@ -426,6 +657,62 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     maxRefs: 4,
     maxAudioRefs: 0,
     body: klingReferenceBody
+  },
+  "seedance-2.0-mini": {
+    endpoint: "bytedance/seedance-2.0/mini/image-to-video",
+    resolution: SEEDANCE_RESOLUTION,
+    audio: true,
+    maxRefs: 0,
+    maxAudioRefs: 0,
+    body: seedance20ImageBody
+  },
+  "seedance-2.0-mini-ref": {
+    endpoint: "bytedance/seedance-2.0/mini/reference-to-video",
+    resolution: SEEDANCE_RESOLUTION,
+    audio: true,
+    maxRefs: 8,
+    maxAudioRefs: 3,
+    body: seedanceReferenceBody
+  },
+  "seedance-2.0-ref": {
+    endpoint: "bytedance/seedance-2.0/reference-to-video",
+    resolution: SEEDANCE_RESOLUTION,
+    audio: true,
+    maxRefs: 8,
+    maxAudioRefs: 3,
+    body: seedanceReferenceBody
+  },
+  "wan-3.0-ref": {
+    endpoint: "alibaba/wan-3.0/reference-to-video",
+    resolution: WAN_RESOLUTION,
+    audio: true,
+    maxRefs: 9,
+    maxAudioRefs: 5,
+    body: wanReferenceBody
+  },
+  "veo-3.1-fast": {
+    endpoint: "fal-ai/veo3.1/fast/image-to-video",
+    resolution: VEO_RESOLUTION,
+    audio: true,
+    maxRefs: 0,
+    maxAudioRefs: 0,
+    body: veoImageBody
+  },
+  "vidu-q3": {
+    endpoint: "fal-ai/vidu/q3/image-to-video",
+    resolution: VIDU_RESOLUTION,
+    audio: true,
+    maxRefs: 0,
+    maxAudioRefs: 0,
+    body: viduImageBody
+  },
+  "vidu-q3-ref": {
+    endpoint: "fal-ai/vidu/q3/reference-to-video/mix",
+    resolution: VIDU_RESOLUTION,
+    audio: true,
+    maxRefs: 3,
+    maxAudioRefs: 0,
+    body: viduReferenceBody
   }
 };
 
@@ -435,7 +722,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @returns Alias list.
  * @example
  * ```ts
- * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "kling-3-pro", "kling-o3-ref"]
+ * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "kling-3-pro", "kling-o3-ref", "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref"]
  * ```
  */
 export function falAliases(): string[] {

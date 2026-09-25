@@ -29,8 +29,8 @@ the same graceful drain with `{ status: "budget-stopped" }`.
   ever crosses into `ctx.journal`. The runner passes only status/costs/hashes/error classes;
   raw content goes exclusively to `ctx.store`. The in-memory `HandlerRequest` (input/params) is
   never journaled.
-- **Single active run per process (M0)** — starting a second `run()`/`resume()` while one is
-  active throws.
+- **Runs per process are capped** — `maxActiveRuns` (default 1) runs may be active at once;
+  one more `run()`/`resume()` throws. See [Several runs at once](#several-runs-at-once).
 
 ## Configuration
 
@@ -41,10 +41,11 @@ the same graceful drain with `{ status: "budget-stopped" }`.
 | `eventBufferSize` | `number` | `10000` | `events()` per-consumer buffer: max unconsumed item records before overflow coalescing. |
 | `pollIntervalMs` | `number` | `5000` | Delay between two polls of a provider job (`submit` + `poll` handlers). |
 | `jobTimeoutMs` | `number` | `1800000` | A job still pending after this long is marked `expired`; the next attempt polls it again before it submits a new one. |
+| `maxActiveRuns` | `number` | `1` | How many runs this process drives at once. A whole number >= 1; anything else makes `run()`/`resume()` throw. `1` keeps the one-run-at-a-time refusal. |
 
 ```ts
 const app = createApp({
-  pluginConfigs: { runner: { maxAttempts: 5, retryBaseMs: 2000 } }
+  pluginConfigs: { runner: { maxAttempts: 5, retryBaseMs: 2000, maxActiveRuns: 2 } }
 });
 ```
 
@@ -65,9 +66,13 @@ file, plans and inserts every item, then drives the pipeline to completion.
   `runId: "dry-run"`, `status: "done"`, with the plan's total in `totals.estimatedRemainingUsd`.
 - **`opts.signal?: AbortSignal`** — clean pause: on abort, stop admitting queued items, let
   dispatching items finish (handlers also receive the signal for best-effort cancellation), and
-  resolve `{ status: "paused" }` once in-flight items drain.
+  resolve `{ status: "paused" }` once in-flight items drain. It pauses this run only.
+- **`opts.onStart?: (runId: string) => void`** — called once, synchronously, with the new run id,
+  before any item record. Open `events({ runId })` here to see the whole run. A throwing
+  `onStart` fails the run.
 - **Returns** `RunResult`: `{ runId, status: "done" | "failed" | "paused" | "budget-stopped", totals }`.
-- **Throws** when a run is already active in this process. Unrecoverable errors *inside* the run
+- **Throws** when `maxActiveRuns` is not a whole number >= 1, or when `maxActiveRuns` runs are
+  already active (`[ai] A run is already active: <ids>.`). Unrecoverable errors *inside* the run
   (plan failures, missing handlers) do not reject — the run is marked `failed` and the promise
   resolves `{ status: "failed" }` after emitting `run:failed`.
 
@@ -82,11 +87,15 @@ items left mid-flight, then re-enters the pipeline for every currently queued it
 is idempotent (`insertItems` no-ops on existing planning keys), so already-`done` items are never
 re-billed.
 
-- **`opts.runId?: string`** — run to resume; defaults to the latest resumable run.
+- **`opts.runId?: string`** — run to resume; defaults to the newest resumable run that this
+  process does not drive now.
 - **`opts.signal?: AbortSignal`** — same clean-pause semantics as `run()`.
+- **`opts.onStart?: (runId: string) => void`** — same as `run()`.
 - **Returns** `RunResult` for the resumed run.
-- **Throws** when a run is already active, when `opts.runId` doesn't exist, or when no
-  resumable run exists.
+- **Throws** in this order: `maxActiveRuns` invalid; `maxActiveRuns` runs already active;
+  `opts.runId` is a run this process drives now (`[ai] Run is already active in this process:
+  <id>.` — follow it with `events({ runId })` instead); `opts.runId` doesn't exist; no resumable
+  run exists.
 
 ```ts
 const result = await app.runner.resume();
@@ -107,8 +116,8 @@ const { lines, totalUsd } = await app.runner.estimate({ files: "voice/*.moku.yam
 
 ### `status(runId?): RunStatusReport`
 
-Reads a read-only status snapshot for a run: the given `runId`, else the active run, else the
-latest resumable run. Uses `journal.readSnapshot`, which is safe to call from a second process.
+Reads a read-only status snapshot for a run: the given `runId`, else the newest active run, else
+the latest resumable run. Uses `journal.readSnapshot`, which is safe to call from a second process.
 
 - **`runId?: string`** — run to report on; defaults as above.
 - **Returns** `RunStatusReport`: `{ runId, status, totals, updatedAt }` (`updatedAt` is the most
@@ -119,36 +128,41 @@ latest resumable run. Uses `journal.readSnapshot`, which is safe to call from a 
 const report = app.runner.status();
 ```
 
-### `events(): AsyncIterable<RunEvent>`
+### `events(opts?): AsyncIterable<RunEvent>`
 
-Opens a per-item detail stream for the active run. When no run is active, returns an
-already-closed empty stream.
+Opens a per-item detail stream.
 
-**Backpressure contract:** each consumer gets a bounded queue of `config.eventBufferSize` item
-records — on overflow the oldest ITEM records are dropped and coalesced into one
-`{ type: "overflow", dropped: n }` marker; `"progress"` records coalesce (latest unconsumed
-wins); a `"terminal"` record is ALWAYS delivered, after any buffered data, before the iterable
-completes.
+- **`events({ runId })`** — that run's records only. Closes after the run's `terminal` record.
+  An already-closed empty stream when that run is not active.
+- **`events()`** — the records of every run active now and every run started later. Closes once
+  no run is active. An already-closed empty stream when no run is active.
+
+**Backpressure contract:** each consumer gets one bounded queue of `config.eventBufferSize` item
+records across all the runs it follows — on overflow the oldest ITEM records are dropped and
+coalesced into one `{ type: "overflow", runId, dropped: n }` marker per run; `"progress"`
+records coalesce per run (latest unconsumed wins); one `"terminal"` record per run is ALWAYS
+delivered, after that run's buffered records.
 
 ```ts
 for await (const event of app.runner.events()) {
-  if (event.type === "item:done") report(event.itemId, event.costUsd);
+  if (event.type === "item:done") report(event.runId, event.itemId, event.costUsd);
 }
 ```
 
-**`RunEvent` stream records** (discriminated on `type` — these never touch the plugin bus):
+**`RunEvent` stream records** (discriminated on `type` — these never touch the plugin bus). Every
+record also carries `runId`, the run it belongs to:
 
 | Record | Fields | When |
 |--------|--------|------|
-| `item:queued` | `itemId, task, provider` | Item enters the pipeline |
-| `item:dispatching` | `itemId` | Item passed the atomic gate |
-| `item:done` | `itemId, costUsd, contentHash` | Artifact stored and committed |
-| `item:retry` | `itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
-| `item:failed` | `itemId, errorClass` | Terminal failure (4xx, or attempts exhausted) |
-| `item:flagged` | `itemId` | Content-policy rejection (terminal, never re-queued) |
-| `overflow` | `dropped` | Consumer buffer overflowed; `dropped` oldest item records lost |
-| `progress` | `totals` | Coalesced run totals (latest unconsumed wins) |
-| `terminal` | `status, totals` | Run settled — always the last record delivered |
+| `item:queued` | `runId, itemId, task, provider` | Item enters the pipeline |
+| `item:dispatching` | `runId, itemId` | Item passed the atomic gate |
+| `item:done` | `runId, itemId, costUsd, contentHash` | Artifact stored and committed (`costUsd: 0` when reused) |
+| `item:retry` | `runId, itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
+| `item:failed` | `runId, itemId, errorClass` | Terminal failure (4xx, or attempts exhausted) |
+| `item:flagged` | `runId, itemId` | Content-policy rejection (terminal, never re-queued) |
+| `overflow` | `runId, dropped` | Consumer buffer overflowed; `dropped` oldest item records of that run lost |
+| `progress` | `runId, totals` | Coalesced run totals (latest unconsumed wins) |
+| `terminal` | `runId, status, totals` | Run settled — always the last record of that run |
 
 ## Events (plugin bus)
 
@@ -195,22 +209,26 @@ const app = createApp({ plugins: [reporterPlugin] });
 3. **References** — wait for the item's `$ref` targets to settle; a target that is not `done`
    blocks the item (it stays `queued`, the run ends `paused`). Otherwise each `$ref` becomes the
    target's stored file and each `$file` the local file, as `{ path, mimeType, hash }`.
-4. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort or open
+4. **Claim** — one item per artifact key reaches the provider at a time, across every active
+   run. When an item of another run holds the key, this item waits and copies its verdict (see
+   [Several runs at once](#several-runs-at-once)).
+5. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort or open
    breaker during the wait exits the item cleanly (it stays `queued`).
-5. **Gate (atomic)** — `journal.gateToDispatching(itemId)`: budget check + dedup + state
+6. **Gate (atomic)** — `journal.gateToDispatching(itemId)`: budget check + dedup + state
    transition in ONE transaction. `"budget"` triggers the graceful budget-stop drain;
    `"duplicate"` releases the lane slot without dispatching (never billed).
-6. **Execute** — `registry.resolve(task, provider)` narrowed through `isExecutableHandler()`
+7. **Execute** — `registry.resolve(task, provider)` narrowed through `isExecutableHandler()`
    (the runner's single audited dynamic boundary), `journal.recordAttempt`, then either the job
    path (below) or `handler.execute(request, { signal })`.
-7. **Classify on error** — `classifyError` maps the thrown error into the journal taxonomy
+8. **Classify on error** — `classifyError` maps the thrown error into the journal taxonomy
    (see below); `limits.reportOutcome` feeds the breaker (`"ok"` / `"retryable-error"` only).
    When the drain signal fired and the error carries no provider hint, the attempt ends
    `aborted` and the item stays `dispatching` for `resume()`.
-8. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
+9. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
    `store.put(bytes)` → `journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash,
    mimeType })`.
-9. **Report** — item record to `events()` subscribers; coalesced `run:progress` on the bus.
+10. **Report** — item record, stamped with its `runId`, to the `events()` consumers that follow
+    the run; coalesced `run:progress` on the bus.
 
 A retryable failure returns the item to `queued` (`markFailed` with `terminal: false`) and
 re-enters admit + gate after the backoff delay, until it settles or exhausts `maxAttempts`.
@@ -239,6 +257,52 @@ A handler with both `submit` and `poll` always runs through the job path:
 4. After `jobTimeoutMs` the job is marked `expired` and the attempt fails with a retryable
    `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never
    billed twice for one shot.
+
+### Several runs at once
+
+One process drives up to `maxActiveRuns` runs at the same time (default 1). Each run keeps its
+own runId, abort signal, `maxCostUsd`, totals and status.
+
+- **The cap** — at the cap, `run()` and `resume()` throw
+  `[ai] A run is already active: <ids joined ", ">.` and name `maxActiveRuns`. With the default
+  of 1 that first line is the same as before concurrent runs.
+- **Shared lanes** — lanes are `limits` plugin state keyed by lane, so every run goes through the
+  same `limits.acquire(lane)`: concurrency, rpm and the circuit breaker are shared. Two runs on a
+  lane with concurrency 2 never have more than 2 provider calls in flight together.
+- **No double spend (dedupe)** — the same artifact key in flight in two runs reaches the provider
+  once. The first item claims the key; the others wait for its verdict and copy it:
+  - `done` — reuse its artifact at cost 0 (`item:done` with `costUsd: 0`). If the bytes are gone
+    from the store, treat it as `open`.
+  - `flagged` / `failed` — record the same verdict (and error class) through the gate, with no
+    attempt row and no submit: the same request would get the same verdict and cost money.
+    `failed` is shared only for a non-retryable class (4xx, unknown).
+  - `open` — the leader stopped without a final provider verdict (paused, budget stop, lane
+    refused, or its attempts ran out on a retryable 5xx / 429 / network / timeout error). The
+    leader's item is still `failed`, but the next waiter claims the key and tries for itself: a
+    retryable error can pass on a later try. It adopts the leader's live job (`findLiveJob`), so
+    a paused leader's job is polled, never submitted again.
+- **Abort isolation** — `opts.signal` pauses its own run only. A waiting item of a paused run
+  stops waiting and stays `queued`; the other runs keep going.
+- **Resume** — `resume()` works while other runs are active; its default target skips them.
+  `resume({ runId })` of a run this process drives is refused.
+- **Streams** — `events({ runId })` closes after that run ends; `events()` closes when no run is
+  active any more. Every record carries its `runId`.
+- **`app.stop()`** — pauses every active run and waits for them to end. Each run drains like a
+  caller abort and resolves `{ status: "paused" }`, before the journal closes. In-flight provider
+  jobs stay `submitted`, so a later `resume()` adopts them instead of paying again.
+
+```ts
+const app = createApp({ pluginConfigs: { runner: { maxActiveRuns: 2 } } });
+await app.start();
+
+const follow = async (runId: string) => {
+  for await (const event of app.runner.events({ runId })) render(runId, event);
+};
+const [ep1, ep2] = await Promise.all([
+  app.runner.run({ files: "ep01/*.moku.yaml", maxCostUsd: 20 }, { onStart: id => void follow(id) }),
+  app.runner.run({ files: "ep02/*.moku.yaml", maxCostUsd: 20 }, { onStart: id => void follow(id) })
+]);
+```
 
 ### Retry taxonomy (contractual)
 

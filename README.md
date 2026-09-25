@@ -166,7 +166,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
 | [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
-| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5, MiniMax H3 and H3 Max, Kling 3; image and audio refs; per-second and reference-token prices. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5 and 2.0 (Mini), MiniMax H3 and H3 Max, Kling 3, Wan 3.0, Veo 3.1 Fast, Vidu Q3; image and audio refs; per-second and reference-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
@@ -317,6 +317,7 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `eventBufferSize` | `number` | `10_000` |
 | | `pollIntervalMs` | `number` | `5000` |
 | | `jobTimeoutMs` | `number` | `1_800_000` |
+| | `maxActiveRuns` | `number` | `1` |
 | `voiceover` | `defaultProvider` | `string` | `"elevenlabs"` |
 | | `defaultFormat` | `"mp3" \| "wav" \| "ogg"` | `"mp3"` |
 | `translate` | `defaultProvider` | `string` | `"openai"` |
@@ -383,6 +384,30 @@ const app = createApp({ plugins: [reporterPlugin] });
 **Stream records** (`app.runner.events()`, discriminated on `type`): `item:queued`,
 `item:dispatching`, `item:done`, `item:retry`, `item:failed`, `item:flagged`,
 `overflow`, `progress`, and a `terminal` record that is always delivered last.
+Every record carries its `runId`.
+
+### Several runs at once
+
+`runner.maxActiveRuns` (default `1`) lets one process drive several `run()` /
+`resume()` calls at the same time. Above the cap, `run()` throws
+`[ai] A run is already active`. Each run keeps its own abort signal, budget, totals
+and status. Limits lanes stay global, so two runs share one lane's concurrency and
+rpm. An item with the same artifact key in two runs reaches the provider once: the
+second run waits and records the first one's result at cost 0. When the first one
+ran out of retries on a 5xx, 429, network or timeout error, the second tries itself.
+`app.stop()` pauses the active runs and waits for them; in-flight jobs stay
+adoptable by a later `resume()`.
+
+```ts
+const app = createApp({ pluginConfigs: { runner: { maxActiveRuns: 10 } } });
+
+await app.runner.run(
+  { files: "ep01/*.moku.yaml" },
+  { onStart: runId => follow(app.runner.events({ runId })) }
+);
+```
+
+`events({ runId })` follows one run. `events()` follows every run until none is active.
 
 ## Architecture
 

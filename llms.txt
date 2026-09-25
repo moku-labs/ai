@@ -218,7 +218,7 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
 - video (deps: registry): owns "video" contract (execute, or submit + poll) + one-off facade | Standard | generate, estimate, providers | events: none
 - codex (deps: registry): image provider over the local Codex CLI (`codex exec`, plan-billed, explicit $0 price) — registers ("image","codex") | Standard | info | events: none
-- fal (deps: registry): video provider over the fal queue API — registers ("video","fal") as submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, kling-3-pro, kling-o3-ref; per-second price table, unknown price throws | Complex | info | events: none
+- fal (deps: registry): video provider over the fal queue API — registers ("video","fal") as submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, kling-3-pro, kling-o3-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref; per-second price table, unknown price throws | Complex | info | events: none
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
 - cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, export, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
 
@@ -227,7 +227,7 @@ Config defaults (per plugin, override regular plugins via createApp pluginConfig
 - store: dir=".moku/store", algo="sha256"
 - limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={}
 - buildfile: defaultGlob="**/*.moku.yaml", schemaPath=".moku/build.schema.json"
-- runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000
+- runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000, maxActiveRuns=1
 - voiceover: defaultProvider="elevenlabs", defaultFormat="mp3"
 - translate: defaultProvider="openai"
 - promptGen: defaultProvider="openai"

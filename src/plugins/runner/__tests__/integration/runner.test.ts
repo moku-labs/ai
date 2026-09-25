@@ -6,7 +6,14 @@ import { coreConfig, createCore, createPlugin } from "../../../../config";
 import { buildfilePlugin } from "../../../buildfile";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../index";
-import type { ExecutableHandler, RunEvent, RunResult, RunResultStatus } from "../../types";
+import type {
+  Config,
+  ExecutableHandler,
+  RunEvent,
+  RunnerApi,
+  RunResult,
+  RunResultStatus
+} from "../../types";
 
 /**
  * Assembles a fresh framework wiring registry + buildfile + runner as
@@ -404,6 +411,24 @@ describe("runner plugin integration", () => {
       expectTypeOf<RunResultStatus>().toEqualTypeOf<
         "done" | "failed" | "paused" | "budget-stopped"
       >();
+    });
+
+    it("every RunEvent variant carries its runId", () => {
+      expectTypeOf<RunEvent["runId"]>().toEqualTypeOf<string>();
+      expectTypeOf<Extract<RunEvent, { type: "overflow" }>>().toHaveProperty("runId");
+      expectTypeOf<Extract<RunEvent, { type: "terminal" }>>().toHaveProperty("runId");
+    });
+
+    it("run() and resume() take onStart, events() takes an optional runId", () => {
+      type Api = RunnerApi;
+      expectTypeOf<NonNullable<Parameters<Api["run"]>[1]>["onStart"]>().toEqualTypeOf<
+        ((runId: string) => void) | undefined
+      >();
+      expectTypeOf<NonNullable<Parameters<Api["resume"]>[0]>["onStart"]>().toEqualTypeOf<
+        ((runId: string) => void) | undefined
+      >();
+      expectTypeOf<NonNullable<Parameters<Api["events"]>[0]>>().toEqualTypeOf<{ runId?: string }>();
+      expectTypeOf<Config["maxActiveRuns"]>().toBeNumber();
     });
 
     it("RunEvent narrows on its discriminant `type`", () => {

@@ -422,19 +422,29 @@ function getRun(state: State, runId: string): RunRow | undefined {
 
 /**
  * Finds the most recently created run still eligible for `resume`
- * (status `active`, `paused`, or `budget-stopped`).
+ * (status `active`, `paused`, or `budget-stopped`), skipping excluded ids.
  *
  * @param state - Journal plugin state.
+ * @param opts - Optional filter.
+ * @param opts.exclude - Run ids to skip; omitted or empty skips none.
  * @returns The latest resumable run, or undefined if none exists.
  * @example
  * ```ts
- * const resumable = latestResumableRun(state);
+ * const resumable = latestResumableRun(state, { exclude: ["run-driven-now"] });
  * ```
  */
-function latestResumableRun(state: State): RunRow | undefined {
+function latestResumableRun(
+  state: State,
+  opts: { exclude?: readonly string[] } = {}
+): RunRow | undefined {
   const driver = requireDriver(state);
+  const exclude = opts.exclude ?? [];
+  const placeholders = exclude.map(() => "?").join(", ");
+  const excludeClause = exclude.length > 0 ? ` AND id NOT IN (${placeholders})` : "";
+
   const row = driver.get<RunDatabaseRow>(
-    "SELECT * FROM runs WHERE status IN ('active', 'paused', 'budget-stopped') ORDER BY created_at DESC LIMIT 1"
+    `SELECT * FROM runs WHERE status IN ('active', 'paused', 'budget-stopped')${excludeClause} ORDER BY created_at DESC LIMIT 1`,
+    exclude
   );
   return row ? mapRun(row) : undefined;
 }
@@ -971,15 +981,18 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
   const boundGetRun = (runId: string): RunRow | undefined => getRun(state, runId);
 
   /**
-   * Finds the latest resumable run, bound to this API's state.
+   * Finds the latest resumable run not in `exclude`, bound to this API's state.
    *
+   * @param opts - Optional filter.
+   * @param opts.exclude - Run ids to skip; omitted or empty skips none.
    * @returns The latest resumable run, or undefined if none exists.
    * @example
    * ```ts
-   * const resumable = api.latestResumableRun();
+   * const resumable = api.latestResumableRun({ exclude: ["run-driven-now"] });
    * ```
    */
-  const boundLatestResumableRun = (): RunRow | undefined => latestResumableRun(state);
+  const boundLatestResumableRun = (opts?: { exclude?: readonly string[] }): RunRow | undefined =>
+    latestResumableRun(state, opts);
 
   /**
    * Inserts planning-time item intents, bound to this API's state.

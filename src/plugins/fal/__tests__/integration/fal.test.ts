@@ -98,7 +98,14 @@ describe("fal integration", () => {
         "minimax-h3",
         "minimax-h3-max-ref",
         "kling-3-pro",
-        "kling-o3-ref"
+        "kling-o3-ref",
+        "seedance-2.0-mini",
+        "seedance-2.0-mini-ref",
+        "seedance-2.0-ref",
+        "wan-3.0-ref",
+        "veo-3.1-fast",
+        "vidu-q3",
+        "vidu-q3-ref"
       ]
     });
 
