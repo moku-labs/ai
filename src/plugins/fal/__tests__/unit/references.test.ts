@@ -8,10 +8,10 @@ import {
   callsOf,
   createTempFiles,
   createTestCtx,
-  initiateResponse,
   jsonBodyOf,
-  okResponse,
+  storageUrlOf,
   stubFetch,
+  stubStorageFetch,
   submitResponse,
   TEST_KEY
 } from "./fixtures";
@@ -64,7 +64,7 @@ describe("minimax-h3-max-ref body", () => {
     const body = buildFalBody(
       resolveFalModel("minimax-h3-max-ref"),
       { model: "minimax-h3-max-ref", prompt: "<d>[Japanese] こんにちは</d>" },
-      { image: "u0", refs: ["u1"], audioRefs: [] }
+      { image: "u0", refs: ["u1"], audioRefs: [], videoRefs: [] }
     );
     expect(body).toEqual({
       prompt: "<d>[Japanese] こんにちは</d>",
@@ -180,28 +180,23 @@ describe("audio refs on a model without audio refs", () => {
 });
 
 describe("uploadInputs — audio refs", () => {
-  it("uploads audio refs after image refs and returns them as audioRefs", async () => {
-    const fetchMock = stubFetch(
-      initiateResponse(1),
-      okResponse(),
-      initiateResponse(2),
-      okResponse(),
-      initiateResponse(3),
-      okResponse()
-    );
+  it("uploads audio refs with the image refs and returns them as audioRefs", async () => {
+    const fetchMock = stubStorageFetch();
 
     const urls = await uploadInputs(
       createTestCtx(),
       image,
-      { images: [face], audio: [voice] },
+      { images: [face], audio: [voice], videos: [] },
       { apiKey: TEST_KEY }
     );
 
     expect(urls).toEqual({
-      image: "https://cdn.fal.test/file/1",
-      refs: ["https://cdn.fal.test/file/2"],
-      audioRefs: ["https://cdn.fal.test/file/3"]
+      image: storageUrlOf(image),
+      refs: [storageUrlOf(face)],
+      audioRefs: [storageUrlOf(voice)],
+      videoRefs: []
     });
-    expect(jsonBodyOf(callsOf(fetchMock)[4])).toMatchObject({ content_type: "audio/mpeg" });
+    const initiates = callsOf(fetchMock).filter(call => call.method === "POST");
+    expect(initiates.map(call => jsonBodyOf(call).content_type)).toContain("audio/mpeg");
   });
 });

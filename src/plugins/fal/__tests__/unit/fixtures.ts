@@ -11,6 +11,7 @@ import type { EnvApi, LogApi } from "@moku-labs/common";
 import { vi } from "vitest";
 import type { VideoFile } from "../../../video/contract";
 import type { Config, FalContext, RegistryApi, State } from "../../types";
+import { fileNameOf } from "../../upload";
 
 /** Default config fixture, matching `falPlugin`'s own defaults except a 0 ms poll interval. */
 export const DEFAULT_CONFIG: Config = {
@@ -86,11 +87,11 @@ export type TestCtxOverrides = {
   log?: LogApi;
 };
 
-/** Builds a fake `FalContext`: default config, uncomputed prices, fake registry/env/log. */
+/** Builds a fake `FalContext`: default config, uncomputed prices, an empty upload cache, fake registry/env/log. */
 export function createTestCtx(overrides: TestCtxOverrides = {}): FalContext {
   const config: Config = { ...DEFAULT_CONFIG, ...overrides.config };
   // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`; mirrors createFalState's sentinel
-  const state: State = { prices: null, ...overrides.state };
+  const state: State = { prices: null, uploads: new Map(), ...overrides.state };
   const registry = overrides.registry ?? createFakeRegistry();
   const env = overrides.env ?? createFakeEnv();
   const log = overrides.log ?? createFakeLog();
@@ -195,6 +196,44 @@ export function initiateResponse(n: number): Response {
 /** An empty 200 response (e.g. the storage PUT). */
 export function okResponse(): Response {
   return new Response("", { status: 200 });
+}
+
+/** Prefix of the presigned PUT URLs {@link stubStorageFetch} hands out. */
+const PUT_URL_PREFIX = "https://upload.fal.test/put/";
+
+/** The fal storage URL {@link stubStorageFetch} hands out for `file`. */
+export function storageUrlOf(file: VideoFile): string {
+  return `https://cdn.fal.test/file/${fileNameOf(file)}`;
+}
+
+/**
+ * Stubs global `fetch` by URL, for uploads that run in parallel: a storage
+ * initiate answers with URLs named after the file (see {@link storageUrlOf}),
+ * a storage PUT answers 200, and every other call takes the next of
+ * `responses` in order. Extra calls fail the test.
+ */
+export function stubStorageFetch(...responses: Response[]): ReturnType<typeof vi.fn> {
+  const queue = [...responses];
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === DEFAULT_CONFIG.uploadUrl) {
+      const { file_name: fileName } = JSON.parse(String(init?.body)) as { file_name: string };
+      return jsonResponse(200, {
+        upload_url: `${PUT_URL_PREFIX}${fileName}`,
+        file_url: `https://cdn.fal.test/file/${fileName}`
+      });
+    }
+    if (url.startsWith(PUT_URL_PREFIX)) return okResponse();
+    const next = queue.shift();
+    if (next === undefined) throw new Error("unexpected extra fetch call");
+    return next;
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+/** How many storage initiates a {@link stubStorageFetch} or {@link stubFetch} mock received. */
+export function initiateCount(fetchMock: ReturnType<typeof vi.fn>): number {
+  return callsOf(fetchMock).filter(call => call.url === DEFAULT_CONFIG.uploadUrl).length;
 }
 
 /** Writes `value` as big-endian bytes of `width` length. */

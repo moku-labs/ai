@@ -46,14 +46,15 @@ describe("uploadInputs — storage mode", () => {
     const urls = await uploadInputs(
       createTestCtx(),
       png,
-      { images: [jpg], audio: [] },
+      { images: [jpg], audio: [], videos: [] },
       { apiKey: TEST_KEY }
     );
 
     expect(urls).toEqual({
       image: "https://cdn.fal.test/file/1",
       refs: ["https://cdn.fal.test/file/2"],
-      audioRefs: []
+      audioRefs: [],
+      videoRefs: []
     });
     const calls = callsOf(fetchMock);
     expect(calls).toHaveLength(4);
@@ -83,12 +84,18 @@ describe("uploadInputs — storage mode", () => {
     const fetchMock = stubFetch(jsonResponse(500, { detail: "down" }));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, { images: [jpg], audio: [] }, { apiKey: TEST_KEY });
+    const urls = await uploadInputs(
+      ctx,
+      png,
+      { images: [jpg], audio: [], videos: [] },
+      { apiKey: TEST_KEY }
+    );
 
     expect(urls).toEqual({
       image: toDataUri(PNG, "image/png"),
       refs: [toDataUri(JPG, "image/jpeg")],
-      audioRefs: []
+      audioRefs: [],
+      videoRefs: []
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(ctx.log.warn).toHaveBeenCalledTimes(1);
@@ -100,9 +107,19 @@ describe("uploadInputs — storage mode", () => {
     stubFetch(new TypeError("fetch failed"));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, { images: [], audio: [] }, { apiKey: TEST_KEY });
+    const urls = await uploadInputs(
+      ctx,
+      png,
+      { images: [], audio: [], videos: [] },
+      { apiKey: TEST_KEY }
+    );
 
-    expect(urls).toEqual({ image: toDataUri(PNG, "image/png"), refs: [], audioRefs: [] });
+    expect(urls).toEqual({
+      image: toDataUri(PNG, "image/png"),
+      refs: [],
+      audioRefs: [],
+      videoRefs: []
+    });
     expect(ctx.log.warn).toHaveBeenCalledWith("fal:upload:fallback", { status: undefined });
   });
 
@@ -113,7 +130,7 @@ describe("uploadInputs — storage mode", () => {
     const urls = await uploadInputs(
       createTestCtx(),
       png,
-      { images: [], audio: [] },
+      { images: [], audio: [], videos: [] },
       { apiKey: TEST_KEY }
     );
 
@@ -125,7 +142,12 @@ describe("uploadInputs — storage mode", () => {
     stubFetch(initiateResponse(1), jsonResponse(503, {}));
     const ctx = createTestCtx();
 
-    const urls = await uploadInputs(ctx, png, { images: [], audio: [] }, { apiKey: TEST_KEY });
+    const urls = await uploadInputs(
+      ctx,
+      png,
+      { images: [], audio: [], videos: [] },
+      { apiKey: TEST_KEY }
+    );
 
     expect(urls.image).toBe(toDataUri(PNG, "image/png"));
     expect(ctx.log.warn).toHaveBeenCalledWith("fal:upload:fallback", { status: 503 });
@@ -148,7 +170,7 @@ describe("uploadInputs — storage mode", () => {
       uploadInputs(
         ctx,
         png,
-        { images: [], audio: [] },
+        { images: [], audio: [], videos: [] },
         { apiKey: TEST_KEY, signal: controller.signal }
       )
     ).rejects.toBe(abortError);
@@ -161,10 +183,15 @@ describe("uploadInputs — storage mode", () => {
     const urls = await uploadInputs(
       createTestCtx(),
       png,
-      { images: [], audio: [] },
+      { images: [], audio: [], videos: [] },
       { apiKey: TEST_KEY }
     );
-    expect(urls).toEqual({ image: "https://cdn.fal.test/file/1", refs: [], audioRefs: [] });
+    expect(urls).toEqual({
+      image: "https://cdn.fal.test/file/1",
+      refs: [],
+      audioRefs: [],
+      videoRefs: []
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -177,7 +204,7 @@ describe("uploadInputs — data-uri mode", () => {
     const urls = await uploadInputs(
       createTestCtx({ config: { upload: "data-uri" } }),
       png,
-      { images: [], audio: [] },
+      { images: [], audio: [], videos: [] },
       {
         apiKey: TEST_KEY
       }
@@ -193,7 +220,7 @@ describe("uploadInputs — data-uri mode", () => {
       uploadInputs(
         createTestCtx({ config: { upload: "data-uri" } }),
         missing,
-        { images: [], audio: [] },
+        { images: [], audio: [], videos: [] },
         {
           apiKey: TEST_KEY
         }

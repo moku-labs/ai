@@ -13,7 +13,9 @@ import {
   jsonBodyOf,
   jsonResponse,
   okResponse,
+  storageUrlOf,
   stubFetch,
+  stubStorageFetch,
   submitResponse,
   TEST_KEY
 } from "./fixtures";
@@ -115,15 +117,7 @@ describe("submit", () => {
   });
 
   it("uploads image + refs for a reference model and merges params last", async () => {
-    const fetchMock = stubFetch(
-      initiateResponse(1),
-      okResponse(),
-      initiateResponse(2),
-      okResponse(),
-      initiateResponse(3),
-      okResponse(),
-      submitResponse()
-    );
+    const fetchMock = stubStorageFetch(submitResponse());
     const handler = createVideoHandler(createTestCtx());
 
     await handler.submit(
@@ -137,11 +131,12 @@ describe("submit", () => {
       {}
     );
 
-    const body = jsonBodyOf(callsOf(fetchMock)[6]);
+    const submitCall = callsOf(fetchMock).find(call => call.url.endsWith("/reference-to-video"));
+    const body = jsonBodyOf(submitCall);
     expect(body.image_urls).toEqual([
-      "https://cdn.fal.test/file/1",
-      "https://cdn.fal.test/file/2",
-      "https://cdn.fal.test/file/3"
+      storageUrlOf(image),
+      storageUrlOf(refs[0] as VideoFile),
+      storageUrlOf(refs[1] as VideoFile)
     ]);
     expect(body.resolution).toBe("480p");
     expect(body.aspect_ratio).toBe("9:16");

@@ -1,10 +1,10 @@
 /**
  * @file fal model catalog — data module. Maps each accepted model alias to
- * its fal endpoint, default resolution, audio capability, reference-image
- * limit and request-body builder. `request.params` is merged last, so a
- * build file can pass any extra fal field through.
+ * its fal endpoint, default resolution, audio capability, reference limits
+ * (images, audio, videos) and request-body builder. `request.params` is
+ * merged last, so a build file can pass any extra fal field through.
  */
-import type { VideoRequest } from "../video/contract";
+import type { VideoFile, VideoRequest } from "../video/contract";
 
 /**
  * A model alias this plugin accepts in `request.model`.
@@ -36,8 +36,8 @@ export type FalAlias =
  * @example
  * ```ts
  * const input: BodyInput = {
- *   prompt: "push-in", imageUrl: "https://cdn/a.png", refUrls: [], audioRefUrls: [], seconds: 5,
- *   resolution: "768P", aspect: "9:16", audio: false, negative: undefined
+ *   prompt: "push-in", imageUrl: "https://cdn/a.png", refUrls: [], audioRefUrls: [], videoRefUrls: [],
+ *   seconds: 5, resolution: "768P", aspect: "9:16", audio: false, negative: undefined
  * };
  * ```
  */
@@ -50,6 +50,8 @@ export type BodyInput = {
   refUrls: string[];
   /** URLs (or data URIs) of the reference audio files, already checked against the model's limit. */
   audioRefUrls: string[];
+  /** URLs (or data URIs) of the reference videos, already checked against the model's limit. */
+  videoRefUrls: string[];
   /** Clip length in seconds. */
   seconds: number;
   /** Effective resolution, or undefined when the model takes none. */
@@ -93,6 +95,7 @@ export type SeedanceReferenceBody = {
   prompt: string;
   image_urls: string[];
   audio_urls?: string[];
+  video_urls?: string[];
   duration: string;
   resolution: string;
   aspect_ratio: string;
@@ -130,6 +133,7 @@ export type MinimaxMaxReferenceBody = {
   prompt_expansion_mode: string;
   reference_image_urls: string[];
   reference_audio_urls?: string[];
+  reference_video_urls?: string[];
   duration: number;
   resolution: string;
   aspect_ratio: string;
@@ -291,11 +295,15 @@ export type FalBody =
 
 /**
  * One catalog row: fal endpoint, default resolution, audio capability,
- * reference-image and reference-audio limits (0 = none taken) and body builder.
+ * reference-image, reference-audio and reference-video limits (0 = none
+ * taken) and body builder.
  *
  * @example
  * ```ts
- * const row: FalModel = { endpoint: "minimax/h3/image-to-video", resolution: "768P", audio: true, maxRefs: 0, maxAudioRefs: 0, body: minimaxImageBody };
+ * const row: FalModel = {
+ *   endpoint: "minimax/h3/image-to-video", resolution: "768P", audio: true,
+ *   maxRefs: 0, maxAudioRefs: 0, maxVideoRefs: 0, maxVideoRefSec: 0, body: minimaxImageBody
+ * };
  * ```
  */
 export type FalModel = {
@@ -309,6 +317,13 @@ export type FalModel = {
   maxRefs: number;
   /** How many reference audio files (refs with an `audio/*` MIME type) the model accepts. */
   maxAudioRefs: number;
+  /** How many reference videos (refs with a `video/*` MIME type) the model accepts. */
+  maxVideoRefs: number;
+  /**
+   * Longest combined length of the reference videos fal accepts, seconds (0 = none taken).
+   * Data for the caller: the plugin sends videos as given and does not probe their length.
+   */
+  maxVideoRefSec: number;
   /** Builds the typed request body. */
   body: (input: BodyInput) => FalBody;
 };
@@ -324,11 +339,29 @@ export type FalModel = {
 export type ResolvedFalModel = FalModel & { alias: FalAlias };
 
 /**
+ * A request's refs, split by MIME type: `audio/*` refs are audio refs,
+ * `video/*` refs are video refs, every other ref is an image ref.
+ *
+ * @example
+ * ```ts
+ * const split: SplitReferences = { images: [face], audio: [voice], videos: [tail] };
+ * ```
+ */
+export type SplitReferences = {
+  /** Reference images (every ref that is neither audio nor video). */
+  images: readonly VideoFile[];
+  /** Reference audio files. */
+  audio: readonly VideoFile[];
+  /** Reference videos. */
+  videos: readonly VideoFile[];
+};
+
+/**
  * URLs (or data URIs) of the uploaded input files.
  *
  * @example
  * ```ts
- * const urls: UploadedUrls = { image: "https://cdn/a.png", refs: [], audioRefs: [] };
+ * const urls: UploadedUrls = { image: "https://cdn/a.png", refs: [], audioRefs: [], videoRefs: [] };
  * ```
  */
 export type UploadedUrls = {
@@ -338,6 +371,8 @@ export type UploadedUrls = {
   refs: string[];
   /** Reference audio files, already checked against the model's limit. */
   audioRefs: string[];
+  /** Reference videos, already checked against the model's limit. */
+  videoRefs: string[];
 };
 
 /** Seedance default resolution. */
@@ -386,7 +421,8 @@ function seedanceImageBody(input: BodyInput): SeedanceImageBody {
 
 /**
  * Seedance reference-to-video body (2.5, 2.0 and 2.0 Mini): the first frame
- * leads `image_urls`; `audio_urls` only when there are audio refs.
+ * leads `image_urls`; `audio_urls` and `video_urls` only when there are
+ * audio refs and video refs.
  *
  * @param input - Resolved body input.
  * @returns The request body.
@@ -405,6 +441,7 @@ function seedanceReferenceBody(input: BodyInput): SeedanceReferenceBody {
     generate_audio: input.audio
   };
   if (input.audioRefUrls.length > 0) body.audio_urls = input.audioRefUrls;
+  if (input.videoRefUrls.length > 0) body.video_urls = input.videoRefUrls;
   return body;
 }
 
@@ -429,7 +466,8 @@ function minimaxImageBody(input: BodyInput): MinimaxImageBody {
 
 /**
  * MiniMax H3 Max reference-to-video body: the first frame is Image 1 of
- * `reference_image_urls`; `reference_audio_urls` only when there are audio refs.
+ * `reference_image_urls`; `reference_audio_urls` and `reference_video_urls`
+ * only when there are audio refs and video refs.
  *
  * @param input - Resolved body input.
  * @returns The request body.
@@ -448,6 +486,7 @@ function minimaxMaxReferenceBody(input: BodyInput): MinimaxMaxReferenceBody {
     aspect_ratio: input.aspect
   };
   if (input.audioRefUrls.length > 0) body.reference_audio_urls = input.audioRefUrls;
+  if (input.videoRefUrls.length > 0) body.reference_video_urls = input.videoRefUrls;
   return body;
 }
 
@@ -605,6 +644,9 @@ function viduReferenceBody(input: BodyInput): ViduReferenceBody {
 
 /**
  * The model catalog, in the order `info().models` and error messages list it.
+ * Video-ref limits follow the fal docs of 2026-09-25: H3 Max takes 3 clips
+ * of 2–15 s, 15 s combined; Seedance 2.5 takes 10 clips of 1.8–30.2 s,
+ * 30.2 s combined.
  *
  * @example
  * ```ts
@@ -618,6 +660,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: seedanceImageBody
   },
   "seedance-2.5-ref": {
@@ -626,6 +670,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 29,
     maxAudioRefs: 10,
+    maxVideoRefs: 10,
+    maxVideoRefSec: 30.2,
     body: seedanceReferenceBody
   },
   "minimax-h3": {
@@ -634,6 +680,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: minimaxImageBody
   },
   "minimax-h3-max-ref": {
@@ -642,6 +690,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 8,
     maxAudioRefs: 3,
+    maxVideoRefs: 3,
+    maxVideoRefSec: 15,
     body: minimaxMaxReferenceBody
   },
   "kling-3-pro": {
@@ -649,6 +699,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: klingImageBody
   },
   "kling-o3-ref": {
@@ -656,6 +708,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 4,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: klingReferenceBody
   },
   "seedance-2.0-mini": {
@@ -664,6 +718,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: seedance20ImageBody
   },
   "seedance-2.0-mini-ref": {
@@ -672,6 +728,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 8,
     maxAudioRefs: 3,
+    maxVideoRefs: 3,
+    maxVideoRefSec: 15,
     body: seedanceReferenceBody
   },
   "seedance-2.0-ref": {
@@ -680,6 +738,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 8,
     maxAudioRefs: 3,
+    maxVideoRefs: 3,
+    maxVideoRefSec: 15,
     body: seedanceReferenceBody
   },
   "wan-3.0-ref": {
@@ -688,6 +748,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 9,
     maxAudioRefs: 5,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: wanReferenceBody
   },
   "veo-3.1-fast": {
@@ -696,6 +758,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: veoImageBody
   },
   "vidu-q3": {
@@ -704,6 +768,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 0,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: viduImageBody
   },
   "vidu-q3-ref": {
@@ -712,6 +778,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     audio: true,
     maxRefs: 3,
     maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
     body: viduReferenceBody
   }
 };
@@ -815,11 +883,11 @@ export function modelAudio(model: FalModel, request: VideoRequest): boolean {
  *
  * @param model - The resolved catalog row.
  * @param request - The video request.
- * @param urls - Uploaded URLs (or data URIs) of the first frame, image refs and audio refs.
+ * @param urls - Uploaded URLs (or data URIs) of the first frame, image refs, audio refs and video refs.
  * @returns The request body.
  * @example
  * ```ts
- * buildFalBody(resolveFalModel("minimax-h3"), request, { image: "https://cdn/a.png", refs: [], audioRefs: [] });
+ * buildFalBody(resolveFalModel("minimax-h3"), request, { image: "https://cdn/a.png", refs: [], audioRefs: [], videoRefs: [] });
  * ```
  */
 export function buildFalBody(
@@ -832,6 +900,7 @@ export function buildFalBody(
     imageUrl: urls.image,
     refUrls: urls.refs,
     audioRefUrls: urls.audioRefs,
+    videoRefUrls: urls.videoRefs,
     seconds: requestSeconds(request),
     resolution: modelResolution(model, request),
     aspect: request.aspect ?? DEFAULT_ASPECT,

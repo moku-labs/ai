@@ -44,7 +44,7 @@ export type VideoRequest = {
   negative?: string;
   /** First frame / keyframe. */
   image?: VideoFile;
-  /** Extra reference images. */
+  /** Extra references: images, audio or video files, told apart by MIME type. */
   refs?: VideoFile[];
   /** Clip length in seconds. Default 5. */
   seconds?: number;
