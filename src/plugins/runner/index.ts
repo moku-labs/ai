@@ -16,7 +16,8 @@ const defaultConfig: Config = {
   retryBaseMs: 1000,
   eventBufferSize: 10_000,
   pollIntervalMs: 5000,
-  jobTimeoutMs: 1_800_000
+  jobTimeoutMs: 1_800_000,
+  maxActiveRuns: 1
 };
 
 /**

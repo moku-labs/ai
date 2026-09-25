@@ -197,11 +197,24 @@ export type JournalApi = {
    */
   getRun(runId: string): RunRow | undefined;
   /**
-   * Newest run still eligible for resume (`active`, `paused`, `budget-stopped`).
+   * Newest run still eligible for resume (`active`, `paused`, `budget-stopped`)
+   * whose id is not in `exclude`. Omitted or empty `exclude` skips nothing.
    *
+   * @param opts - Optional filter.
+   * @param opts.exclude - Run ids to skip, such as the runs this process drives now.
    * @returns The run row, or undefined.
+   * @example
+   * ```ts
+   * // runner resume(): pick the newest resumable run it is not driving now
+   * const driving = [...ctx.state.active.keys()];
+   * const target = ctx.journal.latestResumableRun({ exclude: driving });
+   * if (!target) {
+   *   throw new Error("[ai] No resumable run found.\n  Start a new run with run() instead.");
+   * }
+   * ctx.journal.requeueDispatching(target.id);
+   * ```
    */
-  latestResumableRun(): RunRow | undefined;
+  latestResumableRun(opts?: { exclude?: readonly string[] }): RunRow | undefined;
   /**
    * Inserts item intents as `queued`, idempotent per (run, planning key).
    *

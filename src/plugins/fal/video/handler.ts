@@ -48,6 +48,15 @@ const FAILED_EVENT = "fal:video:failed";
 /** fal's status for a job it rejected (validation or content policy) when the result is read. */
 const UNPROCESSABLE = 422;
 
+/**
+ * fal's other status for a job it rejected when the result (or the clip) is
+ * read: a verdict like 422, not a lost result, so polling again never succeeds.
+ */
+const BAD_REQUEST = 400;
+
+/** Result statuses that are fal's verdict on the job, not a failure to read it. */
+const JOB_VERDICT_STATUSES: ReadonlySet<number> = new Set([BAD_REQUEST, UNPROCESSABLE]);
+
 /** Status carried by a result that could not be read, so the runner classifies it retryable (5xx). */
 const RETRY_STATUS = 503;
 
@@ -244,11 +253,27 @@ async function submitJob(
 }
 
 /**
+ * Whether a result or download failure is fal's verdict on the job: a
+ * content-policy flag, or a terminal 400 / 422.
+ *
+ * @param error - What the result or download call threw.
+ * @returns True when the job should end as `failed`.
+ * @example
+ * ```ts
+ * isJobVerdict(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => true
+ * ```
+ */
+function isJobVerdict(error: unknown): error is FlaggedProviderError | TerminalProviderError {
+  if (error instanceof FlaggedProviderError) return true;
+  return error instanceof TerminalProviderError && JOB_VERDICT_STATUSES.has(error.status);
+}
+
+/**
  * Fetches a finished job's result and downloads the clip. A content-policy
- * flag or a 422 on the result is fal's verdict and becomes `failed`. Any
- * other failure (another 4xx, 5xx, network, timeout) is thrown as retryable:
- * the clip exists and is paid for, so the runner keeps polling and the job
- * stays adoptable instead of being paid for again.
+ * flag or a 400 / 422 on the result or the download is fal's verdict and
+ * becomes `failed`. Any other failure (another 4xx, 5xx, network, timeout)
+ * is thrown as retryable: the clip exists and is paid for, so the runner
+ * keeps polling and the job stays adoptable instead of being paid for again.
  *
  * @param ctx - Plugin context.
  * @param job - The job.
@@ -289,10 +314,7 @@ async function fetchResult(
       meta: { endpoint: job.endpoint, requestId: job.requestId, seconds: requestSeconds(request) }
     };
   } catch (error) {
-    const isJobVerdict =
-      error instanceof FlaggedProviderError ||
-      (error instanceof TerminalProviderError && error.status === UNPROCESSABLE);
-    if (!isJobVerdict) throw asRetryable(ctx, job, error);
+    if (!isJobVerdict(error)) throw asRetryable(ctx, job, error);
     ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
     return { state: "failed", error };
   }
