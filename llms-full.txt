@@ -405,8 +405,9 @@ The durable orchestrator. Per-item pipeline:
 7. Report — item record to events() subscribers; coalesced run:progress on the bus.
 
 Named constraints: per-item events NEVER on the bus; redaction boundary (raw
-prompts/bodies never reach ctx.journal — HandlerRequest is never journaled); single
-active run per process at M0 (second run()/resume() throws).
+prompts/bodies never reach ctx.journal — HandlerRequest is never journaled); up to
+maxActiveRuns runs per process (default 1; above the cap run()/resume() throws);
+lanes are shared across runs; the same artifact key in two runs is submitted once.
 
 Types (src/plugins/runner/types.ts):
 
@@ -415,6 +416,9 @@ export type Config = {
   maxAttempts: number;     // default 3 (per build file overridable via defaults.maxAttempts)
   retryBaseMs: number;     // default 1000 (exponential, jittered 50–100%; Retry-After honored when larger)
   eventBufferSize: number; // default 10_000 (events() per-consumer buffer)
+  pollIntervalMs: number;  // default 5000
+  jobTimeoutMs: number;    // default 1_800_000
+  maxActiveRuns: number;   // default 1 (runs driven at once in this process)
 };
 
 export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean };
@@ -470,18 +474,23 @@ export type ProviderErrorHint = {
   retryAfterMs?: number;
 };
 
-export type State = { active: ActiveRun | null };
+export type State = {
+  active: Map<string, ActiveRun>;
+  subscribers: Set<Subscriber>;
+  claims: Map<string, Claim>; // artifact key -> the item allowed to reach the provider
+};
 
 export type RunnerApi = {
-  run(options: RunOptions, opts?: { signal?: AbortSignal }): Promise<RunResult>;
+  run(options: RunOptions, opts?: { signal?: AbortSignal; onStart?: (runId: string) => void }): Promise<RunResult>;
     // dryRun → no journal writes, runId "dry-run", status "done", plan total in
-    // totals.estimatedRemainingUsd. Throws only when a run is already active;
+    // totals.estimatedRemainingUsd. Throws only above maxActiveRuns;
     // in-run failures resolve { status: "failed" } after emitting run:failed.
-  resume(opts?: { runId?: string; signal?: AbortSignal }): Promise<RunResult>;
+  resume(opts?: { runId?: string; signal?: AbortSignal; onStart?: (runId: string) => void }): Promise<RunResult>;
     // requeueDispatching + idempotent re-plan; done items never re-billed.
   estimate(options: { files?: string }): Promise<EstimateResult>; // same math as the budget gate
   status(runId?: string): RunStatusReport; // given id, else active run, else latest resumable
-  events(): AsyncIterable<RunEvent>;
+  events(opts?: { runId?: string }): AsyncIterable<RunEvent>;
+    // { runId }: that run only; no runId: every run until none is active. Every record carries runId.
     // per-consumer bounded queue; oldest ITEM records drop into one {type:"overflow"};
     // "progress" coalesces (latest wins); "terminal" is ALWAYS delivered last.
 };
@@ -820,8 +829,8 @@ const watcher = createPlugin("watcher", {
 });
 ```
 
-Per-item stream records — app.runner.events(), AsyncIterable<RunEvent>, active run only
-(closed empty stream otherwise):
+Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, active runs only
+(closed empty stream otherwise). Every record also carries runId:
 
 | Record            | Fields                                | When |
 |-------------------|----------------------------------------|------|
@@ -872,6 +881,7 @@ runner:
   maxAttempts: number = 3                      — per-item retry ceiling (build defaults.maxAttempts overrides)
   retryBaseMs: number = 1000                   — backoff base (exponential, jittered 50–100%)
   eventBufferSize: number = 10_000             — events() per-consumer buffer
+  maxActiveRuns: number = 1                    — runs driven at once in this process
 
 voiceover:
   defaultProvider: string = "elevenlabs"
