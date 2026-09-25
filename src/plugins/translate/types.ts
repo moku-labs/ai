@@ -60,6 +60,13 @@ export type TranslateApi = {
    * @param opts.signal - Optional abort signal to cancel the request.
    * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
    * @returns The translated text, cost, and metadata.
+   * @example
+   * ```ts
+   * // Translate one subtitle line outside any run: nothing is journaled.
+   * const { text, costUsd } = await app.translate.generate({ text: "Hello, world!", targetLang: "es" });
+   * // text: the openai translation, costUsd: its usage priced from the openai table
+   * await app.translate.generate({ text: "hi", targetLang: "es" }, { provider: "missing" }); // throws: No translate provider named "missing"
+   * ```
    */
   generate(
     request: TranslateRequest,
@@ -72,12 +79,22 @@ export type TranslateApi = {
    * @param opts - Optional provider override.
    * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
    * @returns The estimated cost in USD.
+   * @example
+   * ```ts
+   * // Price a line before translating it; the default openai handler uses gpt-4o-mini.
+   * app.translate.estimate({ text: "Hello, world!", targetLang: "es" }); // { usd: 0.0000102 }
+   * ```
    */
   estimate(request: TranslateRequest, opts?: { provider?: string }): { usd: number };
   /**
    * Registered translate providers.
    *
    * @returns Provider names in registration order (first = task default).
+   * @example
+   * ```ts
+   * // List the names `opts.provider` accepts, for a provider picker.
+   * app.translate.providers(); // ["openai"]
+   * ```
    */
   providers(): string[];
 };

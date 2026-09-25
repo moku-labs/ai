@@ -839,10 +839,6 @@ function resolveReferenceFiles(
  * @param active - The run's live bookkeeping (in-flight counter).
  * @param report - Stream callback.
  * @returns The item's claim verdict.
- * @example
- * ```ts
- * const verdict = await runAttempts(ctx, item, plan, request, drain, active, report); // { kind: "done" }
- * ```
  */
 async function runAttempts(
   ctx: RunnerContext,

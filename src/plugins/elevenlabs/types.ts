@@ -65,6 +65,12 @@ export type ElevenlabsApi = {
    * Provider health/info for `moku status` + docs.
    *
    * @returns Whether the provider is configured (an API key is present, without throwing) and the models known to the effective price table.
+   * @example
+   * ```ts
+   * // Before a voiceover run, check ELEVENLABS_API_KEY is set; this call never throws.
+   * const { configured, models } = app.elevenlabs.info();
+   * // configured: false without the key, models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_monolingual_v1"]
+   * ```
    */
   info(): { provider: "elevenlabs"; configured: boolean; models: string[] };
 };

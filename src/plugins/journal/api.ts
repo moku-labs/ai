@@ -428,10 +428,6 @@ function getRun(state: State, runId: string): RunRow | undefined {
  * @param opts - Optional filter.
  * @param opts.exclude - Run ids to skip; omitted or empty skips none.
  * @returns The latest resumable run, or undefined if none exists.
- * @example
- * ```ts
- * const resumable = latestResumableRun(state, { exclude: ["run-driven-now"] });
- * ```
  */
 function latestResumableRun(
   state: State,
@@ -986,10 +982,6 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
    * @param opts - Optional filter.
    * @param opts.exclude - Run ids to skip; omitted or empty skips none.
    * @returns The latest resumable run, or undefined if none exists.
-   * @example
-   * ```ts
-   * const resumable = api.latestResumableRun({ exclude: ["run-driven-now"] });
-   * ```
    */
   const boundLatestResumableRun = (opts?: { exclude?: readonly string[] }): RunRow | undefined =>
     latestResumableRun(state, opts);

@@ -96,6 +96,12 @@ export type FalApi = {
    * Provider health/info for `moku status` + docs.
    *
    * @returns Whether the key is present (never throws) and the accepted model aliases.
+   * @example
+   * ```ts
+   * // Before a video run, check FAL_KEY is set and the shot's model alias exists.
+   * const { configured, models } = app.fal.info();
+   * // configured: false without the key, models.includes("minimax-h3"): true
+   * ```
    */
   info(): FalInfo;
 };

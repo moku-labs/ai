@@ -80,18 +80,64 @@ export type LimitsApi = {
    * function that MUST be called exactly once when the request settles.
    * Rejects immediately (reason `"breaker-open"`) when the breaker is open.
    * An aborted wait leaves no leaked token or concurrency slot.
+   *
+   * @example
+   * ```ts
+   * // runner, before each provider call: wait for a token and a slot on the lane
+   * const { release } = await ctx.limits.acquire("voiceover/elevenlabs/default", { signal: drain.signal });
+   * try { await callProvider(); } finally { release(); } // release exactly once
+   * // rejects at once with error.reason === "breaker-open" while the lane's breaker is open
+   * ```
    */
   acquire(lane: string, opts?: { signal?: AbortSignal }): Promise<{ release: () => void }>;
   /**
    * Feeds the circuit breaker with a request outcome: `"ok"` closes/resets
    * it; `"retryable-error"` advances it toward open. Terminal 4xx responses
    * should NOT be reported here — they are deterministic, not a health signal.
+   *
+   * @example
+   * ```ts
+   * // runner, after an attempt: a 429, 5xx or timeout counts toward the breaker, a success resets it
+   * ctx.limits.reportOutcome("voiceover/elevenlabs/default", "retryable-error"); // failure count + 1
+   * ctx.limits.reportOutcome("voiceover/elevenlabs/default", "ok"); // count back to 0, breaker closed
+   * // 5 in a row (default breakerThreshold) open the breaker for 30 s: acquire() rejects "breaker-open"
+   * ```
    */
   reportOutcome(lane: string, outcome: "ok" | "retryable-error"): void;
-  /** Effective settings for a lane: defaults merged with prefix and exact overrides. */
+  /**
+   * Effective settings for a lane: defaults merged with prefix and exact overrides.
+   *
+   * @example
+   * ```ts
+   * // A status view shows the settings in effect for a lane
+   * ctx.limits.laneConfig("translate/openai/default");
+   * // { rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 } with the default config
+   * // lanes: { "translate/openai": { rpm: 2 } } gives rpm 2; an exact "translate/openai/default" key wins over it
+   * ```
+   */
   laneConfig(lane: string): LaneConfig;
-  /** Introspection snapshot for a lane: tokens, in-flight, waiting, breaker phase. */
+  /**
+   * Introspection snapshot for a lane: tokens, in-flight, waiting, breaker phase.
+   *
+   * @example
+   * ```ts
+   * // A status view: a lane nobody used yet is pristine, and the read does not register it
+   * ctx.limits.snapshot("voiceover/elevenlabs/default");
+   * // { lane: "voiceover/elevenlabs/default", tokens: 60, inFlight: 0, waiting: 0, breaker: "closed" }
+   * ctx.limits.lanes(); // [] in a fresh app: still empty
+   * ```
+   */
   snapshot(lane: string): LaneSnapshot;
-  /** All lane keys currently tracked (touched by at least one acquire/reportOutcome call). */
+  /**
+   * All lane keys currently tracked (touched by at least one acquire/reportOutcome call).
+   *
+   * @example
+   * ```ts
+   * // A status view lists every lane this process has used
+   * ctx.limits.reportOutcome("voiceover/elevenlabs/default", "ok");
+   * ctx.limits.lanes(); // ["voiceover/elevenlabs/default"] in a fresh app
+   * for (const lane of ctx.limits.lanes()) ctx.log.info("lane status", ctx.limits.snapshot(lane));
+   * ```
+   */
   lanes(): string[];
 };

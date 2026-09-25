@@ -21,10 +21,6 @@ export const OPEN_VERDICT: ClaimVerdict = { kind: "open" };
  * @param item - The queued item.
  * @param report - Stream callback.
  * @returns True when the item was completed by reuse.
- * @example
- * ```ts
- * if (await tryReuse(ctx, item, report)) return;
- * ```
  */
 export async function tryReuse(
   ctx: RunnerContext,
@@ -68,10 +64,6 @@ const DRAINED = "drained";
  * @param settled - The leader's claim verdict.
  * @param signal - The follower's drain signal.
  * @returns The verdict, or `"drained"` when the drain signal fired first.
- * @example
- * ```ts
- * await verdictUnlessDrained(leader.settled, drain.signal); // "drained" after a pause
- * ```
  */
 async function verdictUnlessDrained(
   settled: Promise<ClaimVerdict>,
@@ -110,10 +102,6 @@ async function verdictUnlessDrained(
  * @param verdict - The leader's verdict.
  * @param drain - The follower's drain controller.
  * @param report - Stream callback.
- * @example
- * ```ts
- * shareVerdict(ctx, item, { kind: "failed", errorClass: "http-4xx" }, drain, report); // item:failed, no submit
- * ```
  */
 function shareVerdict(
   ctx: RunnerContext,
@@ -150,10 +138,6 @@ function shareVerdict(
  * @param drain - The follower's drain controller.
  * @param report - Stream callback.
  * @returns True when the follower settled.
- * @example
- * ```ts
- * if (await copyVerdict(ctx, item, { kind: "done" }, drain, report)) return undefined;
- * ```
  */
 async function copyVerdict(
   ctx: RunnerContext,
@@ -181,11 +165,6 @@ async function copyVerdict(
  * @param drain - The item's drain controller.
  * @param report - Stream callback.
  * @returns The claim to settle with this item's verdict, or undefined when the item settled while waiting (verdict copied, or the run is draining and the item stays `queued`).
- * @example
- * ```ts
- * const settleClaim = await claimArtifact(ctx, item, drain, report);
- * if (!settleClaim) return "settled";
- * ```
  */
 export async function claimArtifact(
   ctx: RunnerContext,

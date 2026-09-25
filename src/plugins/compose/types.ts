@@ -98,6 +98,13 @@ export type ComposeApi = {
    * @param opts.signal - Optional abort signal forwarded to every `promptGen.generate` call.
    * @returns The validated spec, its emitted text, and the total generation cost.
    * @throws {Error} The pinned two-line error when every attempt fails IR validation.
+   * @example
+   * ```ts
+   * // `moku compose "a sunset over the ocean"`: draft a build file, then write `text` to disk.
+   * const { spec, text, costUsd } = await app.compose.compose({ prompt: "a sunset over the ocean", emit: "build", name: "sunset" });
+   * // spec.name: "sunset", text starts with "# yaml-language-server: $schema=.moku/build.schema.json"
+   * // costUsd sums every attempt: 0.5 invalid + 0.25 repaired = 0.75
+   * ```
    */
   compose(opts: {
     prompt: string;

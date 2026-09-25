@@ -158,12 +158,24 @@ export type CliApi = {
    *
    * @param argv - Command-line arguments, excluding the node/script prefix (e.g. `["run", "--dry-run"]`).
    * @returns The exit code (see {@link EXIT_CODES}).
+   * @example
+   * ```ts
+   * // `moku run --dry-run` in a shell: bin.ts hands argv over and owns the exit.
+   * const code = await app.cli.dispatch(["run", "--dry-run"]); // 0: estimate rendered, nothing billed
+   * await app.cli.dispatch(["frobnicate"]); // 3: usage listing, unknown command
+   * ```
    */
   dispatch(argv: string[]): Promise<number>;
   /**
    * The mountable command tree, exported for a future umbrella CLI to remount under `moku ai <cmd>`.
    *
    * @returns The command tree.
+   * @example
+   * ```ts
+   * // An umbrella CLI lists the commands it remounts under `moku ai <cmd>`.
+   * const tree = app.cli.commands();
+   * tree.commands.map(command => command.name); // ["new", "validate", "estimate", "run", "export", "status", "compose"]
+   * ```
    */
   commands(): CommandTree;
 };

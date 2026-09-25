@@ -60,6 +60,13 @@ export type PromptGenApi = {
    * @param opts.signal - Optional abort signal to cancel the request.
    * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
    * @returns The generated text, cost, and metadata.
+   * @example
+   * ```ts
+   * // One caption outside any run: nothing is journaled, so a crash loses it.
+   * const { text, costUsd } = await app.promptGen.generate({ prompt: "Caption a sunset shot in five words." });
+   * // text: the openai reply, costUsd: its usage priced from the openai table
+   * await app.promptGen.generate({ prompt: "hi" }, { provider: "missing" }); // throws: No prompt-gen provider named "missing"
+   * ```
    */
   generate(
     request: PromptGenRequest,
@@ -72,12 +79,22 @@ export type PromptGenApi = {
    * @param opts - Optional provider override.
    * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
    * @returns The estimated cost in USD.
+   * @example
+   * ```ts
+   * // Price a prompt before sending it; the default openai handler uses gpt-4o-mini.
+   * app.promptGen.estimate({ prompt: "Describe a sunset over the ocean." }); // { usd: 0.00000675 }
+   * ```
    */
   estimate(request: PromptGenRequest, opts?: { provider?: string }): { usd: number };
   /**
    * Registered prompt-gen providers.
    *
    * @returns Provider names in registration order (first = task default).
+   * @example
+   * ```ts
+   * // List the names `opts.provider` accepts, for a provider picker.
+   * app.promptGen.providers(); // ["openai"]
+   * ```
    */
   providers(): string[];
 };
