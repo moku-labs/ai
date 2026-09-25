@@ -393,7 +393,10 @@ Every record carries its `runId`.
 `[ai] A run is already active`. Each run keeps its own abort signal, budget, totals
 and status. Limits lanes stay global, so two runs share one lane's concurrency and
 rpm. An item with the same artifact key in two runs reaches the provider once: the
-second run waits and records the first one's result at cost 0.
+second run waits and records the first one's result at cost 0. When the first one
+ran out of retries on a 5xx, 429, network or timeout error, the second tries itself.
+`app.stop()` pauses the active runs and waits for them; in-flight jobs stay
+adoptable by a later `resume()`.
 
 ```ts
 const app = createApp({ pluginConfigs: { runner: { maxActiveRuns: 10 } } });

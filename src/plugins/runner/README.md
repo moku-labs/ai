@@ -275,15 +275,21 @@ own runId, abort signal, `maxCostUsd`, totals and status.
     from the store, treat it as `open`.
   - `flagged` / `failed` — record the same verdict (and error class) through the gate, with no
     attempt row and no submit: the same request would get the same verdict and cost money.
-  - `open` — the leader stopped without a provider verdict (paused, budget stop, lane refused).
-    The next waiter claims the key and adopts the leader's live job (`findLiveJob`), so a paused
-    leader's job is polled, never submitted again.
+    `failed` is shared only for a non-retryable class (4xx, unknown).
+  - `open` — the leader stopped without a final provider verdict (paused, budget stop, lane
+    refused, or its attempts ran out on a retryable 5xx / 429 / network / timeout error). The
+    leader's item is still `failed`, but the next waiter claims the key and tries for itself: a
+    retryable error can pass on a later try. It adopts the leader's live job (`findLiveJob`), so
+    a paused leader's job is polled, never submitted again.
 - **Abort isolation** — `opts.signal` pauses its own run only. A waiting item of a paused run
   stops waiting and stays `queued`; the other runs keep going.
 - **Resume** — `resume()` works while other runs are active; its default target skips them.
   `resume({ runId })` of a run this process drives is refused.
 - **Streams** — `events({ runId })` closes after that run ends; `events()` closes when no run is
   active any more. Every record carries its `runId`.
+- **`app.stop()`** — pauses every active run and waits for them to end. Each run drains like a
+  caller abort and resolves `{ status: "paused" }`, before the journal closes. In-flight provider
+  jobs stay `submitted`, so a later `resume()` adopts them instead of paying again.
 
 ```ts
 const app = createApp({ pluginConfigs: { runner: { maxActiveRuns: 2 } } });

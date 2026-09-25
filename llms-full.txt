@@ -407,7 +407,8 @@ The durable orchestrator. Per-item pipeline:
 Named constraints: per-item events NEVER on the bus; redaction boundary (raw
 prompts/bodies never reach ctx.journal — HandlerRequest is never journaled); up to
 maxActiveRuns runs per process (default 1; above the cap run()/resume() throws);
-lanes are shared across runs; the same artifact key in two runs is submitted once.
+lanes are shared across runs; the same artifact key in two runs is submitted once;
+app.stop() pauses active runs (onStop) and waits for them before the journal closes.
 
 Types (src/plugins/runner/types.ts):
 
