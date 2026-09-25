@@ -11,7 +11,8 @@ import {
 const URLS = {
   image: "https://cdn/img",
   refs: ["https://cdn/r1", "https://cdn/r2"],
-  audioRefs: []
+  audioRefs: [],
+  videoRefs: []
 };
 
 /** Builds the body for `model` from a request with the given overrides. */
@@ -219,7 +220,7 @@ describe("catalog additions: seedance 2.0, wan 3.0, veo 3.1 fast, vidu q3", () =
     const body = buildFalBody(
       resolveFalModel("wan-3.0-ref"),
       { model: "wan-3.0-ref", prompt: "p" },
-      { image: "u0", refs: [], audioRefs: ["a1", "a2"] }
+      { image: "u0", refs: [], audioRefs: ["a1", "a2"], videoRefs: [] }
     );
     expect(body.reference_image_urls).toEqual(["u0"]);
     expect(body.reference_audio_urls).toEqual(["a1", "a2"]);
@@ -262,5 +263,70 @@ describe("catalog additions: seedance 2.0, wan 3.0, veo 3.1 fast, vidu q3", () =
       aspect_ratio: "1:1",
       audio: true
     });
+  });
+});
+
+describe("video refs: catalog limits and body fields", () => {
+  const WITH_VIDEOS = { ...URLS, videoRefs: ["https://cdn/v1", "https://cdn/v2"] };
+  const IMAGE_URLS = ["https://cdn/img", "https://cdn/r1", "https://cdn/r2"];
+
+  it.each([
+    ["seedance-2.5", 0, 0],
+    ["seedance-2.5-ref", 10, 30.2],
+    ["minimax-h3", 0, 0],
+    ["minimax-h3-max-ref", 3, 15],
+    ["kling-3-pro", 0, 0],
+    ["kling-o3-ref", 0, 0],
+    ["seedance-2.0-mini", 0, 0],
+    ["seedance-2.0-mini-ref", 3, 15],
+    ["seedance-2.0-ref", 3, 15],
+    ["wan-3.0-ref", 0, 0],
+    ["veo-3.1-fast", 0, 0],
+    ["vidu-q3", 0, 0],
+    ["vidu-q3-ref", 0, 0]
+  ])("%s takes %i video refs, %d s combined", (alias, maxVideoRefs, maxVideoRefSec) => {
+    expect(resolveFalModel(alias)).toMatchObject({ maxVideoRefs, maxVideoRefSec });
+  });
+
+  it("minimax-h3-max-ref: sends reference_video_urls when there are video refs", () => {
+    const body = buildFalBody(
+      resolveFalModel("minimax-h3-max-ref"),
+      { model: "minimax-h3-max-ref", prompt: "p" },
+      WITH_VIDEOS
+    );
+
+    expect(body.reference_image_urls).toEqual(IMAGE_URLS);
+    expect(body.reference_video_urls).toEqual(["https://cdn/v1", "https://cdn/v2"]);
+  });
+
+  it("minimax-h3-max-ref: omits reference_video_urls without video refs", () => {
+    expect(bodyFor("minimax-h3-max-ref")).not.toHaveProperty("reference_video_urls");
+  });
+
+  it.each([
+    "seedance-2.5-ref",
+    "seedance-2.0-ref",
+    "seedance-2.0-mini-ref"
+  ])("%s: sends video_urls only when there are video refs", alias => {
+    const body = buildFalBody(resolveFalModel(alias), { model: alias, prompt: "p" }, WITH_VIDEOS);
+
+    expect(body.image_urls).toEqual(IMAGE_URLS);
+    expect(body.video_urls).toEqual(["https://cdn/v1", "https://cdn/v2"]);
+    expect(bodyFor(alias)).not.toHaveProperty("video_urls");
+  });
+
+  it.each([
+    "seedance-2.5",
+    "minimax-h3",
+    "kling-3-pro",
+    "kling-o3-ref",
+    "seedance-2.0-mini",
+    "wan-3.0-ref",
+    "veo-3.1-fast",
+    "vidu-q3",
+    "vidu-q3-ref"
+  ])("%s: ignores video refs", alias => {
+    const body = buildFalBody(resolveFalModel(alias), { model: alias, prompt: "p" }, WITH_VIDEOS);
+    expect(body).toEqual(bodyFor(alias, { prompt: "p" }));
   });
 });

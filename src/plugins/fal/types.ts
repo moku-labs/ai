@@ -51,16 +51,22 @@ export type Config = {
 
 /**
  * fal plugin state: the effective price table, computed once at first use
- * (bundled prices merged with `config.priceOverrides`).
+ * (bundled prices merged with `config.priceOverrides`), and the URLs of the
+ * files this process already put in fal storage.
  *
  * @example
  * ```ts
- * const state: State = { prices: null };
+ * const state: State = { prices: null, uploads: new Map() };
  * ```
  */
 export type State = {
   /** Effective price table (bundled prices merged with config.priceOverrides), computed once at first use. */
   prices: Record<string, number> | null;
+  /**
+   * fal storage URLs of files uploaded by this process, keyed `storage:<mime>:<sha256 of the bytes>`.
+   * Only storage URLs are kept, never a data-URI fallback. Cleared on `app.stop()`.
+   */
+  uploads: Map<string, string>;
 };
 
 /**

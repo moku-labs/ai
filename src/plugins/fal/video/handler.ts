@@ -8,7 +8,7 @@
  */
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
-import type { ResolvedFalModel } from "../models";
+import type { ResolvedFalModel, SplitReferences } from "../models";
 import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
 import type { FalContext, FalProviderError } from "../types";
@@ -103,22 +103,6 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
 }
 
 /**
- * A request's refs, split by kind: audio refs have an `audio/*` MIME type,
- * every other ref is an image ref.
- *
- * @example
- * ```ts
- * const split: SplitReferences = { images: [face], audio: [voice] };
- * ```
- */
-export type SplitReferences = {
-  /** Reference images (every ref that is not audio). */
-  images: readonly VideoFile[];
-  /** Reference audio files. */
-  audio: readonly VideoFile[];
-};
-
-/**
  * Whether a ref is an audio ref.
  *
  * @param file - The ref.
@@ -130,6 +114,34 @@ export type SplitReferences = {
  */
 function isAudioReference(file: VideoFile): boolean {
   return file.mimeType.startsWith("audio/");
+}
+
+/**
+ * Whether a ref is a video ref.
+ *
+ * @param file - The ref.
+ * @returns True for a `video/*` MIME type.
+ * @example
+ * ```ts
+ * isVideoReference({ path: "tail.mp4", mimeType: "video/mp4", hash: "h" }); // => true
+ * ```
+ */
+function isVideoReference(file: VideoFile): boolean {
+  return file.mimeType.startsWith("video/");
+}
+
+/**
+ * Whether a ref is an image ref: neither audio nor video.
+ *
+ * @param file - The ref.
+ * @returns True for every other MIME type.
+ * @example
+ * ```ts
+ * isImageReference({ path: "face.png", mimeType: "image/png", hash: "h" }); // => true
+ * ```
+ */
+function isImageReference(file: VideoFile): boolean {
+  return !isAudioReference(file) && !isVideoReference(file);
 }
 
 /**
@@ -147,7 +159,7 @@ function isAudioReference(file: VideoFile): boolean {
  */
 function tooManyReferencesError(
   model: ResolvedFalModel,
-  kind: "reference images" | "reference audio files",
+  kind: "reference images" | "reference audio files" | "video references",
   max: number,
   given: number
 ): Error {
@@ -159,12 +171,13 @@ function tooManyReferencesError(
 }
 
 /**
- * Splits the refs into images and audio and checks each against the model's
- * limit. Nothing is dropped: a request over a limit fails before any upload.
+ * Splits the refs into images, audio and videos and checks each against the
+ * model's limit. Nothing is dropped: a request over a limit fails before any
+ * upload.
  *
  * @param model - The resolved catalog row.
  * @param references - The request's refs.
- * @returns Image refs and audio refs, in request order.
+ * @returns Image refs, audio refs and video refs, each in request order.
  * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
  * @example
  * ```ts
@@ -175,8 +188,9 @@ export function splitReferences(
   model: ResolvedFalModel,
   references: readonly VideoFile[]
 ): SplitReferences {
+  const images = references.filter(file => isImageReference(file));
   const audio = references.filter(file => isAudioReference(file));
-  const images = references.filter(file => !isAudioReference(file));
+  const videos = references.filter(file => isVideoReference(file));
 
   if (images.length > model.maxRefs) {
     throw tooManyReferencesError(model, "reference images", model.maxRefs, images.length);
@@ -184,7 +198,10 @@ export function splitReferences(
   if (audio.length > model.maxAudioRefs) {
     throw tooManyReferencesError(model, "reference audio files", model.maxAudioRefs, audio.length);
   }
-  return { images, audio };
+  if (videos.length > model.maxVideoRefs) {
+    throw tooManyReferencesError(model, "video references", model.maxVideoRefs, videos.length);
+  }
+  return { images, audio, videos };
 }
 
 /**

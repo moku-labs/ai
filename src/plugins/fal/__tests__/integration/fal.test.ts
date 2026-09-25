@@ -173,6 +173,34 @@ describe("fal integration", () => {
     await second.stop();
   });
 
+  it("reuses an uploaded keyframe across submits until app.stop() clears the upload cache", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/storage/upload/initiate")) {
+        return json(200, {
+          upload_url: "https://upload.fal.test/put/1",
+          file_url: "https://cdn.fal.test/file/1"
+        });
+      }
+      if (url.startsWith("https://upload.fal.test/")) return new Response("", { status: 200 });
+      return jobResponses("req-3")[0] as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const initiates = (): number =>
+      fetchMock.mock.calls.filter(([url]) => url.includes("/storage/upload/initiate")).length;
+    const app = buildFramework(dbPath).createApp();
+    await app.start();
+    const handler = app.registry.resolve("video", "fal") as VideoHandler;
+    const request = { model: "minimax-h3", prompt: "push-in", image };
+
+    await handler.submit?.(request, {});
+    await handler.submit?.({ ...request, seconds: 6 }, {});
+    expect(initiates()).toBe(1);
+
+    await app.stop();
+    await handler.submit?.(request, {});
+    expect(initiates()).toBe(2);
+  });
+
   it("a content-policy failure surfaces as FlaggedProviderError through the facade", async () => {
     stubFetch([
       jobResponses("req-5")[0] as Response,
