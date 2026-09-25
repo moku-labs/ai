@@ -145,8 +145,9 @@ function startActiveRun(
 }
 
 /**
- * Ends a run in this process: frees its slot, then closes its streams (and
- * the all-runs streams when it was the last active run).
+ * Ends a run in this process: frees its slot, closes its streams (and the
+ * all-runs streams when it was the last active run), then resolves the run's
+ * `settled`, so a waiting `app.stop()` continues.
  *
  * @param ctx - Runner domain context.
  * @param runId - The run that ended.
@@ -156,8 +157,10 @@ function startActiveRun(
  * ```
  */
 function finishActiveRun(ctx: RunnerContext, runId: string): void {
+  const active = ctx.state.active.get(runId);
   removeActiveRun(ctx.state, runId);
   closeSubscribers(ctx.state, runId);
+  active?.settle();
 }
 
 /**
@@ -307,7 +310,7 @@ function startItems(
 /**
  * Drives every queued item of a run concurrently to a terminal outcome,
  * coalescing progress and delivering the final `"terminal"` stream record
- * and bus event.
+ * and bus event. The drain fires on the caller's signal or on `app.stop()`.
  *
  * @param ctx - Runner domain context.
  * @param run - The run row (used for its id and `maxCostUsd`).
@@ -328,7 +331,9 @@ async function drivePipeline(
   planned: PlannedItem[]
 ): Promise<RunResult> {
   const queued = items.filter(item => item.status === "queued");
-  const drain = createDrainController(active.signal);
+  // A caller abort and app.stop() drain the run the same way.
+  const stopSignals = active.signal ? [active.signal, active.stop.signal] : [active.stop.signal];
+  const drain = createDrainController(AbortSignal.any(stopSignals));
 
   let lastProgressAt = 0;
   /**

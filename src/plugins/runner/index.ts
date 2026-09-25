@@ -8,7 +8,7 @@ import { createPlugin } from "../../config";
 import { buildfilePlugin } from "../buildfile";
 import { registryPlugin } from "../registry";
 import { createRunnerApi } from "./api";
-import { createRunnerState } from "./state";
+import { createRunnerState, stopActiveRuns } from "./state";
 import type { Config, RunnerEvents } from "./types";
 
 const defaultConfig: Config = {
@@ -22,10 +22,12 @@ const defaultConfig: Config = {
 
 /**
  * runner — Complex tier plugin. Durable run orchestrator; the only event
- * declarer at M0. Depends on registry, buildfile.
+ * declarer at M0. Depends on registry, buildfile. `app.stop()` pauses the
+ * active runs and waits for them.
  *
  * @see README.md
  */
+// @no-resource-check — onStop drains the active runs before core plugins (journal) stop: regular onStop runs first (spec/03)
 export const runnerPlugin = createPlugin("runner", {
   depends: [registryPlugin, buildfilePlugin],
   config: defaultConfig,
@@ -65,5 +67,17 @@ export const runnerPlugin = createPlugin("runner", {
    * app.runner.run({ files: "voice/*.moku.yaml" });
    * ```
    */
-  api: ctx => createRunnerApi(ctx)
+  api: ctx => createRunnerApi(ctx),
+  /**
+   * Pauses every active run and waits until each one settled.
+   *
+   * @param ctx - Teardown context; only the runner's own state is used.
+   * @param ctx.state - Runner state.
+   * @returns Resolves once no run is active.
+   * @example
+   * ```ts
+   * await app.stop(); // active runs resolve { status: "paused" } first
+   * ```
+   */
+  onStop: ({ state }) => stopActiveRuns(state)
 });

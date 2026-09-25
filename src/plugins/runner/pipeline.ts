@@ -722,8 +722,10 @@ type OutcomeApplied =
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
  * computed backoff delay. A stop carries the item's claim verdict: `done`,
- * `flagged`, `failed` with its class, or `open` for an abort. Extracted from
- * {@link executeItem} to keep its loop body flat.
+ * `flagged`, `failed` with its class for a non-retryable failure, or `open`
+ * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
+ * timeout error can pass on a later try, so a follower tries for itself.
+ * Extracted from {@link executeItem} to keep its loop body flat.
  *
  * @param ctx - Runner domain context.
  * @param item - The item the attempt belongs to.
@@ -734,7 +736,9 @@ type OutcomeApplied =
  * @returns Whether the item reached a terminal state, or the next attempt count and backoff delay.
  * @example
  * ```ts
- * const applied = applyOutcome(ctx, item, maxAttempts, attempt, outcome, report);
+ * // Attempt 1 of 3 hit a retryable 503: the item is re-queued with a backoff.
+ * const retryable = { kind: "retryable", errorClass: "http-5xx", retryAfterMs: undefined } as const;
+ * applyOutcome(ctx, item, 3, 0, retryable, report); // { terminal: false, attempt: 1, waitMs: 500..1000 }
  * ```
  */
 function applyOutcome(
@@ -745,6 +749,7 @@ function applyOutcome(
   outcome: AttemptOutcomeResult,
   report: (event: UnstampedRunEvent) => void
 ): OutcomeApplied {
+  // Terminal outcomes: report the matching record and stop the item.
   if (outcome.kind === "aborted") return { terminal: true, verdict: OPEN_VERDICT };
   if (outcome.kind === "done") {
     report({
@@ -764,11 +769,12 @@ function applyOutcome(
     return { terminal: true, verdict: { kind: "failed", errorClass: outcome.errorClass } };
   }
 
+  // Retryable: out of attempts is a terminal failure, else re-queue with a backoff.
   const nextAttempt = attempt + 1;
   if (nextAttempt >= maxAttempts) {
     ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: true });
     report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { terminal: true, verdict: { kind: "failed", errorClass: outcome.errorClass } };
+    return { terminal: true, verdict: OPEN_VERDICT };
   }
 
   ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: false });
@@ -822,8 +828,8 @@ function resolveReferenceFiles(
  * The per-item attempt loop: admit(limits.acquire) → gate(journal,
  * atomic) → attempt → apply the outcome, looping on retryable failures until
  * the item stops. Returns the verdict its artifact claim settles with: `open`
- * when it stopped without a provider verdict (lane refused, gate refused,
- * drained, aborted mid-attempt).
+ * when it stopped without a final provider verdict (lane refused, gate
+ * refused, drained, aborted mid-attempt, retryable attempts exhausted).
  *
  * @param ctx - Runner domain context.
  * @param item - The queued item.

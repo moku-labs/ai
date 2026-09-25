@@ -1,6 +1,7 @@
 /**
- * @file runner plugin — state factory, the active-run map and the artifact
- * claim map (one provider call per artifact key across every active run).
+ * @file runner plugin — state factory, the active-run map (and the stop that
+ * drains it) and the artifact claim map (one provider call per artifact key
+ * across every active run).
  */
 import type { ActiveRun, Claim, ClaimVerdict, State } from "./types";
 
@@ -19,7 +20,8 @@ export function createRunnerState(): State {
 
 /**
  * Registers a run this process starts driving. Map order is start order, so
- * the last entry is the newest active run.
+ * the last entry is the newest active run. The run gets its own stop
+ * controller and a `settled` promise it resolves with `settle()` once it ended.
  *
  * @param state - Runner state.
  * @param runId - The run's id.
@@ -27,7 +29,8 @@ export function createRunnerState(): State {
  * @returns The run's live bookkeeping.
  * @example
  * ```ts
- * addActiveRun(createRunnerState(), "run-1", undefined); // { runId: "run-1", signal: undefined, inFlight: 0 }
+ * const active = addActiveRun(createRunnerState(), "run-1", undefined);
+ * active.stop.signal.aborted; // false until app.stop()
  * ```
  */
 export function addActiveRun(
@@ -35,9 +38,54 @@ export function addActiveRun(
   runId: string,
   signal: AbortSignal | undefined
 ): ActiveRun {
-  const active: ActiveRun = { runId, signal, inFlight: 0 };
+  const { promise, resolve } = Promise.withResolvers<void>();
+  const active: ActiveRun = {
+    runId,
+    signal,
+    inFlight: 0,
+    stop: new AbortController(),
+    settled: promise,
+    settle: resolve
+  };
   state.active.set(runId, active);
   return active;
+}
+
+/**
+ * Stops every run this process drives: aborts each run's stop signal, so it
+ * drains to `paused` like a caller abort, then waits until every run settled.
+ * An in-flight provider job stays `submitted`, so a later `resume()` adopts it.
+ * A run that starts while it waits is stopped and awaited too.
+ *
+ * @param state - Runner state.
+ * @returns Resolves once every active run settled; at once when none is active.
+ * @example
+ * ```ts
+ * await stopActiveRuns(state); // state.active is empty, every run resolved paused
+ * ```
+ */
+export async function stopActiveRuns(state: State): Promise<void> {
+  const stopped = new Set<ActiveRun>();
+  /**
+   * The active runs this stop has not aborted yet.
+   *
+   * @returns Those runs, in start order.
+   * @example
+   * ```ts
+   * notStoppedYet(); // [] once every run started before or during the stop was aborted
+   * ```
+   */
+  const notStoppedYet = (): ActiveRun[] =>
+    [...state.active.values()].filter(active => !stopped.has(active));
+
+  // Runs can start while earlier ones drain, so repeat until none is left.
+  for (let runs = notStoppedYet(); runs.length > 0; runs = notStoppedYet()) {
+    for (const active of runs) {
+      active.stop.abort();
+      stopped.add(active);
+    }
+    await Promise.allSettled(runs.map(active => active.settled));
+  }
 }
 
 /**
