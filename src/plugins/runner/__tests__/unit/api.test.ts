@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRunnerApi, shouldEmitProgress } from "../../api";
-import { addActiveRun } from "../../state";
+import { addActiveRun, stopActiveRuns } from "../../state";
 import type { RunEvent } from "../../types";
 import { type CallLog, createFakeRunnerContext, ZERO_TOTALS } from "./fixtures";
 
@@ -242,6 +242,47 @@ describe("createRunnerApi — run lifecycle", () => {
     expect(ctx.state.subscribers.size).toBe(0);
     expect(ownRun?.at(-1)?.type).toBe("terminal");
     expect(everyRun?.at(-1)?.type).toBe("terminal");
+  });
+
+  it("resolves the run's settled only after it left state.active and its streams closed", async () => {
+    const ctx = createFakeRunnerContext([]);
+    const api = createRunnerApi(ctx);
+    let seenOnSettle: Promise<{ active: number; subscribers: number }> | undefined;
+
+    await api.run(
+      {},
+      {
+        onStart: runId => {
+          void collect(api.events({ runId }));
+          const active = ctx.state.active.get(runId);
+          seenOnSettle = active?.settled.then(() => ({
+            active: ctx.state.active.size,
+            subscribers: ctx.state.subscribers.size
+          }));
+        }
+      }
+    );
+
+    await expect(seenOnSettle).resolves.toEqual({ active: 0, subscribers: 0 });
+  });
+
+  it("a stop abort drains the run to paused, and stopActiveRuns resolves once it settled", async () => {
+    const ctx = createFakeRunnerContext([]);
+    const api = createRunnerApi(ctx);
+    let activeWhenStopped: Promise<number> | undefined;
+
+    const result = await api.run(
+      {},
+      {
+        onStart: () => {
+          activeWhenStopped = stopActiveRuns(ctx.state).then(() => ctx.state.active.size);
+        }
+      }
+    );
+
+    expect(result.status).toBe("paused");
+    expect(ctx.emit).toHaveBeenCalledWith("run:paused", { runId: "run-1", drained: 0 });
+    await expect(activeWhenStopped).resolves.toBe(0);
   });
 
   it("resume() targets the newest resumable run that this process does not drive", async () => {

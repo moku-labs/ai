@@ -19,7 +19,7 @@ import {
 
 /**
  * Builds a fake `ActiveRun`, for `executeItem` tests (only `inFlight`/`signal`
- * are exercised).
+ * are exercised; the stop controller and settle promise are inert).
  *
  * @param signal - Optional abort signal to attach.
  * @returns A fake active-run record.
@@ -29,7 +29,15 @@ import {
  * ```
  */
 function fakeActiveRun(signal?: AbortSignal): ActiveRun {
-  return { runId: "run-1", signal, inFlight: 0 };
+  const { promise, resolve } = Promise.withResolvers<void>();
+  return {
+    runId: "run-1",
+    signal,
+    inFlight: 0,
+    stop: new AbortController(),
+    settled: promise,
+    settle: resolve
+  };
 }
 
 /**
@@ -773,9 +781,9 @@ describe("executeItem — cross-run dedupe claim", () => {
       expect(verdict).toEqual({ kind: "failed", errorClass: "http-4xx" });
     });
 
-    it("failed with the class of the last retryable failure once attempts are exhausted", async () => {
+    it("open once attempts are exhausted on a retryable class, so a follower tries itself", async () => {
       const { verdict } = await leaderVerdict({ hint: { status: 503 }, maxAttempts: 1 });
-      expect(verdict).toEqual({ kind: "failed", errorClass: "http-5xx" });
+      expect(verdict).toEqual({ kind: "open" });
     });
 
     it("open when the gate refuses it", async () => {

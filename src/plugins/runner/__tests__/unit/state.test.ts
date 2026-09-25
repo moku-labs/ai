@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { addActiveRun, createRunnerState, openClaim, removeActiveRun } from "../../state";
+import {
+  addActiveRun,
+  createRunnerState,
+  openClaim,
+  removeActiveRun,
+  stopActiveRuns
+} from "../../state";
 
 describe("createRunnerState", () => {
   it("starts with no active run, no stream consumer and no artifact claim", () => {
@@ -28,8 +34,70 @@ describe("addActiveRun", () => {
     const second = addActiveRun(state, "run-2", controller.signal);
 
     expect([...state.active.keys()]).toEqual(["run-1", "run-2"]);
-    expect(second).toEqual({ runId: "run-2", signal: controller.signal, inFlight: 0 });
+    expect(second).toMatchObject({ runId: "run-2", signal: controller.signal, inFlight: 0 });
     expect(state.active.get("run-2")).toBe(second);
+  });
+
+  it("gives each run its own stop controller, not aborted, and a settle that resolves settled", async () => {
+    const state = createRunnerState();
+
+    const first = addActiveRun(state, "run-1", undefined);
+    const second = addActiveRun(state, "run-2", undefined);
+    first.settle();
+
+    expect(first.stop).not.toBe(second.stop);
+    expect(first.stop.signal.aborted).toBe(false);
+    await expect(first.settled).resolves.toBeUndefined();
+  });
+});
+
+describe("stopActiveRuns", () => {
+  it("resolves at once when no run is active", async () => {
+    await expect(stopActiveRuns(createRunnerState())).resolves.toBeUndefined();
+  });
+
+  it("aborts every active run's stop signal", () => {
+    const state = createRunnerState();
+    const first = addActiveRun(state, "run-1", undefined);
+    const second = addActiveRun(state, "run-2", undefined);
+
+    void stopActiveRuns(state);
+
+    expect(first.stop.signal.aborted).toBe(true);
+    expect(second.stop.signal.aborted).toBe(true);
+  });
+
+  it("resolves only after every run called settle()", async () => {
+    const state = createRunnerState();
+    const first = addActiveRun(state, "run-1", undefined);
+    const second = addActiveRun(state, "run-2", undefined);
+    let stopped = false;
+
+    const stopping = stopActiveRuns(state).then(() => (stopped = true));
+    first.settle();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(stopped).toBe(false);
+
+    second.settle();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it("also stops and awaits a run that starts while it waits", async () => {
+    const state = createRunnerState();
+    const first = addActiveRun(state, "run-1", undefined);
+    let stopped = false;
+
+    const stopping = stopActiveRuns(state).then(() => (stopped = true));
+    const late = addActiveRun(state, "run-2", undefined);
+    first.settle();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(late.stop.signal.aborted).toBe(true);
+    expect(stopped).toBe(false);
+
+    late.settle();
+    await stopping;
+    expect(stopped).toBe(true);
   });
 });
 

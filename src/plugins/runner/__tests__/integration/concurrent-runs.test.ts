@@ -162,6 +162,34 @@ function jobHandler(isDone: () => boolean) {
 }
 
 /**
+ * An `execute` handler for the `text` task whose first `failures` calls throw
+ * a 503 once `hold` resolves; later calls succeed at cost 0.1.
+ *
+ * @param failures - How many calls fail with a 503.
+ * @param hold - Every call waits on it before it answers.
+ * @returns The handler and how many calls it got.
+ * @example
+ * ```ts
+ * const flaky = flakyHandler(2, hold.promise); // calls 1 and 2 fail, call 3 succeeds
+ * ```
+ */
+function flakyHandler(failures: number, hold: Promise<void>) {
+  const calls: string[] = [];
+  const handler: ExecutableHandler = {
+    estimate: () => ({ usd: 0.1 }),
+    execute: async request => {
+      const call = calls.push(String(request.text));
+      await hold;
+      if (call <= failures) {
+        throw Object.assign(new Error("[fake] Service unavailable."), { status: 503 });
+      }
+      return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
+    }
+  };
+  return { handler, calls };
+}
+
+/**
  * Writes one build file with one item per text into its own folder.
  *
  * @param dir - Folder for the build file.
@@ -443,6 +471,28 @@ describe("runner: several runs at once", () => {
     expect([a.totals.done, b.totals.done]).toEqual([1, 1]);
   });
 
+  it("a leader that exhausts its attempts on a 503 lets the follower call the provider itself", async () => {
+    const hold = Promise.withResolvers<void>();
+    const flaky = flakyHandler(2, hold.promise);
+    const app = await open([["text", "fake", flaky.handler]], {
+      runner: { maxActiveRuns: 2, maxAttempts: 2 }
+    });
+    const files = await writeBuild(path.join(tempDir, "shared"), ["shot"]);
+
+    const runA = app.runner.run({ files });
+    await vi.waitFor(() => expect(flaky.calls).toHaveLength(1));
+    const runB = app.runner.run({ files });
+    await vi.waitFor(() => expect(logged(app, "runner:dedupe:wait")).toBe(1));
+    hold.resolve();
+    const [a, b] = await Promise.all([runA, runB]);
+
+    // A's two attempts failed; the third call is B's own.
+    expect(flaky.calls).toEqual(["shot", "shot", "shot"]);
+    expect(a).toMatchObject({ status: "done", totals: { done: 0, failed: 1 } });
+    expect(b).toMatchObject({ status: "done", totals: { done: 1, failed: 0, spendUsd: 0.1 } });
+    expect(logged(app, "runner:dedupe:shared")).toBe(0);
+  });
+
   // -------------------------------------------------------------------------
   // Abort isolation
   // -------------------------------------------------------------------------
@@ -498,6 +548,51 @@ describe("runner: several runs at once", () => {
     expect(b).toMatchObject({ status: "done", totals: { done: 1, spendUsd: 0.5 } });
     expect(video.submits).toEqual(["job-1"]);
     expect(logged(app, "runner:job:adopted")).toBe(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // app.stop() with active runs
+  // -------------------------------------------------------------------------
+
+  it("app.stop() pauses every active run and waits for them; a fresh app resumes one and adopts its job", async () => {
+    const video = jobHandler(() => false);
+    const app = await open([["video", "fake", video.handler]], { runner: { maxActiveRuns: 2 } });
+    const filesA = await writeBuild(path.join(tempDir, "a"), ["a-clip"], "video");
+    const filesB = await writeBuild(path.join(tempDir, "b"), ["b-clip"], "video");
+    const ended: string[] = [];
+
+    const runA = app.runner.run({ files: filesA }).finally(() => ended.push("a"));
+    const runB = app.runner.run({ files: filesB }).finally(() => ended.push("b"));
+    await vi.waitFor(() => expect(video.polls.length).toBeGreaterThanOrEqual(2));
+    expect(video.submits).toHaveLength(2);
+    await app.stop();
+
+    // stop() returned only after both runs had ended.
+    expect(ended.toSorted()).toEqual(["a", "b"]);
+    const [a, b] = await Promise.all([runA, runB]);
+    expect(a).toMatchObject({ status: "paused", totals: { dispatching: 1 } });
+    expect(b).toMatchObject({ status: "paused", totals: { dispatching: 1 } });
+    expect(app.probe.log.trace().filter(entry => entry.level === "error")).toEqual([]);
+
+    // A fresh app on the same journal and store: both jobs are still live.
+    const provider = jobHandler(() => true);
+    const fresh = await open([["video", "fake", provider.handler]], {
+      runner: { maxActiveRuns: 2 }
+    });
+    const [itemA] = fresh.probe.journal.listItems(a.runId);
+    const [itemB] = fresh.probe.journal.listItems(b.runId);
+    const liveA = fresh.probe.journal.findLiveJob(itemA?.artifactKey ?? "");
+    expect(liveA).toMatchObject({ jobState: "submitted" });
+    expect(fresh.probe.journal.findLiveJob(itemB?.artifactKey ?? "")).toMatchObject({
+      jobState: "submitted"
+    });
+
+    const resumed = await fresh.runner.resume({ runId: a.runId });
+
+    expect(resumed).toMatchObject({ runId: a.runId, status: "done", totals: { done: 1 } });
+    expect(provider.submits).toEqual([]);
+    expect(provider.polls).toEqual([liveA?.externalId]);
+    expect(video.submits).toContain(liveA?.externalId);
   });
 
   // -------------------------------------------------------------------------
