@@ -22,6 +22,7 @@ import type {
 import type { LimitsApi } from "../../../limits/types";
 import { registryPlugin } from "../../../registry";
 import type { StoreApi } from "../../../store/types";
+import { createRunnerState } from "../../state";
 import type {
   Config,
   ExecutableHandler,
@@ -190,9 +191,10 @@ export function createFakeRunnerContext(
     eventBufferSize: 10_000,
     pollIntervalMs: 0,
     jobTimeoutMs: 60_000,
+    maxActiveRuns: 1,
     ...overrides.config
   };
-  const state: State = { active: FAKE_NULL };
+  const state: State = createRunnerState();
 
   const registryApi: RegistryApi = {
     register: vi.fn(),

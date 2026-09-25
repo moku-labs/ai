@@ -408,6 +408,41 @@ describe("poll", () => {
     expect(error).toBeInstanceOf(TerminalProviderError);
   });
 
+  it("a 400 on a finished job's result is fal's verdict and fails terminal, not retryable", async () => {
+    stubFetch(
+      jsonResponse(200, { status: "COMPLETED" }),
+      jsonResponse(400, { detail: "bad input" })
+    );
+    const ctx = createTestCtx();
+
+    const error = failedError(await createVideoHandler(ctx).poll(JOB_ID, minimaxRequest(), {}));
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).not.toBeInstanceOf(RetryableProviderError);
+    expect((error as TerminalProviderError).status).toBe(400);
+    expect(ctx.log.warn).toHaveBeenCalledWith("fal:video:failed", {
+      requestId: "req-1",
+      errorType: "terminal",
+      status: 400
+    });
+    expect(ctx.log.warn).not.toHaveBeenCalledWith("fal:result:unreadable", expect.anything());
+  });
+
+  it("a 400 on the clip download fails terminal too", async () => {
+    stubFetch(
+      jsonResponse(200, { status: "COMPLETED" }),
+      jsonResponse(200, { video: { url: VIDEO_URL } }),
+      jsonResponse(400, {})
+    );
+
+    const error = failedError(
+      await createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
+    );
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as TerminalProviderError).status).toBe(400);
+  });
+
   it("another 4xx on a finished job's result is thrown retryable, so the paid clip is not lost", async () => {
     stubFetch(jsonResponse(200, { status: "COMPLETED" }), jsonResponse(404, { detail: "gone" }));
     const ctx = createTestCtx();

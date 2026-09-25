@@ -21,7 +21,27 @@ describe("bundled price table", () => {
       "kling-3-pro": 0.112,
       "kling-3-pro+audio": 0.168,
       "kling-o3-ref": 0.112,
-      "kling-o3-ref+audio": 0.14
+      "kling-o3-ref+audio": 0.14,
+      "seedance-2.0-mini@480p": 0.0721,
+      "seedance-2.0-mini@720p": 0.1547,
+      "seedance-2.0-mini-ref@480p": 0.0721,
+      "seedance-2.0-mini-ref@720p": 0.1547,
+      "seedance-2.0-ref@720p": 0.3034,
+      "seedance-2.0-ref@1080p": 0.682,
+      "wan-3.0-ref@480p": 0.05,
+      "wan-3.0-ref@720p": 0.1,
+      "wan-3.0-ref@1080p": 0.2,
+      "veo-3.1-fast@4k": 0.35,
+      "veo-3.1-fast+audio": 0.15,
+      "veo-3.1-fast": 0.1,
+      "vidu-q3@360p": 0.07,
+      "vidu-q3@540p": 0.07,
+      "vidu-q3@720p": 0.154,
+      "vidu-q3@1080p": 0.154,
+      "vidu-q3-ref@360p": 0.07,
+      "vidu-q3-ref@540p": 0.07,
+      "vidu-q3-ref@720p": 0.154,
+      "vidu-q3-ref@1080p": 0.154
     });
   });
 
@@ -93,5 +113,61 @@ describe("videoCostUsd", () => {
     expect(() => videoCostUsd(createTestCtx(), { model: "veo-9", prompt: "p" })).toThrow(
       'Unknown fal video model "veo-9"'
     );
+  });
+});
+
+describe("prices of the catalog additions", () => {
+  const prices = mergePrices({});
+
+  it.each([
+    ["seedance-2.0-mini@480p", 0.0721],
+    ["seedance-2.0-mini@720p", 0.1547],
+    ["seedance-2.0-mini-ref@480p", 0.0721],
+    ["seedance-2.0-mini-ref@720p", 0.1547],
+    ["seedance-2.0-ref@720p", 0.3034],
+    ["seedance-2.0-ref@1080p", 0.682],
+    ["wan-3.0-ref@480p", 0.05],
+    ["wan-3.0-ref@720p", 0.1],
+    ["wan-3.0-ref@1080p", 0.2],
+    ["veo-3.1-fast@4k", 0.35],
+    ["veo-3.1-fast+audio", 0.15],
+    ["veo-3.1-fast", 0.1],
+    ["vidu-q3@360p", 0.07],
+    ["vidu-q3@540p", 0.07],
+    ["vidu-q3@720p", 0.154],
+    ["vidu-q3@1080p", 0.154],
+    ["vidu-q3-ref@360p", 0.07],
+    ["vidu-q3-ref@540p", 0.07],
+    ["vidu-q3-ref@720p", 0.154],
+    ["vidu-q3-ref@1080p", 0.154]
+  ])("bundles %s at %d USD/s", (key, usd) => {
+    expect(bundledPrices[key]).toBe(usd);
+  });
+
+  it("veo-3.1-fast at 720p falls back to +audio when audio is on, else to the base price", () => {
+    expect(lookupPrice(prices, "veo-3.1-fast", "720p", true)).toBe(0.15);
+    expect(lookupPrice(prices, "veo-3.1-fast", "720p", false)).toBe(0.1);
+  });
+
+  it("veo-3.1-fast at 4k takes the 4k price with or without audio", () => {
+    expect(lookupPrice(prices, "veo-3.1-fast", "4k", true)).toBe(0.35);
+    expect(lookupPrice(prices, "veo-3.1-fast", "4k", false)).toBe(0.35);
+  });
+
+  it.each([
+    ["seedance-2.0-mini", 0.7735],
+    ["seedance-2.0-mini-ref", 0.7735],
+    ["seedance-2.0-ref", 1.517],
+    ["wan-3.0-ref", 0.5],
+    ["veo-3.1-fast", 0.5],
+    ["vidu-q3", 0.77],
+    ["vidu-q3-ref", 0.77]
+  ])("prices %s for 5 s at its default resolution: %d USD", (model, usd) => {
+    expect(videoCostUsd(createTestCtx(), { model, prompt: "p" })).toBe(usd);
+  });
+
+  it("prices veo-3.1-fast 8 s with audio at the +audio rate", () => {
+    const request = { model: "veo-3.1-fast", prompt: "p", seconds: 8, audio: true };
+    expect(videoCostUsd(createTestCtx(), request)).toBe(1.2);
   });
 });

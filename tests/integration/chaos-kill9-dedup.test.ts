@@ -445,11 +445,10 @@ describe("chaos suite — kill-9 durability, budget bounds, multi-build dedup", 
       expect(itemB.contentHash).toBe(itemA.contentHash);
     }
 
-    // Concurrent variant (plan's may-be-observational branch): the runner
-    // enforces a single active run PER PROCESS-STATE (runner/api.ts
-    // ensureNoActiveRun throws "[ai] A run is already active"), so a
-    // same-app concurrent run B is refused outright rather than deduped; the
-    // sequential assertions above pin the documented behavior instead.
+    // Concurrent variant: with the default runner.maxActiveRuns of 1 a
+    // same-app concurrent run B is refused ("[ai] A run is already active"),
+    // so the sequential assertions above pin this chaos bound. Same-key dedupe
+    // across concurrent runs is covered in runner concurrent-runs.test.ts.
   });
 
   // ---------------------------------------------------------------------------

@@ -80,9 +80,10 @@ describe("runRunCommand — flag parsing", () => {
 describe("runRunCommand — progress rendering", () => {
   it("renders progress and terminal events from runner.events()", async () => {
     const events: RunEvent[] = [
-      { type: "progress", totals: { ...ZERO_TOTALS, done: 1, total: 2 } },
+      { type: "progress", runId: "run-1", totals: { ...ZERO_TOTALS, done: 1, total: 2 } },
       {
         type: "terminal",
+        runId: "run-1",
         status: "done",
         totals: { ...ZERO_TOTALS, done: 1, flagged: 1, total: 2 }
       }
