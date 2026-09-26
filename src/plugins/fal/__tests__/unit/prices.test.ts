@@ -18,6 +18,12 @@ describe("bundled price table", () => {
       "minimax-h3-max-ref@1080P": 0.16,
       "minimax-h3-max-ref#refTokensIncluded": 4096,
       "minimax-h3-max-ref#refTokenUsdPer1k": 0.02,
+      "minimax-h3-ref@480P": 0.05,
+      "minimax-h3-ref@768P": 0.06,
+      "minimax-h3-ref@2K": 0.13,
+      "minimax-h3-ref@4K": 0.16,
+      "minimax-h3-ref#refImagesIncluded": 5,
+      "minimax-h3-ref#refImageUsd": 0.08,
       "kling-3-pro": 0.112,
       "kling-3-pro+audio": 0.168,
       "kling-o3-ref": 0.112,
@@ -41,7 +47,15 @@ describe("bundled price table", () => {
       "vidu-q3-ref@360p": 0.07,
       "vidu-q3-ref@540p": 0.07,
       "vidu-q3-ref@720p": 0.154,
-      "vidu-q3-ref@1080p": 0.154
+      "vidu-q3-ref@1080p": 0.154,
+      "gemini-omni-1.1-flash@360p": 0.03,
+      "gemini-omni-1.1-flash@720p": 0.1,
+      "gemini-omni-1.1-flash@1080p": 0.15,
+      "gemini-omni-1.1-flash@4k": 0.3,
+      "gemini-omni-1.1-flash-ref@360p": 0.03,
+      "gemini-omni-1.1-flash-ref@720p": 0.1,
+      "gemini-omni-1.1-flash-ref@1080p": 0.15,
+      "gemini-omni-1.1-flash-ref@4k": 0.3
     });
   });
 

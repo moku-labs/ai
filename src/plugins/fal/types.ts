@@ -45,7 +45,7 @@ export type Config = {
   upload: UploadMode;
   /** Per HTTP request timeout, ms. Default: 60_000. */
   timeoutMs: number;
-  /** USD-per-second overrides keyed by `<alias>`, `<alias>@<resolution>` or `<alias>+audio`. Default: {}. */
+  /** Price overrides keyed by `<alias>`, `<alias>@<resolution>`, `<alias>+audio` (USD/s) or a `<alias>#ref*` surcharge key. Default: {}. */
   priceOverrides: Record<string, number>;
 };
 

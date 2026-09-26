@@ -14,7 +14,9 @@ import type { FalContext } from "./types";
  * Bundled USD-per-second prices from the fal model pages. Keys are
  * `<alias>@<resolution>`, `<alias>+audio` or `<alias>`. A model billed for
  * reference tokens also has `<alias>#refTokensIncluded` (tokens free per
- * request) and `<alias>#refTokenUsdPer1k`. Override via `config.priceOverrides`.
+ * request) and `<alias>#refTokenUsdPer1k`. A model billed per reference image
+ * has `<alias>#refImagesIncluded` (images free per request) and
+ * `<alias>#refImageUsd`. Override via `config.priceOverrides`.
  *
  * @example
  * ```ts
@@ -35,6 +37,12 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "minimax-h3-max-ref@1080P": 0.16,
   "minimax-h3-max-ref#refTokensIncluded": 4096,
   "minimax-h3-max-ref#refTokenUsdPer1k": 0.02,
+  "minimax-h3-ref@480P": 0.05,
+  "minimax-h3-ref@768P": 0.06,
+  "minimax-h3-ref@2K": 0.13,
+  "minimax-h3-ref@4K": 0.16,
+  "minimax-h3-ref#refImagesIncluded": 5,
+  "minimax-h3-ref#refImageUsd": 0.08,
   "kling-3-pro": 0.112,
   "kling-3-pro+audio": 0.168,
   "kling-o3-ref": 0.112,
@@ -58,7 +66,15 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "vidu-q3-ref@360p": 0.07,
   "vidu-q3-ref@540p": 0.07,
   "vidu-q3-ref@720p": 0.154,
-  "vidu-q3-ref@1080p": 0.154
+  "vidu-q3-ref@1080p": 0.154,
+  "gemini-omni-1.1-flash@360p": 0.03,
+  "gemini-omni-1.1-flash@720p": 0.1,
+  "gemini-omni-1.1-flash@1080p": 0.15,
+  "gemini-omni-1.1-flash@4k": 0.3,
+  "gemini-omni-1.1-flash-ref@360p": 0.03,
+  "gemini-omni-1.1-flash-ref@720p": 0.1,
+  "gemini-omni-1.1-flash-ref@1080p": 0.15,
+  "gemini-omni-1.1-flash-ref@4k": 0.3
 };
 
 /** Cost precision: results are rounded to micro-dollars so 5 x 0.06 is 0.3, not 0.30000000000000004. */
@@ -237,6 +253,78 @@ function isAudioFile(file: EstimateInput): boolean {
 }
 
 /**
+ * Whether a ref is a resolved video ref.
+ *
+ * @param file - A request ref.
+ * @returns True for a resolved file with a `video/*` MIME type.
+ * @example
+ * ```ts
+ * isVideoFile({ path: "tail.mp4", mimeType: "video/mp4", hash: "h" }); // => true
+ * ```
+ */
+function isVideoFile(file: EstimateInput): boolean {
+  return isResolvedFile(file) && file.mimeType.startsWith("video/");
+}
+
+/**
+ * Whether a ref counts as a reference image: neither a resolved audio nor a
+ * resolved video file.
+ *
+ * @param file - A request ref.
+ * @returns True for an image ref, or a ref not resolved yet.
+ * @example
+ * ```ts
+ * isReferenceImage({ $ref: "face" }); // => true
+ * ```
+ */
+function isReferenceImage(file: EstimateInput): boolean {
+  return !isAudioFile(file) && !isVideoFile(file);
+}
+
+/**
+ * Reference images of a request: the first frame plus each ref that is
+ * neither a resolved audio nor a resolved video file (unresolved refs count
+ * as images, so the estimate is never low).
+ *
+ * @param request - The video request.
+ * @returns Number of reference images.
+ * @example
+ * ```ts
+ * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: square, refs: [voice] }); // => 1
+ * ```
+ */
+function referenceImageCount(request: VideoRequest): number {
+  const references: readonly EstimateInput[] = request.refs ?? [];
+  const refImages = references.filter(file => isReferenceImage(file)).length;
+  return refImages + (request.image === undefined ? 0 : 1);
+}
+
+/**
+ * USD for reference images above the included count, for a model with a
+ * `<alias>#refImageUsd` price; 0 for every other model.
+ *
+ * @param prices - The effective price table.
+ * @param alias - The model alias.
+ * @param request - The video request.
+ * @returns Surcharge in USD (unrounded).
+ * @example
+ * ```ts
+ * refImageCostUsd(mergePrices({}), "minimax-h3-ref", request); // => 0.08 for six images
+ * ```
+ */
+function refImageCostUsd(
+  prices: Readonly<Record<string, number>>,
+  alias: string,
+  request: VideoRequest
+): number {
+  const usdPerImage = prices[`${alias}#refImageUsd`];
+  if (usdPerImage === undefined) return 0;
+
+  const included = prices[`${alias}#refImagesIncluded`] ?? 0;
+  return Math.max(0, referenceImageCount(request) - included) * usdPerImage;
+}
+
+/**
  * Reference tokens of a request: every image (the first frame and each
  * non-audio ref, unresolved refs counted as images) plus a flat audio amount
  * when any audio ref is present.
@@ -286,7 +374,8 @@ function refTokenCostUsd(
 
 /**
  * Cost of a video request: seconds x USD per second of its model variant,
- * plus the reference-token surcharge for models billed that way. Estimate and
+ * plus the reference-token or reference-image surcharge for models billed
+ * that way. Estimate and
  * actual cost both come from here; reference images are sized from their
  * file headers once resolved, and priced at the worst case before.
  *
@@ -308,6 +397,11 @@ export function videoCostUsd(ctx: FalContext, request: VideoRequest): number {
     modelResolution(model, request),
     modelAudio(model, request)
   );
-  const usd = requestSeconds(request) * perSecond + refTokenCostUsd(prices, model.alias, request);
+
+  // Reference surcharges: tokens (H3 Max) or images beyond the free count (H3).
+  const surcharge =
+    refTokenCostUsd(prices, model.alias, request) + refImageCostUsd(prices, model.alias, request);
+
+  const usd = requestSeconds(request) * perSecond + surcharge;
   return Math.round(usd * MICRO_DOLLARS) / MICRO_DOLLARS;
 }

@@ -19,6 +19,7 @@ export type FalAlias =
   | "seedance-2.5-ref"
   | "minimax-h3"
   | "minimax-h3-max-ref"
+  | "minimax-h3-ref"
   | "kling-3-pro"
   | "kling-o3-ref"
   | "seedance-2.0-mini"
@@ -27,7 +28,9 @@ export type FalAlias =
   | "wan-3.0-ref"
   | "veo-3.1-fast"
   | "vidu-q3"
-  | "vidu-q3-ref";
+  | "vidu-q3-ref"
+  | "gemini-omni-1.1-flash"
+  | "gemini-omni-1.1-flash-ref";
 
 /**
  * Everything a body builder needs, already resolved: uploaded URLs,
@@ -118,8 +121,8 @@ export type MinimaxImageBody = {
 };
 
 /**
- * Request body of `minimax/h3-max/reference-to-video`: no first-frame field, so the
- * first frame leads `reference_image_urls`; native audio is always on.
+ * Request body of `minimax/h3-max/reference-to-video` and `minimax/h3/reference-to-video`:
+ * no first-frame field, so the first frame leads `reference_image_urls`; native audio is always on.
  *
  * @example
  * ```ts
@@ -273,6 +276,44 @@ export type ViduReferenceBody = {
 };
 
 /**
+ * Request body of `google/gemini-omni-flash/v1.1/image-to-video`: integer
+ * duration, no audio flag; `end_image_url` only through `request.params`.
+ *
+ * @example
+ * ```ts
+ * const body: GeminiOmniImageBody = { prompt: "p", image_url: "u", duration: 5, resolution: "720p", aspect_ratio: "9:16" };
+ * ```
+ */
+export type GeminiOmniImageBody = {
+  prompt: string;
+  image_url: string;
+  duration: number;
+  resolution: string;
+  aspect_ratio: string;
+};
+
+/**
+ * Request body of `google/gemini-omni-flash/v1.1/reference-to-video`: no
+ * first-frame field, so the first frame leads `image_urls` (`<IMAGE_REF_0>`
+ * in the prompt); no audio refs.
+ *
+ * @example
+ * ```ts
+ * const body: GeminiOmniReferenceBody = {
+ *   prompt: "p", image_urls: ["u"], duration: 5, resolution: "720p", aspect_ratio: "9:16"
+ * };
+ * ```
+ */
+export type GeminiOmniReferenceBody = {
+  prompt: string;
+  image_urls: string[];
+  reference_video_urls?: string[];
+  duration: number;
+  resolution: string;
+  aspect_ratio: string;
+};
+
+/**
  * Any model's typed request body, before `request.params` is merged in.
  *
  * @example
@@ -291,7 +332,9 @@ export type FalBody =
   | WanReferenceBody
   | VeoImageBody
   | ViduImageBody
-  | ViduReferenceBody;
+  | ViduReferenceBody
+  | GeminiOmniImageBody
+  | GeminiOmniReferenceBody;
 
 /**
  * One catalog row: fal endpoint, default resolution, audio capability,
@@ -393,6 +436,9 @@ const VEO_RESOLUTION = "720p";
 /** Vidu Q3 default resolution. */
 const VIDU_RESOLUTION = "720p";
 
+/** Gemini Omni Flash default resolution (fal's own default). */
+const GEMINI_OMNI_RESOLUTION = "720p";
+
 /** Aspect ratio used when the request names none. */
 const DEFAULT_ASPECT = "9:16";
 
@@ -465,7 +511,7 @@ function minimaxImageBody(input: BodyInput): MinimaxImageBody {
 }
 
 /**
- * MiniMax H3 Max reference-to-video body: the first frame is Image 1 of
+ * MiniMax H3 and H3 Max reference-to-video body: the first frame is Image 1 of
  * `reference_image_urls`; `reference_audio_urls` and `reference_video_urls`
  * only when there are audio refs and video refs.
  *
@@ -643,10 +689,54 @@ function viduReferenceBody(input: BodyInput): ViduReferenceBody {
 }
 
 /**
+ * Gemini Omni Flash 1.1 image-to-video body: integer duration, `aspect_ratio` sent.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * geminiOmniImageBody(input); // => { prompt, image_url, duration: 5, resolution: "720p", aspect_ratio: "9:16" }
+ * ```
+ */
+function geminiOmniImageBody(input: BodyInput): GeminiOmniImageBody {
+  return {
+    prompt: input.prompt,
+    image_url: input.imageUrl,
+    duration: input.seconds,
+    resolution: input.resolution ?? GEMINI_OMNI_RESOLUTION,
+    aspect_ratio: input.aspect
+  };
+}
+
+/**
+ * Gemini Omni Flash 1.1 reference-to-video body: the first frame leads
+ * `image_urls`; `reference_video_urls` only when there are video refs.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * geminiOmniReferenceBody(input); // => { prompt, image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
+ * ```
+ */
+function geminiOmniReferenceBody(input: BodyInput): GeminiOmniReferenceBody {
+  const body: GeminiOmniReferenceBody = {
+    prompt: input.prompt,
+    image_urls: [input.imageUrl, ...input.refUrls],
+    duration: input.seconds,
+    resolution: input.resolution ?? GEMINI_OMNI_RESOLUTION,
+    aspect_ratio: input.aspect
+  };
+  if (input.videoRefUrls.length > 0) body.reference_video_urls = input.videoRefUrls;
+  return body;
+}
+
+/**
  * The model catalog, in the order `info().models` and error messages list it.
  * Video-ref limits follow the fal docs of 2026-09-25: H3 Max takes 3 clips
  * of 2–15 s, 15 s combined; Seedance 2.5 takes 10 clips of 1.8–30.2 s,
- * 30.2 s combined.
+ * 30.2 s combined. H3 and Gemini Omni Flash 1.1 follow the fal schemas of
+ * 2026-09-26: H3 as H3 Max; Gemini takes 3 clips of at most 3 s each.
  *
  * @example
  * ```ts
@@ -686,6 +776,16 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
   },
   "minimax-h3-max-ref": {
     endpoint: "minimax/h3-max/reference-to-video",
+    resolution: MINIMAX_RESOLUTION,
+    audio: true,
+    maxRefs: 8,
+    maxAudioRefs: 3,
+    maxVideoRefs: 3,
+    maxVideoRefSec: 15,
+    body: minimaxMaxReferenceBody
+  },
+  "minimax-h3-ref": {
+    endpoint: "minimax/h3/reference-to-video",
     resolution: MINIMAX_RESOLUTION,
     audio: true,
     maxRefs: 8,
@@ -781,6 +881,26 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     maxVideoRefs: 0,
     maxVideoRefSec: 0,
     body: viduReferenceBody
+  },
+  "gemini-omni-1.1-flash": {
+    endpoint: "google/gemini-omni-flash/v1.1/image-to-video",
+    resolution: GEMINI_OMNI_RESOLUTION,
+    audio: false,
+    maxRefs: 0,
+    maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
+    body: geminiOmniImageBody
+  },
+  "gemini-omni-1.1-flash-ref": {
+    endpoint: "google/gemini-omni-flash/v1.1/reference-to-video",
+    resolution: GEMINI_OMNI_RESOLUTION,
+    audio: false,
+    maxRefs: 9,
+    maxAudioRefs: 0,
+    maxVideoRefs: 3,
+    maxVideoRefSec: 9,
+    body: geminiOmniReferenceBody
   }
 };
 
@@ -790,7 +910,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @returns Alias list.
  * @example
  * ```ts
- * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "kling-3-pro", "kling-o3-ref", "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref"]
+ * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-ref", "kling-3-pro", ..., "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
  * ```
  */
 export function falAliases(): string[] {
