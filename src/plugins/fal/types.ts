@@ -6,6 +6,35 @@
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
+import type { VideoFile, VideoRequest } from "../video/contract";
+
+/**
+ * A request image or ref at estimate time: a resolved file, or still the
+ * build-file reference the runner resolves before submit (the runner
+ * estimates the unresolved request).
+ *
+ * @example
+ * ```ts
+ * const input: EstimateInput = { $ref: "s01.key" };
+ * ```
+ */
+export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
+
+/**
+ * A video request at estimate time: its first frame and refs may still be
+ * build-file references. Every `VideoRequest` is one.
+ *
+ * @example
+ * ```ts
+ * const request: EstimateRequest = { model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "s01.key" } };
+ * ```
+ */
+export type EstimateRequest = Omit<VideoRequest, "image" | "refs"> & {
+  /** First frame, resolved or not. */
+  image?: EstimateInput;
+  /** Refs, resolved or not. */
+  refs?: EstimateInput[];
+};
 
 /**
  * How local input files reach fal: `"storage"` uploads them to fal storage
@@ -45,7 +74,7 @@ export type Config = {
   upload: UploadMode;
   /** Per HTTP request timeout, ms. Default: 60_000. */
   timeoutMs: number;
-  /** USD-per-second overrides keyed by `<alias>`, `<alias>@<resolution>` or `<alias>+audio`. Default: {}. */
+  /** Price overrides keyed by `<alias>`, `<alias>@<resolution>`, `<alias>+audio` (USD/s) or a `<alias>#ref*` surcharge key. Default: {}. */
   priceOverrides: Record<string, number>;
 };
 

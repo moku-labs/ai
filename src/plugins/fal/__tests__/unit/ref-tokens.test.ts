@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
 import { videoCostUsd } from "../../prices";
+import type { EstimateInput, EstimateRequest } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "./fixtures";
 import { createTempFiles, createTestCtx, jpegHeader, pngHeader, webpHeader } from "./fixtures";
@@ -29,11 +30,11 @@ afterAll(() => {
 
 /** Cost of an H3 Max request with the given first frame and refs. */
 function cost(
-  image: VideoFile | undefined,
-  refs: VideoFile[],
+  image: EstimateInput | undefined,
+  refs: EstimateInput[],
   extra: Partial<VideoRequest> = {}
 ): number {
-  const request: VideoRequest = { model: MODEL, prompt: "p", refs, ...extra };
+  const request: EstimateRequest = { model: MODEL, prompt: "p", refs, ...extra };
   if (image !== undefined) request.image = image;
   return videoCostUsd(createTestCtx(), request);
 }
@@ -58,7 +59,7 @@ describe("minimax-h3-max-ref reference tokens", () => {
   });
 
   it("counts unresolved and unreadable images at the 2560-token worst case", () => {
-    const unresolved = { $ref: "face" } as unknown as VideoFile;
+    const unresolved: EstimateInput = { $ref: "face" };
     const missing: VideoFile = { path: `${temp.dir}/gone.png`, mimeType: "image/png", hash: "e" };
     const notAnImage = temp.file(
       "junk.png",

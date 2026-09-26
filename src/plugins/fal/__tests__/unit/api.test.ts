@@ -13,6 +13,8 @@ describe("createFalApi().info()", () => {
         "seedance-2.5-ref",
         "minimax-h3",
         "minimax-h3-max-ref",
+        "minimax-h3-ref",
+        "minimax-h3-max-extend",
         "kling-3-pro",
         "kling-o3-ref",
         "seedance-2.0-mini",
@@ -21,7 +23,9 @@ describe("createFalApi().info()", () => {
         "wan-3.0-ref",
         "veo-3.1-fast",
         "vidu-q3",
-        "vidu-q3-ref"
+        "vidu-q3-ref",
+        "gemini-omni-1.1-flash",
+        "gemini-omni-1.1-flash-ref"
       ]
     });
   });
