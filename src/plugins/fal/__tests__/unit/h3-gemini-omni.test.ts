@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { VideoFile, VideoRequest } from "../../../video/contract";
 import { buildFalBody, resolveFalModel } from "../../models";
 import { videoCostUsd } from "../../prices";
+import type { EstimateInput } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "./fixtures";
 import {
@@ -61,7 +62,7 @@ async function rejected(
 }
 
 /** Cost of a request for `model` with the given first frame and refs. */
-function cost(model: string, refs: VideoFile[], extra: Partial<VideoRequest> = {}): number {
+function cost(model: string, refs: EstimateInput[], extra: Partial<VideoRequest> = {}): number {
   return videoCostUsd(createTestCtx(), { model, prompt: "p", image, refs, ...extra });
 }
 
@@ -138,7 +139,7 @@ describe("minimax-h3-ref price", () => {
   });
 
   it("counts an unresolved ref as an image", () => {
-    const unresolved = { $ref: "face" } as unknown as VideoFile;
+    const unresolved: EstimateInput = { $ref: "face" };
     expect(cost("minimax-h3-ref", [face, face, face, face, unresolved])).toBe(0.38);
   });
 });

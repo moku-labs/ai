@@ -36,6 +36,7 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`.
 | `minimax-h3` | `minimax/h3/image-to-video` | `image_url` | none | none | none | 0 | integer | always on (native stereo) |
 | `minimax-h3-max-ref` | `minimax/h3-max/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
 | `minimax-h3-ref` | `minimax/h3/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
+| `minimax-h3-max-extend` | `minimax/h3-max/extend-video` | `video_url` (the source clip, from `input.image`) | none | none | none | 0 | integer 5-15, new footage only | always on (native stereo) |
 | `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | none | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
 | `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | `image_urls` (max 4) | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
 | `seedance-2.0-mini` | `bytedance/seedance-2.0/mini/image-to-video` | `image_url` | none | none | none | 0 | string, e.g. `"5"` | `generate_audio` |
@@ -80,6 +81,12 @@ check fal's 12-file cap on H3 Max (first frame and every ref) either.
 H3 Max and `minimax-h3-ref` send `prompt_expansion_mode: "balanced"` (H3 Max requires it; override with `params`).
 `minimax-h3-ref` uses the H3 Max body builder: the two schemas take the same fields.
 
+**MiniMax H3 Max extend.** `minimax-h3-max-extend` continues a clip. Put the source clip in `input.image`, for
+example `{ $ref: s01.kling }`. It goes out as `video_url`: 1.625-60 s, up to 50 MB, aspect 0.4-2.5. The prompt says
+what happens next, not what the source shows. The body sends `output: "continuation"`, so only the new footage comes
+back, and `enable_prompt_expansion: false`. It sends no `aspect_ratio`: fal's `auto` keeps the source's aspect.
+Any of these can be changed with `params`. The plugin does not check the source's length, size or MIME type.
+
 ## Prices (USD per second)
 
 | Key | USD/s |
@@ -89,6 +96,7 @@ H3 Max and `minimax-h3-ref` send `prompt_expansion_mode: "balanced"` (H3 Max req
 | `minimax-h3@480P` / `@768P` / `@2K` / `@4K` | 0.05 / 0.06 / 0.13 / 0.16 |
 | `minimax-h3-max-ref@480P` / `@768P` / `@1080P` | 0.05 / 0.08 / 0.16 |
 | `minimax-h3-ref@480P` / `@768P` / `@2K` / `@4K` | 0.05 / 0.06 / 0.13 / 0.16 |
+| `minimax-h3-max-extend@480P` / `@768P` / `@1080P` / `@2K` | 0.05 / 0.08 / 0.16 / 0.32 |
 | `kling-3-pro` / `kling-3-pro+audio` | 0.112 / 0.168 |
 | `kling-o3-ref` / `kling-o3-ref+audio` | 0.112 / 0.14 |
 | `seedance-2.0-mini@480p` / `@720p`, `seedance-2.0-mini-ref@480p` / `@720p` | 0.0721 / 0.1547 |
@@ -104,8 +112,8 @@ Lookup order: `<alias>@<resolution>`, then `<alias>+audio` when audio is on, the
 `veo-3.1-fast` with audio off.
 Cost = seconds × USD/s + reference-token or reference-image surcharge. `estimate` and the recorded cost use the same function.
 
-**Reference tokens (`minimax-h3-max-ref`).** Keys `minimax-h3-max-ref#refTokensIncluded` (4096) and
-`minimax-h3-max-ref#refTokenUsdPer1k` (0.02). Surcharge = max(0, tokens − 4096) × 0.02 / 1000. Tokens:
+**Reference tokens (`minimax-h3-max-ref`, `minimax-h3-max-extend`).** Keys `<alias>#refTokensIncluded` (4096) and
+`<alias>#refTokenUsdPer1k` (0.02). Surcharge = max(0, tokens − 4096) × 0.02 / 1000. Tokens:
 
 | Input | Tokens |
 | --- | --- |
@@ -116,6 +124,8 @@ Cost = seconds × USD/s + reference-token or reference-image surcharge. `estimat
 
 Example: 5 s at 768P with four square images is 0.40; with five it is 0.42048. The estimate can only be
 higher than fal's bill, never lower, as long as there are no video refs.
+For `minimax-h3-max-extend` the source clip is counted like an unreadable image: 2560 tokens, inside the 4096
+included. Not verified against a fal bill.
 
 **Reference images (`minimax-h3-ref`).** Keys `minimax-h3-ref#refImagesIncluded` (5) and
 `minimax-h3-ref#refImageUsd` (0.08). Surcharge = max(0, images − 5) × 0.08. Images are the first frame and

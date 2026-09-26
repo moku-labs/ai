@@ -5,6 +5,7 @@
  * merged last, so a build file can pass any extra fal field through.
  */
 import type { VideoFile, VideoRequest } from "../video/contract";
+import type { EstimateRequest } from "./types";
 
 /**
  * A model alias this plugin accepts in `request.model`.
@@ -20,6 +21,7 @@ export type FalAlias =
   | "minimax-h3"
   | "minimax-h3-max-ref"
   | "minimax-h3-ref"
+  | "minimax-h3-max-extend"
   | "kling-3-pro"
   | "kling-o3-ref"
   | "seedance-2.0-mini"
@@ -140,6 +142,26 @@ export type MinimaxMaxReferenceBody = {
   duration: number;
   resolution: string;
   aspect_ratio: string;
+};
+
+/**
+ * Request body of `minimax/h3-max/extend-video`: the source clip is
+ * `video_url`; only the new footage comes back (`output: "continuation"`).
+ *
+ * @example
+ * ```ts
+ * const body: MinimaxMaxExtendBody = {
+ *   prompt: "p", video_url: "u", output: "continuation", enable_prompt_expansion: false, duration: 5, resolution: "768P"
+ * };
+ * ```
+ */
+export type MinimaxMaxExtendBody = {
+  prompt: string;
+  video_url: string;
+  output: "extended" | "continuation";
+  enable_prompt_expansion: boolean;
+  duration: number;
+  resolution: string;
 };
 
 /**
@@ -326,6 +348,7 @@ export type FalBody =
   | SeedanceReferenceBody
   | MinimaxImageBody
   | MinimaxMaxReferenceBody
+  | MinimaxMaxExtendBody
   | KlingImageBody
   | KlingReferenceBody
   | Seedance20ImageBody
@@ -426,6 +449,12 @@ const MINIMAX_RESOLUTION = "768P";
 
 /** MiniMax H3 Max prompt rewriting mode: required by the schema; fal's documented default. */
 const MINIMAX_PROMPT_EXPANSION = "balanced";
+
+/** H3 Max extend-video output mode: only the new footage, not the source followed by it. */
+const MINIMAX_EXTEND_OUTPUT = "continuation";
+
+/** H3 Max extend-video prompt rewriting: off, so the continuation follows the prompt as written. */
+const MINIMAX_EXTEND_PROMPT_EXPANSION = false;
 
 /** Wan 3.0 default resolution (fal's own default is the pricier 1080p). */
 const WAN_RESOLUTION = "720p";
@@ -534,6 +563,29 @@ function minimaxMaxReferenceBody(input: BodyInput): MinimaxMaxReferenceBody {
   if (input.audioRefUrls.length > 0) body.reference_audio_urls = input.audioRefUrls;
   if (input.videoRefUrls.length > 0) body.reference_video_urls = input.videoRefUrls;
   return body;
+}
+
+/**
+ * MiniMax H3 Max extend-video body: the request's `image` holds the source
+ * clip and goes out as `video_url`; no `aspect_ratio`, so the clip keeps the
+ * source's aspect (fal's `auto`).
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ * @example
+ * ```ts
+ * minimaxMaxExtendBody(input); // => { prompt, video_url, output: "continuation", enable_prompt_expansion: false, duration: 5, resolution: "768P" }
+ * ```
+ */
+function minimaxMaxExtendBody(input: BodyInput): MinimaxMaxExtendBody {
+  return {
+    prompt: input.prompt,
+    video_url: input.imageUrl,
+    output: MINIMAX_EXTEND_OUTPUT,
+    enable_prompt_expansion: MINIMAX_EXTEND_PROMPT_EXPANSION,
+    duration: input.seconds,
+    resolution: input.resolution ?? MINIMAX_RESOLUTION
+  };
 }
 
 /**
@@ -794,6 +846,16 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     maxVideoRefSec: 15,
     body: minimaxMaxReferenceBody
   },
+  "minimax-h3-max-extend": {
+    endpoint: "minimax/h3-max/extend-video",
+    resolution: MINIMAX_RESOLUTION,
+    audio: true,
+    maxRefs: 0,
+    maxAudioRefs: 0,
+    maxVideoRefs: 0,
+    maxVideoRefSec: 0,
+    body: minimaxMaxExtendBody
+  },
   "kling-3-pro": {
     endpoint: "fal-ai/kling-video/v3/pro/image-to-video",
     audio: true,
@@ -910,7 +972,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @returns Alias list.
  * @example
  * ```ts
- * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-ref", "kling-3-pro", ..., "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
+ * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-ref", "minimax-h3-max-extend", "kling-3-pro", ..., "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
  * ```
  */
 export function falAliases(): string[] {
@@ -961,7 +1023,7 @@ export function resolveFalModel(model: string): ResolvedFalModel {
  * requestSeconds({ model: "minimax-h3", prompt: "p" }); // => 5
  * ```
  */
-export function requestSeconds(request: VideoRequest): number {
+export function requestSeconds(request: EstimateRequest): number {
   return request.seconds ?? DEFAULT_SECONDS;
 }
 
@@ -977,7 +1039,7 @@ export function requestSeconds(request: VideoRequest): number {
  * modelResolution(resolveFalModel("minimax-h3"), request); // => "768P"
  * ```
  */
-export function modelResolution(model: FalModel, request: VideoRequest): string | undefined {
+export function modelResolution(model: FalModel, request: EstimateRequest): string | undefined {
   return request.resolution ?? model.resolution;
 }
 
@@ -992,7 +1054,7 @@ export function modelResolution(model: FalModel, request: VideoRequest): string 
  * modelAudio(resolveFalModel("kling-o3-ref"), { ...request, audio: true }); // => true
  * ```
  */
-export function modelAudio(model: FalModel, request: VideoRequest): boolean {
+export function modelAudio(model: FalModel, request: EstimateRequest): boolean {
   return request.audio === true && model.audio;
 }
 

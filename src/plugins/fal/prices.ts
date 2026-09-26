@@ -5,10 +5,10 @@
  * at an unknown price (D13).
  */
 import { readFileSync } from "node:fs";
-import type { VideoFile, VideoRequest } from "../video/contract";
+import type { VideoFile } from "../video/contract";
 import { imageSize } from "./image-size";
 import { modelAudio, modelResolution, requestSeconds, resolveFalModel } from "./models";
-import type { FalContext } from "./types";
+import type { EstimateInput, EstimateRequest, FalContext } from "./types";
 
 /**
  * Bundled USD-per-second prices from the fal model pages. Keys are
@@ -43,6 +43,12 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "minimax-h3-ref@4K": 0.16,
   "minimax-h3-ref#refImagesIncluded": 5,
   "minimax-h3-ref#refImageUsd": 0.08,
+  "minimax-h3-max-extend@480P": 0.05,
+  "minimax-h3-max-extend@768P": 0.08,
+  "minimax-h3-max-extend@1080P": 0.16,
+  "minimax-h3-max-extend@2K": 0.32,
+  "minimax-h3-max-extend#refTokensIncluded": 4096,
+  "minimax-h3-max-extend#refTokenUsdPer1k": 0.02,
   "kling-3-pro": 0.112,
   "kling-3-pro+audio": 0.168,
   "kling-o3-ref": 0.112,
@@ -184,18 +190,6 @@ export function lookupPrice(
 }
 
 /**
- * A request image or ref at estimate time: a resolved file, or still the
- * build-file reference the runner resolves before submit (the runner
- * estimates the unresolved request).
- *
- * @example
- * ```ts
- * const input: EstimateInput = { $ref: "s01.key" };
- * ```
- */
-type EstimateInput = VideoFile | { $ref: string } | { $file: string };
-
-/**
  * Whether a request input is a resolved file rather than a `$ref` / `$file`.
  *
  * @param value - A request image or ref.
@@ -293,7 +287,7 @@ function isReferenceImage(file: EstimateInput): boolean {
  * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: square, refs: [voice] }); // => 1
  * ```
  */
-function referenceImageCount(request: VideoRequest): number {
+function referenceImageCount(request: EstimateRequest): number {
   const references: readonly EstimateInput[] = request.refs ?? [];
   const refImages = references.filter(file => isReferenceImage(file)).length;
   return refImages + (request.image === undefined ? 0 : 1);
@@ -315,7 +309,7 @@ function referenceImageCount(request: VideoRequest): number {
 function refImageCostUsd(
   prices: Readonly<Record<string, number>>,
   alias: string,
-  request: VideoRequest
+  request: EstimateRequest
 ): number {
   const usdPerImage = prices[`${alias}#refImageUsd`];
   if (usdPerImage === undefined) return 0;
@@ -336,7 +330,7 @@ function refImageCostUsd(
  * referenceTokens({ model: "minimax-h3-max-ref", prompt: "p", image: square }); // => 1024
  * ```
  */
-function referenceTokens(request: VideoRequest): number {
+function referenceTokens(request: EstimateRequest): number {
   const references: readonly EstimateInput[] = request.refs ?? [];
   const images: EstimateInput[] = references.filter(file => !isAudioFile(file));
   if (request.image !== undefined) images.unshift(request.image);
@@ -362,7 +356,7 @@ function referenceTokens(request: VideoRequest): number {
 function refTokenCostUsd(
   prices: Readonly<Record<string, number>>,
   alias: string,
-  request: VideoRequest
+  request: EstimateRequest
 ): number {
   const usdPer1k = prices[`${alias}#refTokenUsdPer1k`];
   if (usdPer1k === undefined) return 0;
@@ -388,7 +382,7 @@ function refTokenCostUsd(
  * videoCostUsd(ctx, { model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => 0.3
  * ```
  */
-export function videoCostUsd(ctx: FalContext, request: VideoRequest): number {
+export function videoCostUsd(ctx: FalContext, request: EstimateRequest): number {
   const model = resolveFalModel(request.model);
   const prices = resolvePrices(ctx);
   const perSecond = lookupPrice(
