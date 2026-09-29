@@ -27,8 +27,8 @@ export type VideoFile = {
 };
 
 /**
- * A single video generation request: model, prompt, optional keyframe and
- * references, plus clip shape hints and pass-through provider params.
+ * A single video generation request: model, prompt, optional keyframe, end
+ * frame and references, plus clip shape hints and pass-through provider params.
  *
  * @example
  * ```ts
@@ -44,6 +44,8 @@ export type VideoRequest = {
   negative?: string;
   /** First frame / keyframe. */
   image?: VideoFile;
+  /** Last frame: the clip ends on this image. Only models that take an end frame accept it. */
+  endImage?: VideoFile;
   /** Extra references: images, audio or video files, told apart by MIME type. */
   refs?: VideoFile[];
   /** Clip length in seconds. Default 5. */
