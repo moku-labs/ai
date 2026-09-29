@@ -26,6 +26,10 @@ describe("mimeTypeOfPath", () => {
   ])("maps %s to %s", (file, mime) => {
     expect(mimeTypeOfPath(file)).toBe(mime);
   });
+
+  it("keeps a .json $file as plain JSON, never an asset record", () => {
+    expect(mimeTypeOfPath("x.json")).toBe("application/json");
+  });
 });
 
 describe("extensionOfMimeType", () => {
@@ -37,6 +41,10 @@ describe("extensionOfMimeType", () => {
     [NO_MIME, "bin"]
   ])("maps %s to .%s", (mime, extension) => {
     expect(extensionOfMimeType(mime)).toBe(extension);
+  });
+
+  it("exports an asset record as .json, not .bin", () => {
+    expect(extensionOfMimeType("application/vnd.moku.asset+json")).toBe("json");
   });
 });
 

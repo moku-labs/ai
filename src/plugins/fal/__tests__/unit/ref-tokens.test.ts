@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { videoCostUsd } from "../../prices";
 import type { EstimateInput, EstimateRequest } from "../../types";
 import { createVideoHandler } from "../../video/handler";
+import { videoCostUsd } from "../../video/prices";
 import type { TempFiles } from "./fixtures";
 import { createTempFiles, createTestCtx, jpegHeader, pngHeader, webpHeader } from "./fixtures";
 

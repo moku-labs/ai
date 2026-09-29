@@ -6,7 +6,7 @@ import {
   modelAudio,
   modelResolution,
   resolveFalModel
-} from "../../models";
+} from "../../video/models";
 
 const URLS = {
   image: "https://cdn/img",

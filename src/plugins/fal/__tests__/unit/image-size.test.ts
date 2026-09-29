@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imageSize } from "../../image-size";
+import { imageSize } from "../../video/image-size";
 import { jpegHeader, pngHeader, webpHeader } from "./fixtures";
 
 describe("imageSize", () => {

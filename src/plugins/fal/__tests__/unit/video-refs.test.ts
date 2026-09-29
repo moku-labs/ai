@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { resolveFalModel } from "../../models";
 import { createVideoHandler, splitReferences } from "../../video/handler";
+import { resolveFalModel } from "../../video/models";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

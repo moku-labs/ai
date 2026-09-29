@@ -4,11 +4,12 @@
 import type { State } from "./types";
 
 /**
- * Creates initial fal state (price table not yet computed, upload cache empty).
+ * Creates initial fal state (price table not yet computed, upload cache empty,
+ * no request-log warning given yet).
  *
  * @returns Initial fal state.
  */
 export function createFalState(): State {
   // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`: null is the "not computed yet" sentinel
-  return { prices: null, uploads: new Map() };
+  return { prices: null, uploads: new Map(), requestLogWarned: false };
 }

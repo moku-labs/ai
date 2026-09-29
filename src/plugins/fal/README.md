@@ -1,31 +1,61 @@
 # fal
 
-> Video provider over the fal queue REST API (submit, status, result). Complex tier. Registers `("video", "fal")` with the registry in `onInit`.
+> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")` and `("music", "fal")` with the registry in `onInit`. Emits no events.
 
 ## Purpose
 
-A video job takes 2 to 10 minutes. The handler implements the async `video` contract, `submit` + `poll`,
-so the runner journals the fal request id before it waits. A crash, Ctrl-C or a timeout of the caller is
-continued by polling the same job; it is never submitted and paid twice. There is no `execute`: the
-one-off `app.video.generate()` facade runs the same `submit` + `poll` loop with `video.pollIntervalMs`.
+One plugin per vendor: the four fal tasks share `client/` (HTTP and error classification, the queue, the
+upload), one `FAL_KEY`, one upload cache keyed by content sha256, one merged price table and one opt-in
+request log.
 
-Prices are data in `prices.ts`, USD per second. A model without a price throws from `estimate`, so
-`moku estimate` and `--max-cost` never count it as $0 (D13).
+- **video**: the async contract, `submit` + `poll`. A job takes 2 to 10 minutes; the runner journals the
+  fal request id before it waits, so a crash, Ctrl-C or a timeout continues the same job and never pays twice.
+- **image** and **music**: `estimate` + `execute` + `submit` + `poll` over the generic queue. The runner drives
+  `submit` + `poll`; the one-off facades (`app.image.generate`, `app.music.generate`) call `execute`, which
+  submits and waits in process every `pollIntervalMs`, at most `jobTimeoutMs`.
+- **prompt-gen**: `estimate` + `execute`, one sync POST to fal's OpenRouter router.
+
+Every handler validates and prices a request before it reads the key, uploads or POSTs: nothing is billed for a
+bad request. A model without a price throws from `estimate`, so `moku estimate` and `--max-cost` never count it
+as $0 (D13).
 
 ## Configuration
 
-Set via `createApp({ pluginConfigs: { fal: { ... } } })`.
+Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallow merge).
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `apiKeyEnv` | `string` | `"FAL_KEY"` | Env var with the key, read through `ctx.env` at submit/poll time. Estimates never need it. |
-| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>`. |
+| `apiKeyEnv` | `string` | `"FAL_KEY"` | Env var with the key, read through `ctx.env` per request. Estimates and `models()` never need it. |
+| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>` (video, image, music). |
 | `uploadUrl` | `string` | `"https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"` | Storage upload initiate URL. |
-| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (first frame, end frame and refs) reach fal. `storage` falls back to a data URI when the upload fails. |
-| `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download). |
-| `priceOverrides` | `Record<string, number>` | `{}` | USD per second, keyed `<alias>`, `<alias>@<resolution>` or `<alias>+audio`; also the `<alias>#refTokensIncluded` / `#refTokenUsdPer1k` / `#refImagesIncluded` / `#refImageUsd` surcharge keys. |
+| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (frames, refs, prompt-gen images) reach fal. `storage` falls back to a data URI when the upload fails. |
+| `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download, chat POST). |
+| `priceOverrides` | `Record<string, number>` | `{}` | One table for every task; keys in [Prices](#prices). |
+| `runUrl` | `string` | `"https://fal.run"` | Sync endpoint base. prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. |
+| `imageDefaultModel` | `string` | `"gpt-image-2.5"` | Image model when `ImageRequest.model` is omitted. |
+| `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` | prompt-gen model when `PromptGenRequest.model` is omitted or `"default"`. |
+| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image and music `execute`. |
+| `jobTimeoutMs` | `number` | `900_000` | The in-process wait gives up after this (retryable `timeout`); the job keeps running on fal. |
+| `requestLog` | `string` | `""` | JSONL request log path, relative to the working directory. `""` = off. |
 
-## Models
+`MusicRequest.model` is required, so there is no music default: the runner hashes the input as written.
+
+## Layout
+
+```
+index.ts types.ts state.ts api.ts log.ts prices.ts   prices.ts = merge + prefix only
+client/  http.ts queue.ts upload.ts                  shared: fetch + errors, queue + wait, generic upload
+video/   handler.ts job.ts models.ts prices.ts image-size.ts upload.ts
+image/   handler.ts models.ts prices.ts
+llm/     handler.ts chat.ts models.ts prices.ts tokens.ts
+music/   handler.ts models.ts prices.ts
+```
+
+Each task directory owns its models and prices; a new model touches one directory.
+
+## Video
+
+### Video models
 
 `input.model` must be one of these aliases. Any other value throws `Unknown fal video model`.
 
@@ -74,6 +104,8 @@ never silently cut down:
   Remove refs from input.refs, or use a model that takes more.
 ```
 
+**Asset refs.** fal cannot use registered assets. An `image`, `endImage` or ref that `$ref`s an `asset` item fails the item with a terminal HTTP 400 error before any upload. Use provider `ark` for those items.
+
 **End frame.** `input.endImage` is the last frame: the clip ends on this image. Like `image`, it is a `$ref` or
 `$file`. It goes out as `end_image_url` on the seven models with `end_image_url` in the End frame column; a body
 gets the field only when the request has an end frame, so a request without one sends the same body as before.
@@ -111,7 +143,7 @@ what happens next, not what the source shows. The body sends `output: "continuat
 back, and `enable_prompt_expansion: false`. It sends no `aspect_ratio`: fal's `auto` keeps the source's aspect.
 Any of these can be changed with `params`. The plugin does not check the source's length, size or MIME type.
 
-## Prices (USD per second)
+### Video prices (USD per second)
 
 | Key | USD/s |
 | --- | --- |
@@ -164,7 +196,7 @@ frame does not change the price. Example: 5 s at 768P is 0.40.
 Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` (or
 `seedance-2.0-mini@1080p`) to `priceOverrides` to use it.
 
-## Job protocol
+### Video job protocol
 
 1. **Upload.** `storage`: `POST uploadUrl { file_name, content_type }` → `{ upload_url, file_url }`, then
    `PUT upload_url` with the bytes. The first frame goes first, then every ref (image, audio, video) and the
@@ -179,6 +211,147 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 3. **Poll.** `GET statusUrl`: `IN_QUEUE` / `IN_PROGRESS` → pending. `COMPLETED` with `error` →
    `{ state: "failed", error }`. `COMPLETED` → `GET responseUrl`, download `video.url` →
    `{ state: "done", video, mimeType, costUsd, meta: { endpoint, requestId, seconds } }`.
+
+## Image
+
+`ImageRequest.model` is one of these aliases (default `imageDefaultModel`). Any other value throws
+`Unknown fal image model`. A request with refs goes to the edit endpoint, else to the text endpoint.
+
+| Alias | Text endpoint | Edit endpoint | Max refs | `params.resolution` | Aspects |
+| --- | --- | --- | --- | --- | --- |
+| `nano-banana-pro` | `fal-ai/nano-banana-pro` | `fal-ai/nano-banana-pro/edit` | 14 | native `1K` / `2K` / `4K`, default `1K`; `1080` → `1K` | `21:9 16:9 3:2 4:3 5:4 1:1 4:5 3:4 2:3 9:16` |
+| `seedream-4.5-edit` | `fal-ai/bytedance/seedream/v4.5/text-to-image` | `fal-ai/bytedance/seedream/v4.5/edit` | 10 | `2K` → `image_size: "auto_2K"`; `1080` → preset name; `1K` / `4K` ignored | `9:16 16:9 1:1 3:4 4:3` |
+| `gpt-image-2.5` (default) | `openai/gpt-image-2.5/sunburst/text-to-image` | `openai/gpt-image-2.5/sunburst/edit` | 16 | `2K` → 2K size; `1080` or none → preset name; `1K` / `4K` ignored | `9:16 16:9 1:1 3:4 4:3` |
+
+`params.resolution` must be `1K`, `2K`, `4K` or `1080`; any other value is a terminal error. `aspect` defaults to
+`9:16` and is checked against the size table of the resolution, when there is one.
+
+| Aspect | Seedream default size | Seedream / GPT `1080` preset | GPT `2K` size |
+| --- | --- | --- | --- |
+| 9:16 | 1440×2560 | `portrait_16_9` | 1152×2048 |
+| 16:9 | 2560×1440 | `landscape_16_9` | 2048×1152 |
+| 1:1 | 1920×1920 | `square_hd` | 2048×2048 |
+| 3:4 | 1920×2560 | `portrait_4_3` | 1536×2048 |
+| 4:3 | 2560×1920 | `landscape_4_3` | 2048×1536 |
+
+Bodies: nano `{ prompt, aspect_ratio, resolution, num_images: 1, output_format: "png", enable_web_search: false, sync_mode: false, image_urls? }`;
+seedream `{ prompt, image_size, num_images: 1, max_images: 1, sync_mode: false, image_urls? }`;
+gpt `{ prompt, image_size, quality, num_images: 1, output_format: "jpeg", image_urls? }`. `params.quality` (gpt only) is
+`low`, `medium` or `high`, else `high`. The prompt sent is `<prompt>\n\nAvoid: <negative>` when `negative` is set.
+Every other param passes through, but the mapped fields win: a param never raises `num_images` or changes the size.
+
+Refs must be resolved `{ path, mimeType, hash }` files at `submit`; `estimate` only counts them.
+The result is `images[0]`: the MIME type is fal's `content_type`, else the download's `content-type`, else the URL
+extension (`png jpg jpeg webp`), else `image/png`. `meta` is `{ model, endpoint, requestId, width?, height? }`.
+
+## prompt-gen
+
+`PromptGenRequest.model` is an OpenRouter id; `undefined` or `"default"` means `llmDefaultModel`. Any other id is
+sent as is and needs a price. `app.fal.models("prompt-gen")` lists:
+
+| OpenRouter id | In USD / M tokens | Out USD / M tokens |
+| --- | --- | --- |
+| `anthropic/claude-opus-5.5` (default) | 4 | 20 |
+| `anthropic/claude-sonnet-5` | 2 | 10 |
+| `openai/gpt-6-sol` | 2 | 10 |
+| `openai/gpt-6-astra` | 10 | 50 |
+| `google/gemini-3.8-flash` | 0.75 | 3.75 |
+| `x-ai/grok-4.7` | 2 | 6 |
+
+Also priced, not listed: `anthropic/claude-haiku-4.5` (1 / 5) and `google/gemini-2.5-flash` (0.3 / 2.5).
+
+| Param | Values | Default |
+| --- | --- | --- |
+| `params.reasoning` | `off` / `low` / `medium` / `high`; `off` sends no `reasoning` | `medium` |
+| `params.responseSchema` | a plain JSON schema object → `response_format: { type: "json_schema", json_schema: { name: "answer", schema, strict } }` | none |
+| `params.strictSchema` | `true` makes the schema strict | `false` |
+| `params.images` | one or many `{ path, mimeType, hash }`, uploaded, sent as `image_url` parts after the text | none |
+| `params.max_tokens` | a positive integer | `32000` |
+| `temperature` | clamped to 0..2 | not sent |
+
+No other param is copied. The body is `{ model, messages, max_tokens, temperature?, reasoning?, response_format? }`,
+with a system message only when `system` is set.
+
+`estimate` needs no key and no network: `tokens(system) + tokens(prompt)` in, `max_tokens` out, at the model's
+price (a token is 4 ASCII characters or 1 other character). The actual cost is fal's `usage.cost`, else
+`usage.prompt_tokens` / `completion_tokens` at the table price, else the character rule; `meta.costSource` says
+which. An answer cut by `max_tokens` is `meta.partial: true` (logged `fal:llm:partial`); a null content cut by
+length is `""`. `meta` is `{ modelId, reasoning, provider, finishReason, promptTokens, completionTokens, costSource, partial }`.
+
+## Music
+
+`MusicRequest.model` is required and names one of these aliases; there is no fallback between them.
+
+| Alias | Endpoint | Length | Billing | Body |
+| --- | --- | --- | --- | --- |
+| `elevenlabs-music-v2.5` | `fal-ai/elevenlabs/music/v2.5` | 3 000–600 000 ms | per started minute | with chunks: `{ composition_plan: { chunks: [{ text, duration_ms, positive_styles, negative_styles? }] }, seed?, output_format: "mp3_48000_192" }`; without: `{ prompt, music_length_ms, force_instrumental: true, output_format: "mp3_48000_192" }` |
+| `stable-audio-2.5` | `fal-ai/stable-audio-25/text-to-audio` | 1 000–190 000 ms | per generation | `{ prompt, seconds_total: ceil(lengthMs / 1000), seed? }` |
+
+The request is validated with zod first (the message names the bad field), then: the alias, the model's length
+range, and the chunks (each 3 000–120 000 ms, at most 30, adding up to `lengthMs`). Chunks are validated for Stable
+Audio too, though its body ignores them. `params` never reach the body. Every failure is a terminal 400, e.g.
+
+```
+[ai] Invalid music request: chunks add up to 50000 ms, not 60000.
+  Fix the build item that produced it.
+```
+
+The result is `audio`: the MIME type is fal's `content_type`, else the download's `content-type`, else the URL
+extension (`mp3 wav ogg opus`), else `audio/mpeg`. `meta` is `{ model, endpoint, requestId, lengthMs }`.
+
+## Shared client
+
+**Upload.** Every task uploads the same way: `POST uploadUrl { file_name, content_type }` → `{ upload_url, file_url }`,
+then `PUT upload_url`. Files of one call go 4 at a time, in order. A failed upload switches the rest of the session
+to data URIs, logged once as `fal:upload:fallback`. Storage URLs are cached in `state.uploads` by
+`storage:<mime>:<sha256>`, shared by every task and kept for the life of the process.
+
+**Queue (image, music).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
+returns its id; an abort is checked after the uploads). The job id is JSON `{ endpoint, requestId, statusUrl, responseUrl }`,
+the same codec as video. `poll` reads the status once: `IN_QUEUE` / `IN_PROGRESS` pending, `COMPLETED` with `error`
+failed, `COMPLETED` collected (result, then the CDN download without the key), an unknown status pending with a
+`fal:poll:unknown-status` warn. `execute` waits in process: a retryable status error counts as pending
+(`fal:poll:retry`), an abort ends the wait with the signal's reason.
+
+**Request log.** Off by default. With `requestLog` set, every billable request writes one JSONL line: each queue
+submit of video, image and music, and each prompt-gen POST attempt.
+
+```json
+{"at":"2026-09-29T10:00:00.000Z","task":"image","model":"gpt-image-2.5","endpoint":"openai/gpt-image-2.5/sunburst/edit","requestId":"019a…","prompt":"hero shot","body":{"image_size":"portrait_16_9","quality":"high","num_images":1,"output_format":"jpeg","image_urls":["face.png"]}}
+```
+
+`requestId` is fal's request id (prompt-gen: the answer's `id`); a failed request has `error: { errorType, status?, kind? }`
+instead, never the error text. `body` is the posted body without its prompt field (`prompt`, or the chat `messages`),
+every string cut: http(s) URLs to `<host>/…/<last segment>`, data URIs to `data:<mime>;<length>`. Ref URLs
+(`image_urls`, the chat `image_url` parts) become the file names when there is one per uploaded file, else
+`{ count }`. Video matches `image_urls` to the first frame and the image refs, or to the image refs alone on
+`kling-o3-ref`; its other URL fields (`image_url`, `end_image_url`, `reference_image_urls`, …) are cut like any
+string. Never the key or a header. A failed write warns `fal:request-log:failed` once and never fails the request.
+
+## Prices
+
+One merged table: each task's bundled rows, then `priceOverrides` (overrides win). Video keys stay unprefixed; the
+other tasks' keys carry the task:
+
+| Key | USD | Unit |
+| --- | --- | --- |
+| `image:nano-banana-pro@1K` / `@2K` / `@4K` | 0.15 / 0.15 / 0.30 | per image |
+| `image:seedream-4.5-edit` | 0.04 | per image |
+| `image:gpt-image-2.5` | 0.05 | per image |
+| `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |
+| `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
+| `music:stable-audio-2.5` | 0.20 | per generation |
+| `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
+
+Image lookup: `image:<alias>@<resolution>` when a resolution is planned, then `image:<alias>`. A missing price is
+a terminal error before any upload or charge:
+
+```
+[ai] No price for fal image model "gpt-image-2.5".
+  Add it to fal.priceOverrides.
+```
+
+Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-second).
 
 ## Errors
 
@@ -196,16 +369,33 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
 | `FAL_KEY` not set, unknown model, missing image, too many refs, end frame on a model without one | Plain error: terminal after one attempt, nothing billed |
 | Poll with `FAL_KEY` not set, or the status call answers 401 / 403 | Plain error with no `status` and no `kind` (`[ai] fal cannot poll without a valid API key.`): the runner marks the job `expired`, not `failed`, so the next run adopts the same job instead of paying again |
+| Image, prompt-gen or music: unknown model, too many refs, bad resolution, aspect or params, invalid music request, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
+| Image or music: result or download of a `COMPLETED` job answers 400 / 422, or is flagged | `failed`: fal's verdict, logged `fal:image:failed` / `fal:music:failed` |
+| Image or music: result or download fails with another 4xx | Retryable 503 (`fal:result:unreadable`), same rule as video |
+| Image or music `execute`: the in-process wait passes `jobTimeoutMs` | Retryable, `kind: "timeout"`; the job keeps running on fal and stays adoptable through `poll` |
+| prompt-gen: 401 / 403 | `PromptGenUnavailableError`, reason `auth`, never retried: `promptGen` moves to its next fallback provider |
+| prompt-gen: 402 / 429 | `PromptGenUnavailableError`, reason `limit`, never retried |
+| prompt-gen: 5xx or request timeout | Retried in the handler, 3 attempts at most, backoff 1 s then 2 s (logged `fal:llm:retry`) |
+| prompt-gen: a 2xx answer with `error.message` | Flagged when it names `content_policy`, else terminal 400 `[ai] fal LLM returned an error: <text>` |
+| Incomplete result body (no `images[0].url`, `audio.url`, `choices[0].message.content`) | Plain two-line error |
 
-Messages start with `[ai] fal …` and never contain the key. Logs carry ids and statuses, never prompts.
+Messages start with `[ai]` and never contain the key or the prompt. Logs carry ids, statuses, counts and error
+classes, never prompts.
 
 ## API
 
 ```ts
 app.fal.info(); // => { provider: "fal", configured: true, models: ["seedance-2.5", ...] }
+app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } }
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
+app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
+app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
 ```
 
-`configured` is true when `FAL_KEY` (or the configured variable) is set.
+`info()` is unchanged: `configured` is true when `FAL_KEY` (or the configured variable) is set; `models` are the
+video aliases. `models(task)` lists one task's models in catalog order with their effective price (video and image
+at the model's default resolution, video with audio off and no refs); no network, no key. The price shape narrows
+on `"inputPerM" in info.price`. Any other task string throws `[ai] Unknown fal task "x".`
 
 ## Usage
 
@@ -213,8 +403,8 @@ app.fal.info(); // => { provider: "fal", configured: true, models: ["seedance-2.
 items:
   - id: s01.key
     task: image
-    provider: codex
-    input: { prompt: "patisserie counter at night", aspect: "9:16" }
+    provider: fal
+    input: { prompt: "patisserie counter at night", model: "nano-banana-pro", aspect: "9:16", params: { resolution: "2K" } }
   - id: s01.kling
     task: video
     provider: fal
@@ -224,8 +414,14 @@ items:
       image: { $ref: s01.key }
       seconds: 5
       audio: true
+  - id: s01.score
+    task: music
+    provider: fal
+    input: { prompt: "tense synth pulse", model: "elevenlabs-music-v2.5", lengthMs: 60000 }
 ```
 
 ```ts
 app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }, { provider: "fal" }); // { usd: 0.3 }
+app.music.estimate({ prompt: "x", model: "stable-audio-2.5", lengthMs: 30_000 }, { provider: "fal" }); // { usd: 0.2 }
+await app.promptGen.generate({ prompt: "Caption a sunset in five words." }, { provider: "fal" });
 ```
