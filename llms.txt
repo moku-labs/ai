@@ -93,7 +93,7 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 
 ```ts
 import { createApp, createPlugin, defineBuild, registryPlugin } from "@moku-labs/ai";
-import type { Voiceover, Translate, PromptGen, Buildfile, Cli } from "@moku-labs/ai";
+import type { Voiceover, Translate, PromptGen, Music, Fal, Buildfile, Cli } from "@moku-labs/ai";
 
 const app = createApp({
   pluginConfigs: { runner: { maxAttempts: 5 }, voiceover: { defaultProvider: "openai" } }
@@ -113,6 +113,8 @@ app.voiceover.estimate({ text: "Hi", voice: "en-US-1" });                   // {
 await app.translate.generate({ text: "Hi", targetLang: "es" });
 await app.promptGen.generate({ prompt: "Write a tagline." });
 await app.asset.register({ image, url: "https://cdn.example/mira.png" }, { provider: "ark" }); // AssetRecord
+await app.music.generate({ prompt: "tense synth", model: "elevenlabs-music-v2.5", lengthMs: 60_000 }); // { audio, mimeType, costUsd }
+app.fal.models("music");   // [{ id, price: { usd, per } }] — per task: "video" | "image" | "prompt-gen" | "music"
 
 // Build files
 const { spec } = await app.buildfile.compile({ path: "build.moku.yaml" });
@@ -180,7 +182,7 @@ src/
   index.ts                # Layer 2: framework assembly; exports createApp, createPlugin, defineBuild, plugins, type namespaces
   bin.ts                  # `moku` bin — Layer-3 consumer: createApp → start → cli.dispatch → stop → exit
   plugins/
-    index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Elevenlabs, Openai, Compose, Cli)
+    index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image, Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose, Cli)
     journal/              # index.ts, types.ts, api.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
@@ -194,6 +196,8 @@ src/
     openai/               # index.ts, types.ts, api.ts, client.ts, prices.ts, state.ts, tts/ translate/ prompt-gen/ handlers
     compose/              # index.ts, types.ts, api.ts, emit.ts
     asset/                # index.ts, types.ts, api.ts, contract.ts (ASSET_MIME, AssetRequest/Record/Handler, encode/parse)
+    music/                # index.ts, types.ts, api.ts, contract.ts (MusicChunk/Request/Result/JobPoll/Handler)
+    fal/                  # index.ts, types.ts, api.ts, state.ts, log.ts, prices.ts, client/ (http, queue, upload), video/ image/ llm/ music/ handlers
     ark/                  # index.ts, types.ts, api.ts, state.ts, regions.ts, models.ts, prices.ts, account.ts, sign.ts, client.ts, image-check.ts, video/ asset/ handlers
     cli/                  # index.ts, types.ts, api.ts, render.ts, commands/
     <name>/__tests__/     # colocated unit/ + integration/ per plugin
@@ -221,10 +225,16 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
 - video (deps: registry): owns "video" contract (execute, or submit + poll) + one-off facade | Standard | generate, estimate, providers | events: none
+- music (deps: registry): owns "music" contract (MusicRequest/MusicResult/MusicJobPoll/MusicHandler: estimate + execute, or submit + poll) + one-off facade; MusicRequest.model is REQUIRED (the runner hashes the input as written, so no provider default); generate prefers execute, else submits and polls every pollIntervalMs; audio/mpeg exports as .mp3; module export isMusicHandler | Standard | generate, estimate, providers | events: none
 - asset (deps: registry): owns "asset" contract (AssetRequest/AssetRecord/AssetHandler, submit + poll only) + one-off facade; register a portrait with a provider BEFORE any video item; the done artifact is the AssetRecord JSON under ASSET_MIME ("application/vnd.moku.asset+json", exported as .json); a video item `$ref`s it and gets a file with that MIME; re-register by bumping params.generation; package root also exports ASSET_MIME, encodeAssetRecord, parseAssetRecord | Standard | register, estimate, providers | events: none
 - codex (deps: registry): image and text provider over the local Codex CLI (`codex exec`, plan-billed, $0) — registers ("image","codex") and ("prompt-gen","codex"); params.images → --image, params.responseSchema → --output-schema, params.reasoning → model_reasoning_effort; openai/<id> mapped to -m | Complex | info | events: none
 - claude (deps: registry): text provider over the local Claude Code CLI (`claude -p --output-format json`, plan-billed, $0) — registers ("prompt-gen","claude"); images read with the Read tool under --restricted, params.responseSchema in the prompt and validated with zod, params.reasoning → --effort; anthropic/<id> mapped to --model | Complex | info | events: none
-- fal (deps: registry): video provider over the fal queue API — registers ("video","fal") as submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, kling-3-pro, kling-o3-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref; per-second price table, unknown price throws | Complex | info | events: none
+- fal (deps: registry): every fal-hosted task over one client, one FAL_KEY, one upload cache (state.uploads, keyed storage:<mime>:<sha256>) and one merged price table — registers four handlers in onInit:
+  ("video","fal") submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref; per-second prices (keys <alias>, <alias>@<resolution>, <alias>+audio).
+  ("image","fal") estimate + execute + submit + poll over the queue; models nano-banana-pro, seedream-4.5-edit, gpt-image-2.5 (default imageDefaultModel); refs → edit endpoint; price keys image:<alias>[@<resolution>].
+  ("prompt-gen","fal") estimate + execute, one sync POST to <runUrl>/openrouter/router/openai/v1/chat/completions; model = OpenRouter id, undefined or "default" → llmDefaultModel; price keys llm:<id>#in / llm:<id>#out (USD per M tokens); 401/403/402/429 → PromptGenUnavailableError.
+  ("music","fal") estimate + execute + submit + poll; models elevenlabs-music-v2.5 (0.80 USD per started minute, chunks → composition_plan) and stable-audio-2.5 (0.20 USD per generation); price keys music:<alias>; params never reach the body.
+  execute (image, music) waits in process every pollIntervalMs, at most jobTimeoutMs (then retryable timeout; the job stays adoptable through poll). A request is validated and priced before the key is read or anything is uploaded; a missing price throws. requestLog (off by default) writes one JSONL line per billable request, never the key or the prompt. Errors: RetryableProviderError, TerminalProviderError, FlaggedProviderError | Complex | info, models(task) | events: none
 - ark (deps: registry): Seedance straight from ByteDance — region "intl" (BytePlus ModelArk) or "cn" (Volcengine Ark), one account per instance; registers ("video","ark") (submit + poll, asset refs sent as asset://<id>, asset preflight: provider + account fingerprint + GetAsset Active before any paid POST) and ("asset","ark") (signed OpenAPI: CreateAssetGroup once per process unless groupId set, CreateAsset from a public https input.url, GetAsset poll; estimate $0); registered after fal so fal stays the default video provider; models dreamina-seedance-2-0-260128, dreamina-seedance-2-5-260628 (intl), doubao-seedance-2-0-260128, doubao-seedance-2-5-260628 (cn); price per 1M output tokens; params allowlist refUrls (video/audio refs by public https URL), watermark, seed, return_last_frame, execution_expires_after, priority; a face refusal on a plain image says "Make it an asset item and $ref it." — no raw-photo fallback | Complex | info | events: none
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
 - cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, export, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
@@ -242,10 +252,11 @@ Config defaults (per plugin, override via createApp pluginConfigs; core-plugin k
 - openai: apiKeyEnv="OPENAI_API_KEY", baseUrl=undefined, models={tts:"gpt-4o-mini-tts", chat:"gpt-4o-mini"}, timeoutMs=60000, priceOverrides={}
 - image: defaultProvider="codex"
 - video: defaultProvider="fal", pollIntervalMs=5000
+- music: defaultProvider="fal", pollIntervalMs=5000
 - asset: defaultProvider="ark", pollIntervalMs=3000
 - codex: bin="codex", model="gpt-6-astra", reasoningEffort="low", timeoutMs=600000, workDir=".moku/tmp" ("" = OS temp dir), priceOverrides={}, textModel="", modelMap={}
 - claude: bin="claude", textModel="", modelMap={}, timeoutMs=600000, workDir="" (OS temp dir)
-- fal: apiKeyEnv="FAL_KEY", queueUrl="https://queue.fal.run", upload="storage", timeoutMs=60000, priceOverrides={}
+- fal: apiKeyEnv="FAL_KEY", queueUrl="https://queue.fal.run", uploadUrl="https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3", upload="storage", timeoutMs=60000, priceOverrides={} (video <alias>, image:<alias>, music:<alias>, llm:<id>#in|#out), runUrl="https://fal.run", imageDefaultModel="gpt-image-2.5", llmDefaultModel="anthropic/claude-opus-5.5", pollIntervalMs=2000, jobTimeoutMs=900000, requestLog="" (off)
 - ark: region="intl", apiKeyEnv="ARK_API_KEY", accessKeyEnv="ARK_ACCESS_KEY", secretKeyEnv="ARK_SECRET_KEY", baseUrl=null, controlUrl=null, groupId=null, groupName="moku-ai", timeoutMs=60000, priceOverrides={}, cnyPerUsd=7.1
 - compose: provider="openai", maxRepairAttempts=2
 - cli: plain=false
