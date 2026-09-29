@@ -30,16 +30,11 @@ import type {
   Config,
   DoneArtifact,
   ErrorClass,
-  GateResult,
   ItemFilter,
   ItemIntent,
-  ItemRow,
   JobState,
   JournalApi,
-  RunRow,
-  RunSnapshot,
   RunStatus,
-  RunTotals,
   State
 } from "./types";
 
@@ -53,82 +48,32 @@ import type {
 export function createJournalApi(ctx: CorePluginContext<Config, State>): JournalApi {
   const { config, state } = ctx;
 
-  // Creates the single `runs` row for one invocation.
-  const boundOpenRun = (opts: { glob: string; maxCostUsd?: number }): RunRow =>
-    openRun(state, opts);
-
-  // Looks up one run by id.
-  const boundGetRun = (runId: string): RunRow | undefined => getRun(state, runId);
-
-  // Finds the latest resumable run not in `exclude`.
-  const boundLatestResumableRun = (opts?: { exclude?: readonly string[] }): RunRow | undefined =>
-    latestResumableRun(state, opts);
-
-  // Inserts planning-time item intents.
-  const boundInsertItems = (runId: string, items: ItemIntent[]): ItemRow[] =>
-    insertItems(state, runId, items);
-
-  // Requeues every dispatching item of a run.
-  const boundRequeueDispatching = (runId: string): number => requeueDispatching(state, runId);
-
-  // The atomic budget + dedup gate.
-  const boundGateToDispatching = (itemId: string): GateResult => gateToDispatching(state, itemId);
-
-  // Records the start of a provider attempt.
-  const boundRecordAttempt = (itemId: string, attempt: AttemptStart): number =>
-    recordAttempt(state, itemId, attempt);
-
-  // Records the end of a provider attempt.
-  const boundFinishAttempt = (attemptId: number, end: AttemptEnd): void => {
-    finishAttempt(state, attemptId, end);
-  };
-
-  // Transitions an item to done.
-  const boundCommitDone = (
-    itemId: string,
-    result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
-  ): void => {
-    commitDone(state, itemId, result);
-  };
-
-  // Transitions an item to failed or back to queued.
-  const boundMarkFailed = (
-    itemId: string,
-    result: { errorClass: ErrorClass; terminal: boolean }
-  ): void => {
-    markFailed(state, itemId, result);
-  };
-
-  // Transitions an item to flagged.
-  const boundMarkFlagged = (itemId: string): void => {
-    markFlagged(state, itemId);
-  };
-
-  // Sets a run's status.
-  const boundSetRunStatus = (runId: string, status: RunStatus): void => {
-    setRunStatus(state, runId, status);
-  };
-
-  // Computes aggregate item counts and spend.
-  const boundTotals = (runId: string): RunTotals => totalsOf(state, runId);
-
-  // Lists a run's items.
-  const boundListItems = (runId: string, filter?: ItemFilter): ItemRow[] =>
-    listItemsOf(state, runId, filter);
-
-  // Reads a point-in-time run snapshot on its own short-lived connection.
-  const boundReadSnapshot = (runId: string): RunSnapshot => readRunSnapshot(state, config, runId);
-
   return {
-    openRun: boundOpenRun,
-    getRun: boundGetRun,
-    latestResumableRun: boundLatestResumableRun,
-    insertItems: boundInsertItems,
-    requeueDispatching: boundRequeueDispatching,
-    gateToDispatching: boundGateToDispatching,
-    recordAttempt: boundRecordAttempt,
-    finishAttempt: boundFinishAttempt,
-    commitDone: boundCommitDone,
+    // Creates the single `runs` row for one invocation.
+    openRun: (opts: { glob: string; maxCostUsd?: number }) => openRun(state, opts),
+    // Looks up one run by id.
+    getRun: (runId: string) => getRun(state, runId),
+    // Finds the latest resumable run not in `exclude`.
+    latestResumableRun: (opts?: { exclude?: readonly string[] }) => latestResumableRun(state, opts),
+    // Inserts planning-time item intents.
+    insertItems: (runId: string, items: ItemIntent[]) => insertItems(state, runId, items),
+    // Requeues every dispatching item of a run.
+    requeueDispatching: (runId: string) => requeueDispatching(state, runId),
+    // The atomic budget + dedup gate.
+    gateToDispatching: (itemId: string) => gateToDispatching(state, itemId),
+    // Records the start of a provider attempt.
+    recordAttempt: (itemId: string, attempt: AttemptStart) => recordAttempt(state, itemId, attempt),
+    // Records the end of a provider attempt.
+    finishAttempt: (attemptId: number, end: AttemptEnd) => {
+      finishAttempt(state, attemptId, end);
+    },
+    // Transitions an item to done.
+    commitDone: (
+      itemId: string,
+      result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
+    ) => {
+      commitDone(state, itemId, result);
+    },
     // Finds a reusable done artifact by key, in any run.
     findDoneArtifact: (artifactKey: string) => findDoneArtifact(state, artifactKey),
     // Completes a queued item with a reused artifact.
@@ -145,11 +90,23 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     latestRun: () => latestRun(state),
     // Looks up one item by run and planning key.
     getItem: (runId: string, planningKey: string) => getItem(state, runId, planningKey),
-    markFailed: boundMarkFailed,
-    markFlagged: boundMarkFlagged,
-    setRunStatus: boundSetRunStatus,
-    totals: boundTotals,
-    listItems: boundListItems,
-    readSnapshot: boundReadSnapshot
+    // Transitions an item to failed or back to queued.
+    markFailed: (itemId: string, result: { errorClass: ErrorClass; terminal: boolean }) => {
+      markFailed(state, itemId, result);
+    },
+    // Transitions an item to flagged.
+    markFlagged: (itemId: string) => {
+      markFlagged(state, itemId);
+    },
+    // Sets a run's status.
+    setRunStatus: (runId: string, status: RunStatus) => {
+      setRunStatus(state, runId, status);
+    },
+    // Computes aggregate item counts and spend.
+    totals: (runId: string) => totalsOf(state, runId),
+    // Lists a run's items.
+    listItems: (runId: string, filter?: ItemFilter) => listItemsOf(state, runId, filter),
+    // Reads a point-in-time run snapshot on its own short-lived connection.
+    readSnapshot: (runId: string) => readRunSnapshot(state, config, runId)
   };
 }
