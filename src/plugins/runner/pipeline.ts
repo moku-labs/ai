@@ -66,10 +66,6 @@ export function isExecutableHandler(value: unknown): value is ExecutableHandler 
  *
  * @param handler - A narrowed handler.
  * @returns True when both `submit` and `poll` exist.
- * @example
- * ```ts
- * if (isJobHandler(handler)) await runJob(...);
- * ```
  */
 function isJobHandler(
   handler: ExecutableHandler
@@ -185,17 +181,17 @@ const LANE_OPEN_MIN_WAIT_MS = 250;
 
 /**
  * How long an item sleeps after a lane refused it with `"breaker-open"`.
- * Half-open (a probe is in flight): {@link LANE_OPEN_MIN_WAIT_MS}, since the
- * probe may close the breaker soon. Open: the lane's `breakerCooldownMs`, but
- * never less than that floor.
+ * Only a lane still open waits the lane's `breakerCooldownMs` (never less than
+ * {@link LANE_OPEN_MIN_WAIT_MS}). Half-open (a probe is in flight) or already
+ * closed again waits just the floor, since the lane may admit the item soon.
  *
  * @param ctx - Runner domain context.
  * @param lane - The lane that refused the item.
  * @returns The wait before the item asks the lane again, ms.
  */
 function laneOpenWaitMs(ctx: RunnerContext, lane: string): number {
-  const isHalfOpen = ctx.limits.snapshot(lane).breaker === "half-open";
-  if (isHalfOpen) return LANE_OPEN_MIN_WAIT_MS;
+  const isOpen = ctx.limits.snapshot(lane).breaker === "open";
+  if (!isOpen) return LANE_OPEN_MIN_WAIT_MS;
 
   const cooldownMs = ctx.limits.laneConfig(lane).breakerCooldownMs;
   return Math.max(cooldownMs, LANE_OPEN_MIN_WAIT_MS);
@@ -237,10 +233,6 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  *
  * @param externalSignal - The caller-supplied `opts.signal`, if any.
  * @returns A controller exposing the merged signal, a `budgetStopped` flag, and the trigger.
- * @example
- * ```ts
- * const drain = createDrainController(opts?.signal);
- * ```
  */
 export function createDrainController(externalSignal: AbortSignal | undefined): DrainController {
   const internal = new AbortController();
@@ -738,12 +730,6 @@ type AttemptStep = { verdict: ClaimVerdict } | { attempt: number; waitMs: number
  * @param outcome - The attempt's outcome.
  * @param report - Callback invoked with the resulting stream event.
  * @returns The verdict when the item stops, or the next attempt count and backoff delay.
- * @example
- * ```ts
- * // Attempt 1 of 3 hit a retryable 503: the item is re-queued with a backoff.
- * const retryable = { kind: "retryable", errorClass: "http-5xx", retryAfterMs: undefined } as const;
- * applyOutcome(ctx, item, 3, 0, retryable, report); // { attempt: 1, waitMs: 500..1000 }
- * ```
  */
 function applyOutcome(
   ctx: RunnerContext,
@@ -900,15 +886,18 @@ async function runAttempts(
 ): Promise<ClaimVerdict> {
   const lane = laneOf(item);
   let attempt = item.attemptCount;
+  let isLaneOpenLogged = false;
 
   while (!drain.signal.aborted) {
-    // Admit: a refusing breaker is waited out, then the lane is asked again.
+    // Admit: a refusing breaker is waited out (warned once per wait), then the lane is asked again.
     const admission = await acquireLane(ctx, lane, drain.signal);
     if (admission === "breaker-open") {
-      ctx.log.warn("runner:lane-open", { itemId: item.id, lane });
+      if (!isLaneOpenLogged) ctx.log.warn("runner:lane-open", { itemId: item.id, lane });
+      isLaneOpenLogged = true;
       await delay(laneOpenWaitMs(ctx, lane), drain.signal);
       continue;
     }
+    isLaneOpenLogged = false;
     if (!admission) return OPEN_VERDICT;
 
     // A slot granted after the run stopped goes straight back: a stopped run makes no paid call.

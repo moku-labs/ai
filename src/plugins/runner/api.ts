@@ -262,7 +262,10 @@ function startItems(
     const item = queuedByKey.get(plan.intent.planningKey);
     if (!item || settledByKey.has(item.planningKey)) continue;
 
-    const dependencies = Promise.all(
+    // allSettled: a dependent that reuses its artifact never awaits this, and a
+    // target that throws must not leave an unhandled rejection behind. The
+    // dependent reads each target's status from the journal, not this value.
+    const dependencies = Promise.allSettled(
       [...plan.refKeys.values()].map(key => settledByKey.get(key) ?? Promise.resolve())
     );
     settledByKey.set(item.planningKey, executeItem(ctx, item, plan, drain, report, dependencies));
