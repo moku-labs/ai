@@ -521,10 +521,6 @@ const DEFAULT_SECONDS = 5;
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * seedanceImageBody(input); // => { prompt, image_url, duration: "5", resolution: "720p", generate_audio }
- * ```
  */
 function seedanceImageBody(input: BodyInput): SeedanceImageBody {
   const body: SeedanceImageBody = {
@@ -545,10 +541,6 @@ function seedanceImageBody(input: BodyInput): SeedanceImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * seedanceReferenceBody(input); // => { prompt, image_urls: [image, ...refs], ... }
- * ```
  */
 function seedanceReferenceBody(input: BodyInput): SeedanceReferenceBody {
   const body: SeedanceReferenceBody = {
@@ -570,10 +562,6 @@ function seedanceReferenceBody(input: BodyInput): SeedanceReferenceBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * minimaxImageBody(input); // => { prompt, image_url, duration: 5, resolution: "768P" }
- * ```
  */
 function minimaxImageBody(input: BodyInput): MinimaxImageBody {
   const body: MinimaxImageBody = {
@@ -592,10 +580,6 @@ function minimaxImageBody(input: BodyInput): MinimaxImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * minimaxMaxImageBody(input); // => { prompt, prompt_expansion_mode: "disabled", image_url, duration: 5, resolution: "768P" }
- * ```
  */
 function minimaxMaxImageBody(input: BodyInput): MinimaxMaxImageBody {
   const body: MinimaxMaxImageBody = {
@@ -616,10 +600,6 @@ function minimaxMaxImageBody(input: BodyInput): MinimaxMaxImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * minimaxMaxReferenceBody(input); // => { prompt, reference_image_urls: [image, ...refs], duration: 5, resolution: "768P", ... }
- * ```
  */
 function minimaxMaxReferenceBody(input: BodyInput): MinimaxMaxReferenceBody {
   const body: MinimaxMaxReferenceBody = {
@@ -642,10 +622,6 @@ function minimaxMaxReferenceBody(input: BodyInput): MinimaxMaxReferenceBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * minimaxMaxExtendBody(input); // => { prompt, video_url, output: "continuation", enable_prompt_expansion: false, duration: 5, resolution: "768P" }
- * ```
  */
 function minimaxMaxExtendBody(input: BodyInput): MinimaxMaxExtendBody {
   return {
@@ -664,10 +640,6 @@ function minimaxMaxExtendBody(input: BodyInput): MinimaxMaxExtendBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * klingImageBody(input); // => { prompt, start_image_url, duration: "5", generate_audio }
- * ```
  */
 function klingImageBody(input: BodyInput): KlingImageBody {
   const body: KlingImageBody = {
@@ -686,10 +658,6 @@ function klingImageBody(input: BodyInput): KlingImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * klingReferenceBody(input); // => { prompt, start_image_url, image_urls: refs, ... }
- * ```
  */
 function klingReferenceBody(input: BodyInput): KlingReferenceBody {
   return {
@@ -708,10 +676,6 @@ function klingReferenceBody(input: BodyInput): KlingReferenceBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * seedance20ImageBody(input); // => { prompt, image_url, duration: "5", resolution: "720p", aspect_ratio: "9:16", generate_audio }
- * ```
  */
 function seedance20ImageBody(input: BodyInput): Seedance20ImageBody {
   const body: Seedance20ImageBody = {
@@ -732,10 +696,6 @@ function seedance20ImageBody(input: BodyInput): Seedance20ImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * wanReferenceBody(input); // => { prompt, reference_image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
- * ```
  */
 function wanReferenceBody(input: BodyInput): WanReferenceBody {
   const body: WanReferenceBody = {
@@ -756,10 +716,6 @@ function wanReferenceBody(input: BodyInput): WanReferenceBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * veoImageBody(input); // => { prompt, image_url, duration: "8s", resolution: "720p", aspect_ratio: "9:16", generate_audio }
- * ```
  */
 function veoImageBody(input: BodyInput): VeoImageBody {
   const body: VeoImageBody = {
@@ -780,10 +736,6 @@ function veoImageBody(input: BodyInput): VeoImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * viduImageBody(input); // => { prompt, image_url, duration: 5, resolution: "720p", audio }
- * ```
  */
 function viduImageBody(input: BodyInput): ViduImageBody {
   const body: ViduImageBody = {
@@ -802,10 +754,6 @@ function viduImageBody(input: BodyInput): ViduImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * viduReferenceBody(input); // => { prompt, reference_image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
- * ```
  */
 function viduReferenceBody(input: BodyInput): ViduReferenceBody {
   return {
@@ -824,10 +772,6 @@ function viduReferenceBody(input: BodyInput): ViduReferenceBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * geminiOmniImageBody(input); // => { prompt, image_url, duration: 5, resolution: "720p", aspect_ratio: "9:16" }
- * ```
  */
 function geminiOmniImageBody(input: BodyInput): GeminiOmniImageBody {
   const body: GeminiOmniImageBody = {
@@ -847,10 +791,6 @@ function geminiOmniImageBody(input: BodyInput): GeminiOmniImageBody {
  *
  * @param input - Resolved body input.
  * @returns The request body.
- * @example
- * ```ts
- * geminiOmniReferenceBody(input); // => { prompt, image_urls: [image, ...refs], duration: 5, resolution: "720p", ... }
- * ```
  */
 function geminiOmniReferenceBody(input: BodyInput): GeminiOmniReferenceBody {
   const body: GeminiOmniReferenceBody = {

@@ -89,6 +89,11 @@ async function rejected(
   return { error: error as Error, fetchMock };
 }
 
+/** The handler as the runner sees it: estimate runs before `$ref`s resolve. */
+function runnerView(): { estimate(request: EstimateRequest): { usd: number } } {
+  return createVideoHandler(createTestCtx());
+}
+
 describe("minimax-h3-max-i2v catalog row", () => {
   it("sits right after minimax-h3-max-ref in catalog order", () => {
     const aliases = falAliases();
@@ -344,5 +349,48 @@ describe("minimax-h3-max-i2v price", () => {
     };
 
     expect(videoCostUsd(createTestCtx(), request)).toBe(0.4);
+  });
+});
+
+describe("estimate with an end frame", () => {
+  it.each([
+    "minimax-h3-max-ref",
+    "veo-3.1-fast"
+  ])("refuses an end frame on %s with the same error as submit", alias => {
+    const request: VideoRequest = { model: alias, prompt: "p", image: start, endImage: end };
+
+    expect(() => createVideoHandler(createTestCtx()).estimate(request)).toThrow(
+      `[ai] fal model "${alias}" takes no end frame.${REFUSAL_SECOND_LINE}`
+    );
+  });
+
+  it("refuses an unresolved end frame on a model that takes none", () => {
+    const request: EstimateRequest = {
+      model: "veo-3.1-fast",
+      prompt: "p",
+      image: { $ref: "shot.start" },
+      endImage: { $ref: "shot.end" }
+    };
+
+    expect(() => runnerView().estimate(request)).toThrow(
+      `[ai] fal model "veo-3.1-fast" takes no end frame.${REFUSAL_SECOND_LINE}`
+    );
+  });
+
+  it("prices an end-frame model with a resolved end frame", () => {
+    const request: VideoRequest = { model: MODEL, prompt: "p", image: start, endImage: end };
+
+    expect(createVideoHandler(createTestCtx()).estimate(request).usd).toBe(0.4);
+  });
+
+  it("prices an end-frame model whose end frame is still an unresolved $ref", () => {
+    const request: EstimateRequest = {
+      model: MODEL,
+      prompt: "p",
+      image: { $ref: "shot.start" },
+      endImage: { $ref: "shot.end" }
+    };
+
+    expect(runnerView().estimate(request).usd).toBe(0.4);
   });
 });

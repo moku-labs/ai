@@ -44,7 +44,10 @@ export type VideoRequest = {
   negative?: string;
   /** First frame / keyframe. */
   image?: VideoFile;
-  /** Last frame: the clip ends on this image. Only models that take an end frame accept it. */
+  /**
+   * Last frame: the clip ends on this image. A provider whose model takes no end
+   * frame rejects the request before any upload or charge; it never drops it silently.
+   */
   endImage?: VideoFile;
   /** Extra references: images, audio or video files, told apart by MIME type. */
   refs?: VideoFile[];

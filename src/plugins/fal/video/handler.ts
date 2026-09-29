@@ -11,7 +11,7 @@ import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
 import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
-import type { FalContext, FalProviderError } from "../types";
+import type { EstimateRequest, FalContext, FalProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
@@ -99,7 +99,7 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
  * Refuses an end frame on a model that takes none, before any upload.
  *
  * @param model - The resolved catalog row.
- * @param request - The video request.
+ * @param request - The video request; its end frame may still be an unresolved `$ref`.
  * @throws {Error} A plain (terminal) two-line error listing the models that take an end frame.
  * @example
  * ```ts
@@ -107,7 +107,10 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
  * // throws: [ai] fal model "veo-3.1-fast" takes no end frame.
  * ```
  */
-function requireEndFrameSupport(model: ResolvedFalModel, request: VideoRequest): void {
+function requireEndFrameSupport(
+  model: ResolvedFalModel,
+  request: Pick<EstimateRequest, "endImage">
+): void {
   if (request.endImage === undefined || model.endFrame) return;
 
   throw new Error(
@@ -249,10 +252,6 @@ function redacted(error: FalProviderError): {
  * @param request - The video request.
  * @param signal - Caller abort signal.
  * @returns The opaque job id.
- * @example
- * ```ts
- * const { jobId } = await submitJob(ctx, request, signal);
- * ```
  */
 async function submitJob(
   ctx: FalContext,
@@ -425,9 +424,11 @@ async function pollJob(
 
 /**
  * Creates the fal video handler registered under `("video", "fal")`.
- * `estimate` touches no network. `submit` uploads the inputs and queues the
- * job; an abort stops the uploads, but once the queue POST is sent it runs to
- * the end, so a billed job always returns its id.
+ * `estimate` touches no network: it refuses an end frame the model cannot
+ * take, with the same error as `submit`, then prices the request. `submit`
+ * uploads the inputs and queues the job; an abort stops the uploads, but once
+ * the queue POST is sent it runs to the end, so a billed job always returns
+ * its id.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, submit and poll.
@@ -438,7 +439,10 @@ async function pollJob(
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
-    estimate: (request: VideoRequest): { usd: number } => ({ usd: videoCostUsd(ctx, request) }),
+    estimate: (request: VideoRequest): { usd: number } => {
+      requireEndFrameSupport(resolveFalModel(request.model), request);
+      return { usd: videoCostUsd(ctx, request) };
+    },
     submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
       submitJob(ctx, request, opts.signal),
     poll: (
