@@ -77,3 +77,14 @@ export function requireDriver(state: State): SqliteDriver {
   }
   return state.driver;
 }
+
+/**
+ * Tells whether the journal connection is open: true between `onStart` and
+ * `onStop`. The only journal call that never throws.
+ *
+ * @param state - Journal plugin state.
+ * @returns True when the driver is open.
+ */
+export function isOpen(state: State): boolean {
+  return state.driver !== null;
+}

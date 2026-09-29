@@ -179,7 +179,7 @@ src/
   bin.ts                  # `moku` bin — Layer-3 consumer: createApp → start → cli.dispatch → stop → exit
   plugins/
     index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Elevenlabs, Openai, Compose, Cli)
-    journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
+    journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, provider-records.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
     registry/             # index.ts only (Nano — no types.ts, by design)
@@ -212,17 +212,18 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - runner (deps: registry, buildfile): the durable orchestrator — plan → admit → gate → execute → persist → report; owns resume, budget stop, clean pause, retry taxonomy | Complex | run, resume, estimate, status, events, export | events: run:progress, run:done, run:failed, run:budget-stop, run:paused
 - voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params | Standard | generate, estimate, providers | events: none
 - translate (deps: registry): owns "translate" contract + one-off facade | Standard | generate, estimate, providers | events: none
-- promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose | Standard | generate, estimate, providers | events: none
+- promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose; generate walks [provider, ...fallback] and switches only on PromptGenUnavailableError (missing/auth/limit) or HTTP 401/402/403/429 or a breaker-open lane, one limits lane "prompt-gen/<provider>/default" per attempt | Standard | generate, estimate, providers | events: none
 - elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs"); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
 - openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
 - video (deps: registry): owns "video" contract (execute, or submit + poll) + one-off facade | Standard | generate, estimate, providers | events: none
-- codex (deps: registry): image provider over the local Codex CLI (`codex exec`, plan-billed, explicit $0 price) — registers ("image","codex") | Standard | info | events: none
+- codex (deps: registry): image and text provider over the local Codex CLI (`codex exec`, plan-billed, $0) — registers ("image","codex") and ("prompt-gen","codex"); params.images → --image, params.responseSchema → --output-schema, params.reasoning → model_reasoning_effort; openai/<id> mapped to -m | Complex | info | events: none
+- claude (deps: registry): text provider over the local Claude Code CLI (`claude -p --output-format json`, plan-billed, $0) — registers ("prompt-gen","claude"); images read with the Read tool under --restricted, params.responseSchema in the prompt and validated with zod, params.reasoning → --effort; anthropic/<id> mapped to --model | Complex | info | events: none
 - fal (deps: registry): video provider over the fal queue API — registers ("video","fal") as submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, kling-3-pro, kling-o3-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref; per-second price table, unknown price throws | Complex | info | events: none
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
 - cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, export, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
 
-Config defaults (per plugin, override regular plugins via createApp pluginConfigs):
+Config defaults (per plugin, override via createApp pluginConfigs; core-plugin keys work at runtime, typed in moku-labs/core#28):
 - journal: path=".moku/journal.db", checkpointIntervalMs=30000, busyTimeoutMs=5000
 - store: dir=".moku/store", algo="sha256"
 - limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={}
@@ -230,12 +231,13 @@ Config defaults (per plugin, override regular plugins via createApp pluginConfig
 - runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000, maxActiveRuns=1
 - voiceover: defaultProvider="elevenlabs", defaultFormat="mp3"
 - translate: defaultProvider="openai"
-- promptGen: defaultProvider="openai"
+- promptGen: defaultProvider="openai", fallback=[]
 - elevenlabs: apiKeyEnv="ELEVENLABS_API_KEY", baseUrl="https://api.elevenlabs.io", defaultModel="eleven_multilingual_v2", timeoutMs=60000, priceOverrides={}
 - openai: apiKeyEnv="OPENAI_API_KEY", baseUrl=undefined, models={tts:"gpt-4o-mini-tts", chat:"gpt-4o-mini"}, timeoutMs=60000, priceOverrides={}
 - image: defaultProvider="codex"
 - video: defaultProvider="fal", pollIntervalMs=5000
-- codex: bin="codex", model="gpt-6-astra", reasoningEffort="low", timeoutMs=600000, workDir=".moku/tmp", priceOverrides={}
+- codex: bin="codex", model="gpt-6-astra", reasoningEffort="low", timeoutMs=600000, workDir=".moku/tmp" ("" = OS temp dir), priceOverrides={}, textModel="", modelMap={}
+- claude: bin="claude", textModel="", modelMap={}, timeoutMs=600000, workDir="" (OS temp dir)
 - fal: apiKeyEnv="FAL_KEY", queueUrl="https://queue.fal.run", upload="storage", timeoutMs=60000, priceOverrides={}
 - compose: provider="openai", maxRepairAttempts=2
 - cli: plain=false

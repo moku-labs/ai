@@ -6,12 +6,19 @@
  * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
  * (`../prices.ts`), so estimate and actual cost always agree.
  */
-import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
+import type {
+  EstimateRequest,
+  VideoFile,
+  VideoHandler,
+  VideoJobPoll,
+  VideoRequest
+} from "../../video/contract";
+import type { FalResponse } from "../client";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
 import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
-import type { EstimateRequest, FalContext, FalProviderError } from "../types";
+import type { FalContext, FalProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
@@ -56,22 +63,67 @@ const JOB_VERDICT_STATUSES: ReadonlySet<number> = new Set([BAD_REQUEST, UNPROCES
 /** Status carried by a result that could not be read, so the runner classifies it retryable (5xx). */
 const RETRY_STATUS = 503;
 
+/** Statuses fal answers for a bad or missing key. */
+const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+
 /**
- * Reads the fal key through the injected env API (MC3).
+ * Reads the fal key through the injected env API (MC3), at request time.
+ *
+ * @param ctx - Plugin context.
+ * @returns The key, or undefined when it is not set.
+ */
+function readApiKey(ctx: FalContext): string | undefined {
+  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
+  return apiKey === undefined || apiKey === "" ? undefined : apiKey;
+}
+
+/**
+ * Reads the fal key for a submit.
  *
  * @param ctx - Plugin context.
  * @returns The key.
  * @throws {Error} A plain (terminal) two-line error when the key is not set.
  */
 function resolveApiKey(ctx: FalContext): string {
-  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  const isMissingKey = apiKey === undefined || apiKey === "";
-  if (isMissingKey) {
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) {
     throw new Error(
       `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
     );
   }
   return apiKey;
+}
+
+/**
+ * The error of a poll without a valid key: a plain `Error` with no `status`
+ * and no `kind`. The runner classifies it `unknown` and marks the job
+ * expired, so the next run adopts the same job instead of paying again.
+ *
+ * @param keyVariable - The variable that holds the fal key (`config.apiKeyEnv`).
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * pollKeyError("FAL_KEY").message; // => "[ai] fal cannot poll without a valid API key.\n  Fix FAL_KEY; the next run adopts the same job."
+ * ```
+ */
+function pollKeyError(keyVariable: string): Error {
+  return new Error(
+    `[ai] fal cannot poll without a valid API key.\n  Fix ${keyVariable}; the next run adopts the same job.`
+  );
+}
+
+/**
+ * Whether a status call failure says fal refused the key.
+ *
+ * @param error - What the status call threw.
+ * @returns True for a terminal 401 or 403.
+ * @example
+ * ```ts
+ * isKeyRejection(new TerminalProviderError("[ai] fal rejected the request (HTTP 403).", 403)); // => true
+ * ```
+ */
+function isKeyRejection(error: unknown): boolean {
+  return error instanceof TerminalProviderError && AUTH_STATUSES.has(error.status);
 }
 
 /**
@@ -375,7 +427,9 @@ function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
 
 /**
  * Polls a job once: pending, failed with fal's classified job error, or
- * done with the downloaded clip.
+ * done with the downloaded clip. A key missing or refused (401/403) on the
+ * status call is thrown as a plain error, so the runner marks the job
+ * expired and a later run adopts the same job.
  *
  * @param ctx - Plugin context.
  * @param jobId - The id `submit` returned.
@@ -389,16 +443,25 @@ async function pollJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<VideoJobPoll> {
-  // Read the job status once.
+  // Without a valid key the job stays adoptable: the poll must not read as failed.
   const job = decodeJobId(jobId);
-  const apiKey = resolveApiKey(ctx);
-  const response = await falFetch({
-    url: job.statusUrl,
-    method: "GET",
-    apiKey,
-    timeoutMs: ctx.config.timeoutMs,
-    signal
-  });
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) throw pollKeyError(ctx.config.apiKeyEnv);
+
+  // Read the job status once; a refused key keeps the job adoptable too.
+  let response: FalResponse;
+  try {
+    response = await falFetch({
+      url: job.statusUrl,
+      method: "GET",
+      apiKey,
+      timeoutMs: ctx.config.timeoutMs,
+      signal
+    });
+  } catch (error) {
+    if (isKeyRejection(error)) throw pollKeyError(ctx.config.apiKeyEnv);
+    throw error;
+  }
 
   // Still working, or a status we do not know: stay pending.
   const body = parseJson(response, "status response");
@@ -432,7 +495,7 @@ async function pollJob(
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
-    estimate: (request: VideoRequest): { usd: number } => {
+    estimate: (request: EstimateRequest): { usd: number } => {
       requireEndFrameSupport(resolveFalModel(request.model), request);
       return { usd: videoCostUsd(ctx, request) };
     },

@@ -6,26 +6,28 @@
  * Plugins, in registration (dependency) order, and their options. Every
  * option has a default; override any of them per app with
  * `createApp({ pluginConfigs: { <plugin>: { ... } } })`. Core plugins
- * (`journal`, `store`, `limits`) are set at `createCore` and injected as
+ * (`journal`, `store`, `limits`) are registered in `createCoreConfig` and injected as
  * `ctx.journal` / `ctx.store` / `ctx.limits`.
  *
  * | Plugin | Option | Default |
  * |---|---|---|
  * | journal (core) | `path` · `checkpointIntervalMs` · `busyTimeoutMs` | `".moku/journal.db"` · `30_000` · `5000` |
  * | store (core) | `dir` · `algo` | `".moku/store"` · `"sha256"` |
- * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{}` |
+ * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 } }`. A `lanes` override replaces the whole map: repeat this lane. |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
  * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
  * | voiceover | `defaultProvider` · `defaultFormat` | `"elevenlabs"` · `"mp3"` |
  * | translate | `defaultProvider` | `"openai"` |
- * | promptGen | `defaultProvider` | `"openai"` |
+ * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
- * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` |
+ * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
+ * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
+ * | apimodels | `apiKeyEnv` · `baseUrl` · `assetGroup` · `timeoutMs` · `priceOverrides` | `"APIMODELS_API_KEY"` · `"https://api.apimodels.app/v1"` · `"moku-ai"` · `60_000` · `{}` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
@@ -46,7 +48,9 @@
 import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
+  apimodelsPlugin,
   buildfilePlugin,
+  claudePlugin,
   cliPlugin,
   codexPlugin,
   composePlugin,
@@ -76,16 +80,20 @@ const framework = createCore(coreConfig, {
     elevenlabsPlugin,
     openaiPlugin,
     codexPlugin,
+    claudePlugin,
     falPlugin,
+    apimodelsPlugin,
     composePlugin,
     cliPlugin
   ],
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // Provider keys (FAL_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY) and PATH:
+    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY) and PATH:
     // the process environment first, then `.env.local` in the working directory.
-    env: { providers: [processEnv(), dotenv(".env.local")] }
+    env: { providers: [processEnv(), dotenv(".env.local")] },
+    // apimodels.app documents no rate limits: a conservative lane until real limits are known.
+    limits: { lanes: { "video/apimodels": { concurrency: 2, rpm: 20 } } }
   }
 });
 
@@ -118,7 +126,9 @@ export const createPlugin = framework.createPlugin;
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {
+  apimodelsPlugin,
   buildfilePlugin,
+  claudePlugin,
   cliPlugin,
   codexPlugin,
   composePlugin,
@@ -139,10 +149,13 @@ export {
 
 // ─── Helpers ──────────────────────────────────────────────────
 export { defineBuild } from "./plugins/buildfile";
+export { isPromptGenUnavailable, PromptGenUnavailableError } from "./plugins/promptGen/contract";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
+  Apimodels,
   Buildfile,
+  Claude,
   Cli,
   Codex,
   Compose,

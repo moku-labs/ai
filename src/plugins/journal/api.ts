@@ -1,6 +1,6 @@
 /**
  * @file journal core plugin — API factory: binds the domain functions of db, runs,
- * items, gate, attempts and snapshot to this plugin's state. Metadata only — no
+ * items, gate, attempts, snapshot and provider-records to this plugin's state. Metadata only — no
  * free-form payload columns anywhere in the journal.
  */
 import type { CorePluginContext } from "@moku-labs/core";
@@ -13,6 +13,7 @@ import {
   reuseDone,
   setAttemptJob
 } from "./attempts";
+import { isOpen } from "./db";
 import { gateToDispatching } from "./gate";
 import {
   getItem,
@@ -22,6 +23,12 @@ import {
   markFlagged,
   requeueDispatching
 } from "./items";
+import {
+  deleteProviderRecord,
+  findProviderRecord,
+  type ProviderRecordQuery,
+  putProviderRecords
+} from "./provider-records";
 import { getRun, latestResumableRun, latestRun, openRun, setRunStatus, totalsOf } from "./runs";
 import { readRunSnapshot } from "./snapshot";
 import type {
@@ -34,6 +41,7 @@ import type {
   ItemIntent,
   JobState,
   JournalApi,
+  ProviderRecord,
   RunStatus,
   State
 } from "./types";
@@ -107,6 +115,18 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     // Lists a run's items.
     listItems: (runId: string, filter?: ItemFilter) => listItemsOf(state, runId, filter),
     // Reads a point-in-time run snapshot on its own short-lived connection.
-    readSnapshot: (runId: string) => readRunSnapshot(state, config, runId)
+    readSnapshot: (runId: string) => readRunSnapshot(state, config, runId),
+    // Tells whether the journal connection is open; never throws.
+    isOpen: () => isOpen(state),
+    // Reads one provider record's value.
+    findProviderRecord: (query: ProviderRecordQuery) => findProviderRecord(state, query),
+    // Upserts provider records in one transaction.
+    putProviderRecords: (records: ProviderRecord[]) => {
+      putProviderRecords(state, records);
+    },
+    // Deletes one provider record; missing is a no-op.
+    deleteProviderRecord: (query: ProviderRecordQuery) => {
+      deleteProviderRecord(state, query);
+    }
   };
 }

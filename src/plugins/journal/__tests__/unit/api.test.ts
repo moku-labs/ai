@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createJournalApi } from "../../api";
 import * as attempts from "../../attempts";
+import * as db from "../../db";
 import * as gate from "../../gate";
 import * as items from "../../items";
+import * as providerRecords from "../../provider-records";
 import * as runs from "../../runs";
 import * as snapshot from "../../snapshot";
 import type { Config, JournalApi } from "../../types";
@@ -24,6 +26,10 @@ function spyOnExports<T extends object>(module: T): T {
 
 vi.mock("../../attempts", async importOriginal =>
   spyOnExports(await importOriginal<typeof attempts>())
+);
+vi.mock("../../db", async importOriginal => spyOnExports(await importOriginal<typeof db>()));
+vi.mock("../../provider-records", async importOriginal =>
+  spyOnExports(await importOriginal<typeof providerRecords>())
 );
 vi.mock("../../gate", async importOriginal => spyOnExports(await importOriginal<typeof gate>()));
 vi.mock("../../items", async importOriginal => spyOnExports(await importOriginal<typeof items>()));
@@ -55,6 +61,8 @@ const attemptEnd = { endedAt: 2, outcome: "done", costUsd: 0.05 } as const;
 const doneResult = { actualCostUsd: 0.2, artifactKey: "ak-1", contentHash: "ch-1" };
 const artifact = { contentHash: "ch-1", mimeType: "audio/mpeg" };
 const failure = { errorClass: "http-5xx", terminal: false } as const;
+const recordQuery = { provider: "apimodels", account: "acct-1", kind: "asset", key: "hash-1" };
+const record = { ...recordQuery, value: "asset://asset-1" };
 
 const cases: DelegationCase[] = [
   {
@@ -203,8 +211,32 @@ const cases: DelegationCase[] = [
     domain: snapshot.readRunSnapshot,
     args: [state, config, "run-1"],
     returnsResult: true
+  },
+  {
+    member: "findProviderRecord",
+    call: a => a.findProviderRecord(recordQuery),
+    domain: providerRecords.findProviderRecord,
+    args: [state, recordQuery],
+    returnsResult: true
+  },
+  {
+    member: "putProviderRecords",
+    call: a => a.putProviderRecords([record]),
+    domain: providerRecords.putProviderRecords,
+    args: [state, [record]],
+    returnsResult: false
+  },
+  {
+    member: "deleteProviderRecord",
+    call: a => a.deleteProviderRecord(recordQuery),
+    domain: providerRecords.deleteProviderRecord,
+    args: [state, recordQuery],
+    returnsResult: false
   }
 ];
+
+/** Members that are not guarded: `isOpen` is the one call that never throws on a closed journal. */
+const UNGUARDED_MEMBERS = ["isOpen"];
 
 describe("journal api facade", () => {
   beforeEach(() => {
@@ -225,7 +257,13 @@ describe("journal api facade", () => {
 
   describe("wiring", () => {
     it("exposes exactly the JournalApi members", () => {
-      expect(Object.keys(api).toSorted()).toEqual(cases.map(({ member }) => member).toSorted());
+      const members = [...cases.map(({ member }) => member), ...UNGUARDED_MEMBERS];
+      expect(Object.keys(api).toSorted()).toEqual(members.toSorted());
+    });
+
+    it("isOpen delegates to db.isOpen and reports a closed journal without throwing", () => {
+      expect(api.isOpen()).toBe(false);
+      expect(vi.mocked(db.isOpen)).toHaveBeenCalledWith(state);
     });
 
     it.each(cases)("$member delegates to its domain function with the plugin state", ({

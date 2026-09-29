@@ -136,15 +136,15 @@ describe("promptGen integration", () => {
       await app.stop();
     });
 
-    it("rejects a request missing the required prompt field at compile time", async () => {
+    it("rejects a request missing the required prompt field at compile time", () => {
       const { createApp } = buildFramework();
       const app = createApp();
-      await app.start();
 
+      // Never called: the check is the compile error alone.
       // @ts-expect-error -- prompt is required on PromptGenRequest
-      await expect(app.promptGen.generate({ system: "only-system" })).rejects.toBeDefined();
+      const bad = () => app.promptGen.generate({ system: "only-system" });
 
-      await app.stop();
+      expectTypeOf(bad).toBeFunction();
     });
   });
 });
