@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mergePrices, resolvePrices } from "../../prices";
+import { imagePriceOf } from "../../image/prices";
+import { llmPriceOf, llmPriceRows } from "../../llm/prices";
+import { musicPriceOf } from "../../music/prices";
+import { mergePrices, missingPriceError, prefixKeys, resolvePrices } from "../../prices";
+import { TerminalProviderError } from "../../types";
 import { videoPrices as bundledPrices, lookupPrice, videoCostUsd } from "../../video/prices";
 import { createTestCtx } from "./fixtures";
 
@@ -193,5 +197,91 @@ describe("prices of the catalog additions", () => {
   it("prices veo-3.1-fast 8 s with audio at the +audio rate", () => {
     const request = { model: "veo-3.1-fast", prompt: "p", seconds: 8, audio: true };
     expect(videoCostUsd(createTestCtx(), request)).toBe(1.2);
+  });
+});
+
+describe("merged table of every task", () => {
+  const merged = mergePrices({});
+
+  it("keeps the video keys unprefixed", () => {
+    expect(merged["minimax-h3@768P"]).toBe(0.06);
+    expect(Object.keys(merged).some(key => key.startsWith("video:"))).toBe(false);
+  });
+
+  it("carries the image rows under image:", () => {
+    expect(merged["image:nano-banana-pro@1K"]).toBe(0.15);
+    expect(merged["image:nano-banana-pro@2K"]).toBe(0.15);
+    expect(merged["image:nano-banana-pro@4K"]).toBe(0.3);
+    expect(merged["image:seedream-4.5-edit"]).toBe(0.04);
+    expect(merged["image:gpt-image-2.5"]).toBe(0.05);
+  });
+
+  it("carries the music rows under music:", () => {
+    expect(merged["music:elevenlabs-music-v2.5"]).toBe(0.8);
+    expect(merged["music:stable-audio-2.5"]).toBe(0.2);
+  });
+
+  it("carries two llm: rows per priced model, eight models", () => {
+    const llmKeys = Object.keys(merged).filter(key => key.startsWith("llm:"));
+    expect(llmKeys).toHaveLength(16);
+    expect(merged["llm:anthropic/claude-opus-5.5#in"]).toBe(4);
+    expect(merged["llm:anthropic/claude-opus-5.5#out"]).toBe(20);
+    expect(merged["llm:google/gemini-2.5-flash#out"]).toBe(2.5);
+  });
+
+  it("lets an override win over a prefixed row", () => {
+    const table = mergePrices({ "image:gpt-image-2.5": 0.07, "llm:x-ai/grok-4.7#in": 2 });
+    expect(table["image:gpt-image-2.5"]).toBe(0.07);
+    expect(table["llm:x-ai/grok-4.7#in"]).toBe(2);
+    expect(table["llm:x-ai/grok-4.7#out"]).toBe(4.8);
+  });
+
+  it("prefixKeys copies a table under a prefix", () => {
+    const table = { a: 1 };
+    expect(prefixKeys("music", table)).toEqual({ "music:a": 1 });
+    expect(table).toEqual({ a: 1 });
+  });
+
+  it("missingPriceError is a terminal 400 naming the task and the model", () => {
+    const error = missingPriceError("prompt-gen", "x/y");
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error.status).toBe(400);
+    expect(error.message).toBe(
+      '[ai] No price for fal prompt-gen model "x/y".\n  Add it to fal.priceOverrides.'
+    );
+  });
+});
+
+describe("task price lookups", () => {
+  const merged = mergePrices({});
+
+  it("imagePriceOf tries <alias>@<resolution>, then <alias>", () => {
+    expect(imagePriceOf(merged, "nano-banana-pro", "4K")).toBe(0.3);
+    expect(imagePriceOf(merged, "gpt-image-2.5", "2K")).toBe(0.05);
+    expect(imagePriceOf(merged, "seedream-4.5-edit", undefined)).toBe(0.04);
+    expect(() => imagePriceOf(merged, "nano-banana-pro", undefined)).toThrow(
+      '[ai] No price for fal image model "nano-banana-pro".'
+    );
+  });
+
+  it("musicPriceOf bills per started minute or per generation", () => {
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_000)).toBe(0.8);
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_001)).toBe(1.6);
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 3000)).toBe(0.8);
+    expect(musicPriceOf(merged, "stable-audio-2.5", "generation", 190_000)).toBe(0.2);
+    expect(() => musicPriceOf(merged, "x", "generation", 1000)).toThrow(
+      '[ai] No price for fal music model "x".'
+    );
+  });
+
+  it("llmPriceOf needs both rows", () => {
+    expect(llmPriceOf(merged, "openai/gpt-6-astra")).toEqual({ inputPerM: 10, outputPerM: 50 });
+    expect(() => llmPriceOf({ "llm:a/b#in": 1 }, "a/b")).toThrow(
+      '[ai] No price for fal prompt-gen model "a/b".'
+    );
+  });
+
+  it("llmPriceRows lists the eight bundled models", () => {
+    expect(Object.keys(llmPriceRows())).toHaveLength(16);
   });
 });
