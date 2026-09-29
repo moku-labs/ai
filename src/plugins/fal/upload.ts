@@ -23,7 +23,7 @@ import { RetryableProviderError, TerminalProviderError } from "./types";
  *
  * @example
  * ```ts
- * const options: UploadOptions = { apiKey, signal: controller.signal };
+ * const options: UploadOptions = { apiKey: "fal-key" };
  * ```
  */
 export type UploadOptions = {
@@ -157,7 +157,8 @@ async function initiate(
   const body = parseJson(response, "upload response");
   const uploadUrl = readString(body, "upload_url");
   const fileUrl = readString(body, "file_url");
-  if (uploadUrl === undefined || fileUrl === undefined) {
+  const isIncomplete = uploadUrl === undefined || fileUrl === undefined;
+  if (isIncomplete) {
     throw new Error(
       "[ai] fal returned an incomplete upload response.\n  Expected upload_url and file_url."
     );

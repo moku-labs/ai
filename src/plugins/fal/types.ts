@@ -172,8 +172,11 @@ export type RetryHint = {
  * ```
  */
 export class RetryableProviderError extends Error {
+  /** HTTP status code, when the failure came from an HTTP response (5xx or 429). */
   readonly status: number | undefined;
+  /** Explicit classification hint for a non-HTTP retryable failure. */
   readonly kind: "timeout" | "network" | undefined;
+  /** Provider-supplied Retry-After delay, ms. */
   readonly retryAfterMs: number | undefined;
 
   /**
@@ -206,6 +209,7 @@ export class RetryableProviderError extends Error {
  * ```
  */
 export class TerminalProviderError extends Error {
+  /** The HTTP status code that caused the failure. */
   readonly status: number;
 
   /**
@@ -236,6 +240,7 @@ export class TerminalProviderError extends Error {
  * ```
  */
 export class FlaggedProviderError extends Error {
+  /** Classification the runner reads to bucket the failure as `"content-policy"`. */
   readonly kind: "content-policy" = "content-policy";
 
   /**

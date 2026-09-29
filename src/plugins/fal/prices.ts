@@ -369,9 +369,9 @@ function refTokenCostUsd(
 /**
  * Cost of a video request: seconds x USD per second of its model variant,
  * plus the reference-token or reference-image surcharge for models billed
- * that way. Estimate and
- * actual cost both come from here; reference images are sized from their
- * file headers once resolved, and priced at the worst case before.
+ * that way. Estimate and actual cost both come from here; reference images
+ * are sized from their file headers once resolved, and priced at the worst
+ * case before.
  *
  * @param ctx - Plugin context (effective price table).
  * @param request - The video request.

@@ -29,6 +29,9 @@ export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" 
 /** Status values while fal is still working on a job. */
 const PENDING_STATUSES: ReadonlySet<string> = new Set(["IN_QUEUE", "IN_PROGRESS"]);
 
+/** Status of a job fal has finished. */
+const COMPLETED_STATUS = "COMPLETED";
+
 /** MIME type used when fal reports none. */
 const DEFAULT_VIDEO_MIME = "video/mp4";
 
@@ -62,7 +65,8 @@ const RETRY_STATUS = 503;
  */
 function resolveApiKey(ctx: FalContext): string {
   const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  if (apiKey === undefined || apiKey === "") {
+  const isMissingKey = apiKey === undefined || apiKey === "";
+  if (isMissingKey) {
     throw new Error(
       `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
     );
@@ -80,7 +84,7 @@ function resolveApiKey(ctx: FalContext): string {
  * @example
  * ```ts
  * requireImage(resolveFalModel("minimax-h3"), { model: "minimax-h3", prompt: "p" });
- * // throws: [ai] fal model "minimax-h3" needs an image.
+ * // throws: '[ai] fal model "minimax-h3" needs an image.\n  Set input.image to a $ref or $file.'
  * ```
  */
 function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile {
@@ -101,7 +105,7 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
  * @example
  * ```ts
  * requireEndFrameSupport(resolveFalModel("veo-3.1-fast"), { model: "veo-3.1-fast", prompt: "p", endImage: { path: "end.png", mimeType: "image/png", hash: "h" } });
- * // throws: [ai] fal model "veo-3.1-fast" takes no end frame.
+ * // throws: '[ai] fal model "veo-3.1-fast" takes no end frame.\n  Remove input.endImage, or use a model that takes one: seedance-2.5, minimax-h3, minimax-h3-max-i2v, kling-3-pro, seedance-2.0-mini, vidu-q3, gemini-omni-1.1-flash.'
  * ```
  */
 function requireEndFrameSupport(
@@ -196,7 +200,7 @@ function tooManyReferencesError(
  * @example
  * ```ts
  * splitReferences(resolveFalModel("kling-o3-ref"), [{ path: "t.mp4", mimeType: "video/mp4", hash: "h" }]);
- * // throws: [ai] fal model "kling-o3-ref" takes no video references, got 1.
+ * // throws: '[ai] fal model "kling-o3-ref" takes no video references, got 1.\n  Remove refs from input.refs, or use a model that takes more.'
  * ```
  */
 export function splitReferences(
@@ -256,11 +260,13 @@ async function submitJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<{ jobId: string }> {
+  // Refuse what the model cannot take and read the key, before any upload.
   const model = resolveFalModel(request.model);
   const image = requireImage(model, request);
   requireEndFrameSupport(model, request);
   const apiKey = resolveApiKey(ctx);
 
+  // Check the refs against the model's limits, then upload every input.
   const references = splitReferences(model, request.refs ?? []);
   const urls = await uploadInputs(ctx, image, references, { apiKey, signal }, request.endImage);
 
@@ -274,6 +280,7 @@ async function submitJob(
     timeoutMs: ctx.config.timeoutMs
   });
 
+  // Keep fal's queue answer as the opaque job id.
   const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
   ctx.log.info("fal:video:submitted", {
     model: model.alias,
@@ -382,6 +389,7 @@ async function pollJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<VideoJobPoll> {
+  // Read the job status once.
   const job = decodeJobId(jobId);
   const apiKey = resolveApiKey(ctx);
   const response = await falFetch({
@@ -392,14 +400,17 @@ async function pollJob(
     signal
   });
 
+  // Still working, or a status we do not know: stay pending.
   const body = parseJson(response, "status response");
   const status = readString(body, "status");
-  if (status !== undefined && PENDING_STATUSES.has(status)) return PENDING;
-  if (status !== "COMPLETED") {
+  const isPending = status !== undefined && PENDING_STATUSES.has(status);
+  if (isPending) return PENDING;
+  if (status !== COMPLETED_STATUS) {
     ctx.log.warn("fal:poll:unknown-status", { requestId: job.requestId, status });
     return PENDING;
   }
 
+  // Done: fail on fal's job error, else fetch the clip.
   if (hasJobError(body)) {
     const error = jobFailure(body);
     ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });

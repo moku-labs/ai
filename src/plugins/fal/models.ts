@@ -398,8 +398,9 @@ export type FalBody =
  * @example
  * ```ts
  * const row: FalModel = {
- *   endpoint: "minimax/h3/image-to-video", resolution: "768P", audio: true, endFrame: true,
- *   maxRefs: 0, maxAudioRefs: 0, maxVideoRefs: 0, maxVideoRefSec: 0, body: minimaxImageBody
+ *   endpoint: "minimax/h3/image-to-video", resolution: "768P", audio: true, endFrame: false,
+ *   maxRefs: 0, maxAudioRefs: 0, maxVideoRefs: 0, maxVideoRefSec: 0,
+ *   body: input => ({ prompt: input.prompt, image_url: input.imageUrl, duration: input.seconds, resolution: "768P" })
  * };
  * ```
  */
@@ -443,7 +444,7 @@ export type ResolvedFalModel = FalModel & { alias: FalAlias };
  *
  * @example
  * ```ts
- * const split: SplitReferences = { images: [face], audio: [voice], videos: [tail] };
+ * const split: SplitReferences = { images: [{ path: "face.png", mimeType: "image/png", hash: "h" }], audio: [], videos: [] };
  * ```
  */
 export type SplitReferences = {
@@ -1023,7 +1024,8 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @returns Alias list.
  * @example
  * ```ts
- * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-max-i2v", "minimax-h3-ref", "minimax-h3-max-extend", "kling-3-pro", ..., "gemini-omni-1.1-flash-ref"]
+ * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-max-i2v", "minimax-h3-ref", "minimax-h3-max-extend", "kling-3-pro", "kling-o3-ref",
+ * //   "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
  * ```
  */
 export function falAliases(): string[] {
