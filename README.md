@@ -35,8 +35,8 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`); provider plugins
-  (`elevenlabs`, `openai`, `codex`, `fal`) register handlers with a dumb registry. Neither imports the other — consumer apps
+  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `asset`); provider plugins
+  (`elevenlabs`, `openai`, `codex`, `fal`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
   provider, input, params, and the keys of everything it references). A done artifact
@@ -59,7 +59,8 @@ bun add @moku-labs/ai
 > `@moku-labs/common`, `better-sqlite3`, `openai`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY`, or put them in a `.env.local`
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `ARK_API_KEY` (plus
+> `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a `.env.local`
 > file in the working directory (the shell wins over the file), before executing (estimates and
 > validation never need a key).
 
@@ -165,8 +166,10 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
+| [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
 | [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
 | [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5 and 2.0 (Mini), MiniMax H3 and H3 Max, Kling 3, Wan 3.0, Veo 3.1 Fast, Vidu Q3; image and audio refs; per-second and reference-token prices. |
+| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0 and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video and asset providers, `asset://` portraits, per-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
@@ -295,6 +298,30 @@ writes `out/ep01/s01.key.png` and `out/ep01/s01.h3.mp4`. The fal models and thei
 per-second prices are listed in the [fal README](./src/plugins/fal/README.md); a
 model with no price fails the estimate instead of counting as $0.
 
+### Faces: register first, then `$ref`
+
+Seedance on Ark refuses a plain photo of a real face, but takes the same face as a
+registered asset. An `asset` item registers the portrait once, in your own Ark account;
+the video items `$ref` it and Ark gets `asset://<id>` instead of the photo:
+
+```yaml
+items:
+  - id: face-mira
+    task: asset
+    provider: ark
+    input: { image: { $file: faces/mira.png }, url: "https://cdn.example/faces/mira.png" }
+  - id: clip-01
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, prompt: "image 1 walks into the rain",
+             refs: [{ $ref: face-mira }], seconds: 10 }
+```
+
+The asset is an artifact like any other: registered once, reused by every later run.
+A refused portrait flags the asset item, and the clips that use it are never
+dispatched. There is no fallback to the raw photo. Setup (entitlement, authorization
+letter, group id) and the model table are in the [ark README](./src/plugins/ark/README.md).
+
 ## Configuration
 
 All configuration is per-plugin (the global `Config` is empty by ratified decision).
@@ -335,6 +362,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | `image` | `defaultProvider` | `string` | `"codex"` |
 | `video` | `defaultProvider` | `string` | `"fal"` |
 | | `pollIntervalMs` | `number` | `5000` |
+| `asset` | `defaultProvider` | `string` | `"ark"` |
+| | `pollIntervalMs` | `number` | `3000` |
 | `codex` | `bin` | `string` | `"codex"` |
 | | `model` | `string` | `"gpt-6-astra"` |
 | | `reasoningEffort` | `string` | `"low"` |
@@ -346,6 +375,14 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `upload` | `"storage" \| "data-uri"` | `"storage"` |
 | | `timeoutMs` | `number` | `60_000` |
 | | `priceOverrides` | `Record<string, number>` | `{}` |
+| `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
+| | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
+| | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |
+| | `groupId` | `string \| null` | `null` (create one per process, log its id) |
+| | `groupName` | `string` | `"moku-ai"` |
+| | `timeoutMs` | `number` | `60_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` (USD per 1M output tokens) |
+| | `cnyPerUsd` | `number` | `7.1` |
 | `compose` | `provider` | `string` | `"openai"` |
 | | `maxRepairAttempts` | `number` | `2` |
 | `cli` | `plain` | `boolean` | `false` (auto-true when !TTY or `NO_COLOR`) |
@@ -493,6 +530,8 @@ bun run test:coverage      # unit + integration with coverage
   [promptGen](./src/plugins/promptGen/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·
   [openai](./src/plugins/openai/README.md) ·
+  [asset](./src/plugins/asset/README.md) ·
+  [ark](./src/plugins/ark/README.md) ·
   [compose](./src/plugins/compose/README.md) ·
   [cli](./src/plugins/cli/README.md)
 - LLM-oriented docs: [`llms.txt`](./llms.txt) (concise) and [`llms-full.txt`](./llms-full.txt) (complete type-level reference).
