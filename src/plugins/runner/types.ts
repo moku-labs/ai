@@ -228,8 +228,6 @@ export type Subscriber = { queue: EventQueue; runId: string | undefined };
 export type ActiveRun = {
   runId: string;
   signal: AbortSignal | undefined;
-  /** Items admitted but not yet settled. */
-  inFlight: number;
   /** Aborted by `app.stop()`: the run drains to `paused`, like a caller abort. */
   stop: AbortController;
   /** Resolves once the run left `state.active` and its streams closed. */

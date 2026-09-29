@@ -232,24 +232,23 @@ function finalStatusOf(
 
 /**
  * Starts every queued item in plan order, each waiting for its `$ref`
- * targets' settle promises (D10), and resolves with how each one settled.
+ * targets' settle promises (D10). Returns the running items; the caller
+ * waits for them with {@link settleItems}.
  *
  * @param ctx - Runner domain context.
  * @param queued - The run's queued item rows.
  * @param planned - Planned items, dependencies first.
  * @param drain - The run's drain controller.
- * @param active - The active run's live bookkeeping.
  * @param report - Stream callback; the run stamps its runId.
- * @returns One settlement per started item.
+ * @returns One settle promise per started item, in plan order.
  */
 function startItems(
   ctx: RunnerContext,
   queued: ItemRow[],
   planned: PlannedItem[],
   drain: ReturnType<typeof createDrainController>,
-  active: ActiveRun,
   report: (event: UnstampedRunEvent) => void
-): Promise<ItemSettlement[]> {
+): Array<Promise<ItemSettlement>> {
   const queuedByKey = new Map(queued.map(item => [item.planningKey, item] as const));
   const settledByKey = new Map<string, Promise<ItemSettlement>>();
 
@@ -266,19 +265,84 @@ function startItems(
     const dependencies = Promise.all(
       [...plan.refKeys.values()].map(key => settledByKey.get(key) ?? Promise.resolve())
     );
-    settledByKey.set(
-      item.planningKey,
-      executeItem(ctx, item, plan, drain, active, report, dependencies)
-    );
+    settledByKey.set(item.planningKey, executeItem(ctx, item, plan, drain, report, dependencies));
   }
 
-  return Promise.all(settledByKey.values());
+  return [...settledByKey.values()];
+}
+
+/**
+ * Whether a settled promise rejected.
+ *
+ * @param result - One `Promise.allSettled` result.
+ * @returns True for a rejected result.
+ * @example
+ * ```ts
+ * isRejected({ status: "rejected", reason: new Error("bug") }); // true
+ * ```
+ */
+function isRejected<T>(result: PromiseSettledResult<T>): result is PromiseRejectedResult {
+  return result.status === "rejected";
+}
+
+/**
+ * Whether a settled promise fulfilled.
+ *
+ * @param result - One `Promise.allSettled` result.
+ * @returns True for a fulfilled result.
+ * @example
+ * ```ts
+ * isFulfilled({ status: "fulfilled", value: "settled" }); // true
+ * ```
+ */
+function isFulfilled<T>(result: PromiseSettledResult<T>): result is PromiseFulfilledResult<T> {
+  return result.status === "fulfilled";
+}
+
+/**
+ * Waits until every started item settled. The first item that throws (a
+ * pipeline bug, not a provider verdict) aborts `active.stop`, the abort
+ * `app.stop()` uses, so the run's other items drain instead of calling
+ * providers for a run that failed. The error is rethrown only once every
+ * item settled, so the run leaves `state.active` with no item still running.
+ *
+ * @param started - One settle promise per started item.
+ * @param active - The run's live bookkeeping; its stop controller drains the other items.
+ * @returns One settlement per item, in plan order.
+ * @throws {unknown} The error of the first item in plan order that threw, after every item settled.
+ */
+async function settleItems(
+  started: Array<Promise<ItemSettlement>>,
+  active: ActiveRun
+): Promise<ItemSettlement[]> {
+  /**
+   * Stops the run's other items, then passes the item's error on.
+   *
+   * @param error - What the item threw.
+   * @throws {unknown} Always: `error`, unchanged.
+   * @example
+   * ```ts
+   * started.map(item => item.catch(stopRunOnBug)); // the first bug drains every sibling
+   * ```
+   */
+  const stopRunOnBug = (error: unknown): never => {
+    active.stop.abort();
+    throw error;
+  };
+  const results = await Promise.allSettled(started.map(item => item.catch(stopRunOnBug)));
+
+  const failure = results.find(result => isRejected(result));
+  if (failure) throw failure.reason;
+
+  return results.filter(result => isFulfilled(result)).map(result => result.value);
 }
 
 /**
  * Drives every queued item of a run concurrently to a terminal outcome,
  * coalescing progress and delivering the final `"terminal"` stream record
- * and bus event. The drain fires on the caller's signal or on `app.stop()`.
+ * and bus event. The drain fires on the caller's signal or on `app.stop()`,
+ * and on an item that throws: the other items drain, and the error fails
+ * the run once they all settled (see {@link settleItems}).
  *
  * @param ctx - Runner domain context.
  * @param run - The run row (used for its id and `maxCostUsd`).
@@ -286,6 +350,7 @@ function startItems(
  * @param active - The active run's live bookkeeping.
  * @param planned - Planned items, keyed by planning key, for request/maxAttempts lookup.
  * @returns The run's final result.
+ * @throws {Error} The first item error, after every item of the run settled.
  */
 async function drivePipeline(
   ctx: RunnerContext,
@@ -320,7 +385,8 @@ async function drivePipeline(
     pushProgress(ctx, run.id);
   };
 
-  const settlements = await startItems(ctx, queued, planned, drain, active, report);
+  const started = startItems(ctx, queued, planned, drain, report);
+  const settlements = await settleItems(started, active);
   const blocked = settlements.filter(settlement => settlement === "blocked").length;
 
   pushProgress(ctx, run.id);
