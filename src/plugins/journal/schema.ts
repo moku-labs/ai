@@ -1,5 +1,5 @@
 /**
- * @file journal schema — DDL for runs/items/attempts (metadata only, no payload columns).
+ * @file journal schema — DDL for runs/items/attempts/provider_records (metadata only, no payload columns).
  */
 import type { SqliteDriver } from "./driver/types";
 
@@ -45,6 +45,15 @@ const SCHEMA_SQL = `
     cost_usd REAL,
     external_id TEXT,
     job_state TEXT
+  );
+  CREATE TABLE IF NOT EXISTS provider_records (
+    provider TEXT NOT NULL,
+    account TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, account, kind, key)
   );
 `;
 

@@ -1,7 +1,8 @@
 /**
  * @file journal core plugin — API factory: run/item/attempt state machine,
- * the atomic budget+dedup gate, aggregates, and the short-lived read-snapshot
- * helper. Metadata only — no free-form payload columns anywhere in this file.
+ * the atomic budget+dedup gate, aggregates, the short-lived read-snapshot
+ * helper, and the provider-record lookup (opaque provider ids by content hash).
+ * Metadata only — no free-form payload columns anywhere in this file.
  */
 import type { CorePluginContext } from "@moku-labs/core";
 import { openSqliteDriver } from "./driver/select";
@@ -20,6 +21,7 @@ import type {
   JobState,
   JournalApi,
   LiveJob,
+  ProviderRecord,
   RunRow,
   RunSnapshot,
   RunStatus,
@@ -73,6 +75,18 @@ type RunDatabaseRow = {
   max_cost_usd: number | null;
   finished_at: number | null;
 };
+
+/** Identity of one `provider_records` row: its primary key, without the value. */
+type ProviderRecordQuery = Omit<ProviderRecord, "value">;
+
+/** Upsert of one `provider_records` row: the same identity replaces value and created_at. */
+const UPSERT_PROVIDER_RECORD_SQL = `INSERT INTO provider_records (provider, account, kind, key, value, created_at)
+   VALUES (?, ?, ?, ?, ?, ?)
+   ON CONFLICT (provider, account, kind, key)
+   DO UPDATE SET value = excluded.value, created_at = excluded.created_at`;
+
+/** WHERE clause that matches one `provider_records` row by its primary key. */
+const PROVIDER_RECORD_WHERE = "provider = ? AND account = ? AND kind = ? AND key = ?";
 
 /**
  * Maps a raw `items` row to the public, camelCase `ItemRow` shape.
@@ -936,6 +950,79 @@ function checkpointNow(state: State): void {
 }
 
 /**
+ * Tells whether the journal connection is open: true between `onStart` and
+ * `onStop`. The only journal call that never throws.
+ *
+ * @param state - Journal plugin state.
+ * @returns True when the driver is open.
+ */
+function isOpen(state: State): boolean {
+  return state.driver !== null;
+}
+
+/**
+ * Reads the value of one provider record.
+ *
+ * @param state - Journal plugin state.
+ * @param query - The record's identity: provider, account, kind and key.
+ * @returns The stored value, or undefined when no record matches.
+ */
+function findProviderRecord(state: State, query: ProviderRecordQuery): string | undefined {
+  const driver = requireDriver(state);
+  const row = driver.get<{ value: string }>(
+    `SELECT value FROM provider_records WHERE ${PROVIDER_RECORD_WHERE}`,
+    [query.provider, query.account, query.kind, query.key]
+  );
+  return row?.value;
+}
+
+/**
+ * Upserts provider records in one `BEGIN IMMEDIATE` transaction: one fsync for
+ * the whole batch, and a failing row rolls back every row of it. An empty
+ * batch opens no transaction.
+ *
+ * @param state - Journal plugin state.
+ * @param records - Records to insert or replace.
+ */
+function putProviderRecords(state: State, records: readonly ProviderRecord[]): void {
+  const driver = requireDriver(state);
+  if (records.length === 0) return;
+
+  driver.transactionImmediate<void>(() => {
+    const now = Date.now();
+    for (const record of records) {
+      driver.run(UPSERT_PROVIDER_RECORD_SQL, [
+        record.provider,
+        record.account,
+        record.kind,
+        record.key,
+        record.value,
+        now
+      ]);
+    }
+  });
+}
+
+/**
+ * Deletes one provider record inside a `BEGIN IMMEDIATE` transaction. A
+ * missing record is a no-op.
+ *
+ * @param state - Journal plugin state.
+ * @param query - The record's identity: provider, account, kind and key.
+ */
+function deleteProviderRecord(state: State, query: ProviderRecordQuery): void {
+  const driver = requireDriver(state);
+  driver.transactionImmediate<void>(() => {
+    driver.run(`DELETE FROM provider_records WHERE ${PROVIDER_RECORD_WHERE}`, [
+      query.provider,
+      query.account,
+      query.kind,
+      query.key
+    ]);
+  });
+}
+
+/**
  * Creates the journal API surface (ctx.journal.*).
  *
  * @param ctx - Core plugin context (config + state).
@@ -1258,6 +1345,14 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     totals: boundTotals,
     listItems: boundListItems,
     readSnapshot: boundReadSnapshot,
-    checkpoint: boundCheckpoint
+    checkpoint: boundCheckpoint,
+    isOpen: () => isOpen(state),
+    findProviderRecord: (query: ProviderRecordQuery) => findProviderRecord(state, query),
+    putProviderRecords: (records: ProviderRecord[]) => {
+      putProviderRecords(state, records);
+    },
+    deleteProviderRecord: (query: ProviderRecordQuery) => {
+      deleteProviderRecord(state, query);
+    }
   };
 }

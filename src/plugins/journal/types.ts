@@ -176,6 +176,33 @@ export type RunSnapshot = { run: RunRow; totals: RunTotals; recentItems: ItemRow
 export type ItemFilter = { status?: ItemStatus; limit?: number; afterUpdatedAt?: number };
 
 /**
+ * One `provider_records` row: a durable lookup of an opaque provider-side id,
+ * keyed by (provider, account, kind, key). Metadata only: `value` is an id,
+ * never a body, prompt or API key. The journal defines this shape itself and
+ * imports nothing from provider plugins.
+ *
+ * @example
+ * ```ts
+ * const record: ProviderRecord = {
+ *   provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset",
+ *   key: "9b74c9897bac770ffc029102a200c5de", value: "asset://asset-1"
+ * };
+ * ```
+ */
+export type ProviderRecord = {
+  /** Plugin name of the provider that owns the record, e.g. `"apimodels"`. */
+  provider: string;
+  /** Non-reversible account fingerprint chosen by the provider; never a key. */
+  account: string;
+  /** Provider-defined record kind, e.g. `"asset"` or `"asset-group"`. */
+  kind: string;
+  /** Lookup key inside the kind, e.g. the sha256 of the input bytes. */
+  key: string;
+  /** Opaque provider id, e.g. `"asset://asset-1"`. */
+  value: string;
+};
+
+/**
  * The journal's public API surface, injected as `ctx.journal` on every
  * regular plugin's context.
  */
@@ -504,4 +531,66 @@ export type JournalApi = {
    * ```
    */
   checkpoint(): void;
+  /**
+   * True between onStart and onStop. The only method that does not throw when the journal is closed.
+   *
+   * @returns Whether the journal connection is open.
+   * @example
+   * ```ts
+   * // a provider called from app.video.generate() before app.start(): skip durable writes
+   * if (!ctx.journal.isOpen()) ctx.log.warn("apimodels:journal:closed");
+   * ```
+   */
+  isOpen(): boolean;
+  /**
+   * Reads one provider record's value, or undefined.
+   *
+   * @param q - The record's identity.
+   * @param q.provider - Plugin name of the provider.
+   * @param q.account - Account fingerprint.
+   * @param q.kind - Provider-defined record kind.
+   * @param q.key - Lookup key inside the kind.
+   * @returns The stored value, or undefined when no record matches.
+   * @example
+   * ```ts
+   * // apimodels, before registering a face: reuse the asset id an earlier run stored
+   * ctx.journal.findProviderRecord({ provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset", key: file.hash }); // "asset://…" | undefined
+   * ```
+   */
+  findProviderRecord(q: {
+    provider: string;
+    account: string;
+    kind: string;
+    key: string;
+  }): string | undefined;
+  /**
+   * Upserts records in ONE BEGIN IMMEDIATE transaction (INSERT … ON CONFLICT DO UPDATE value, created_at).
+   * Empty array is a no-op. A failing row rolls back the whole batch.
+   *
+   * @param records - Records to insert or replace.
+   * @example
+   * ```ts
+   * // after registering two faces in one submit: one fsync for both
+   * ctx.journal.putProviderRecords([
+   *   { provider: "apimodels", account, kind: "asset", key: anna.hash, value: "asset://asset-1" },
+   *   { provider: "apimodels", account, kind: "asset", key: ben.hash, value: "asset://asset-2" }
+   * ]);
+   * ```
+   */
+  putProviderRecords(records: ProviderRecord[]): void;
+  /**
+   * Deletes one record; missing is a no-op.
+   *
+   * @param q - The record's identity.
+   * @param q.provider - Plugin name of the provider.
+   * @param q.account - Account fingerprint.
+   * @param q.kind - Provider-defined record kind.
+   * @param q.key - Lookup key inside the kind.
+   * @example
+   * ```ts
+   * // upstream says the asset is gone: forget it so the next attempt registers again
+   * ctx.journal.deleteProviderRecord({ provider: "apimodels", account, kind: "asset", key: anna.hash });
+   * ```
+   */
+  deleteProviderRecord(q: { provider: string; account: string; kind: string; key: string }): void;
 };

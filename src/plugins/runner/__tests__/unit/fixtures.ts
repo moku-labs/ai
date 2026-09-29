@@ -295,6 +295,10 @@ export function createFakeRunnerContext(
     findLiveJob: (): undefined => undefined,
     latestRun: (): RunRow | undefined => undefined,
     getItem: (): ItemRow | undefined => undefined,
+    isOpen: vi.fn(),
+    findProviderRecord: vi.fn(),
+    putProviderRecords: vi.fn(),
+    deleteProviderRecord: vi.fn(),
     ...overrides.journal
   };
 
