@@ -120,10 +120,6 @@ export type VideoHandler = {
    *
    * @param request - The request to estimate.
    * @returns The estimated cost in US dollars.
-   * @example
-   * ```ts
-   * handler.estimate({ model: "minimax-h3", prompt: "push-in" }); // => { usd: 0.25 }
-   * ```
    */
   estimate(request: VideoRequest): { usd: number };
   /**
@@ -133,10 +129,6 @@ export type VideoHandler = {
    * @param opts - Execution options.
    * @param opts.signal - Abort signal for cancelling the in-flight request.
    * @returns The generation result.
-   * @example
-   * ```ts
-   * await handler.execute?.({ model: "minimax-h3", prompt: "push-in" }, {});
-   * ```
    */
   execute?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoResult>;
   /**
@@ -146,10 +138,6 @@ export type VideoHandler = {
    * @param opts - Submission options.
    * @param opts.signal - Abort signal for cancelling the submission call.
    * @returns The provider job id.
-   * @example
-   * ```ts
-   * const { jobId } = await handler.submit!({ model: "minimax-h3", prompt: "push-in" }, {});
-   * ```
    */
   submit?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
   /**
@@ -160,10 +148,6 @@ export type VideoHandler = {
    * @param opts - Poll options.
    * @param opts.signal - Abort signal for cancelling the poll call.
    * @returns The job state: pending, done with a result, or failed.
-   * @example
-   * ```ts
-   * const status = await handler.poll!("job-1", request, {});
-   * ```
    */
   poll?(
     jobId: string,

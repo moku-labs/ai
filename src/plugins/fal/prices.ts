@@ -210,7 +210,7 @@ function isResolvedFile(value: EstimateInput): value is VideoFile {
  * @returns Tokens; the worst case when the file is unresolved or unreadable.
  * @example
  * ```ts
- * imageTokens({ path: "square.png", mimeType: "image/png", hash: "h" }); // => 1024
+ * imageTokens({ path: "missing.png", mimeType: "image/png", hash: "h" }); // => 2560
  * ```
  */
 function imageTokens(file: EstimateInput): number {
@@ -284,7 +284,7 @@ function isReferenceImage(file: EstimateInput): boolean {
  * @returns Number of reference images.
  * @example
  * ```ts
- * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: square, refs: [voice] }); // => 1
+ * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: { $ref: "face" }, refs: [{ path: "v.mp3", mimeType: "audio/mpeg", hash: "h" }] }); // => 1
  * ```
  */
 function referenceImageCount(request: EstimateRequest): number {
@@ -327,7 +327,7 @@ function refImageCostUsd(
  * @returns Total reference tokens.
  * @example
  * ```ts
- * referenceTokens({ model: "minimax-h3-max-ref", prompt: "p", image: square }); // => 1024
+ * referenceTokens({ model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "face" } }); // => 2560
  * ```
  */
 function referenceTokens(request: EstimateRequest): number {

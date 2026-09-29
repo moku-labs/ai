@@ -370,7 +370,7 @@ export type GeminiOmniReferenceBody = {
  *
  * @example
  * ```ts
- * const body: FalBody = minimaxImageBody(input);
+ * const body: FalBody = { prompt: "push-in", image_url: "https://fal.media/files/a.png", duration: 5, resolution: "768P" };
  * ```
  */
 export type FalBody =

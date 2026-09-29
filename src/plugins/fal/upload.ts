@@ -75,7 +75,7 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
  * @returns File name, e.g. `"abcd1234abcd1234.png"`.
  * @example
  * ```ts
- * fileNameOf({ path: "/a/b.png", mimeType: "image/png", hash: "abcd..." }); // => "abcd1234abcd1234.png"
+ * fileNameOf({ path: "/a/b.png", mimeType: "image/png", hash: "abcd1234abcd1234ffff" }); // => "abcd1234abcd1234.png"
  * ```
  */
 export function fileNameOf(file: VideoFile): string {
