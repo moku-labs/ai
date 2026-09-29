@@ -146,7 +146,7 @@ describe("core journal ledger integration", () => {
   // ---------------------------------------------------------------------------
   // S03 — atomic gate: duplicate admission + planning-key dedup semantics
   //
-  // Verified in src/plugins/journal/api.ts: the "duplicate" reason fires when
+  // Verified in src/plugins/journal/gate.ts: the "duplicate" reason fires when
   // an item is gated while no longer `queued` (a duplicate ADMISSION attempt),
   // and insertItems dedups by (run_id, planning_key) — i.e. planning-key dedup
   // is RUN-SCOPED (idempotent resume path), not cross-run: a second run with

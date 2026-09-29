@@ -179,7 +179,7 @@ src/
   bin.ts                  # `moku` bin — Layer-3 consumer: createApp → start → cli.dispatch → stop → exit
   plugins/
     index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Elevenlabs, Openai, Compose, Cli)
-    journal/              # index.ts, types.ts, api.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
+    journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
     registry/             # index.ts only (Nano — no types.ts, by design)

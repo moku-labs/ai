@@ -112,7 +112,7 @@ describe("cross-plugin retry + limits integration", () => {
     // Attempts ledger: the handler ran twice; the item row's attemptCount is 1
     // because the journal increments attempt_count ONLY on the retryable
     // re-queue (markFailed terminal:false) — commitDone does not increment
-    // (verified in src/plugins/journal/api.ts markFailed/commitDone). The plan
+    // (verified in journal/items.ts markFailed, journal/attempts.ts commitDone). The plan
     // assumed 2; the durable field counts completed re-queues, not attempts.
     expect(handler.attempts()).toBe(2);
     const [item] = app.probe.journal.listItems(result.runId);
@@ -176,7 +176,7 @@ describe("cross-plugin retry + limits integration", () => {
     // Terminal failure = exactly one provider attempt. The durable row's
     // attemptCount stays 0 — the journal increments attempt_count only on
     // retryable re-queues (markFailed terminal:true leaves it untouched,
-    // verified in src/plugins/journal/api.ts). The plan assumed 1; the
+    // verified in src/plugins/journal/items.ts). The plan assumed 1; the
     // single-attempt fact is asserted via the handler's own counter.
     expect(broken.attempts()).toBe(1);
     const [failedRow] = app.probe.journal.listItems(result.runId, { status: "failed" });

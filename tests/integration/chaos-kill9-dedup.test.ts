@@ -8,7 +8,7 @@
  * the same build file twice never double-stores bytes, while resume of the
  * SAME run never re-executes finished work (S43/S44).
  *
- * Dedup semantics pinned against src (journal/api.ts + runner/api.ts):
+ * Dedup semantics pinned against src (journal/items.ts + journal/gate.ts + runner/api.ts):
  * planning-key dedup is RUN-scoped — `insertItems` is idempotent within one
  * run, so RESUME of the same run skips done items; a NEW run with the same
  * planning keys creates fresh queued rows that re-execute and re-bill.
@@ -406,7 +406,7 @@ describe("chaos suite — kill-9 durability, budget bounds, multi-build dedup", 
     expect(await countStoreObjects(storeDir)).toBe(3);
 
     // Facet (a) — RUN-scoped dedup: resuming the SAME run re-inserts the same
-    // planning keys idempotently (journal/api.ts insertOneItem) and finds no
+    // planning keys idempotently (journal/items.ts insertOneItem) and finds no
     // queued work: zero re-executions, zero re-billing.
     const resumedA = await app.runner.resume({ runId: runA.runId });
     expect(resumedA).toMatchObject({ runId: runA.runId, status: "done" });
@@ -415,7 +415,7 @@ describe("chaos suite — kill-9 durability, budget bounds, multi-build dedup", 
     expect(executed).toHaveLength(3);
 
     // The duplicate gate is observable directly: re-admitting a done item is
-    // refused with reason "duplicate" (journal/api.ts gateToDispatching).
+    // refused with reason "duplicate" (journal/gate.ts gateToDispatching).
     const [doneItem] = app.probe.journal.listItems(runA.runId, { status: "done" });
     if (!doneItem) throw new Error("expected a done item from run A");
     expect(app.probe.journal.gateToDispatching(doneItem.id)).toEqual({
