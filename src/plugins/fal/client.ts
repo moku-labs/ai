@@ -11,22 +11,12 @@ import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } f
 
 /**
  * HTTP method used against fal.
- *
- * @example
- * ```ts
- * const method: FalMethod = "POST";
- * ```
  */
 export type FalMethod = "GET" | "POST" | "PUT";
 
 /**
  * One fal HTTP request. `apiKey` adds `Authorization: Key <key>`; `json`
  * sends a JSON body; `bytes` + `contentType` send a raw body.
- *
- * @example
- * ```ts
- * const request: FalRequest = { url: "https://queue.fal.run/minimax/h3/image-to-video", method: "POST", apiKey, json: body, timeoutMs: 60_000 };
- * ```
  */
 export type FalRequest = {
   /** Absolute URL, used verbatim. */
@@ -49,11 +39,6 @@ export type FalRequest = {
 
 /**
  * A successful (2xx) fal response with its body fully read.
- *
- * @example
- * ```ts
- * const response: FalResponse = { status: 200, headers: new Headers(), body: new Uint8Array() };
- * ```
  */
 export type FalResponse = {
   /** HTTP status. */
@@ -67,11 +52,6 @@ export type FalResponse = {
 /**
  * What fal said about a failure, narrowed from its JSON body: the error
  * types it named and its human-readable text.
- *
- * @example
- * ```ts
- * const info: FalErrorInfo = { types: ["content_policy_violation"], text: "flagged" };
- * ```
  */
 export type FalErrorInfo = {
   /** `error_type` and `detail[].type` values, in that order. */
@@ -155,7 +135,7 @@ function shorten(text: string): string {
  * @returns The messages found, joined with "; ", or undefined when none.
  * @example
  * ```ts
- * detailMessages([{ msg: "bad", type: "value_error" }], types); // => "bad"
+ * detailMessages([{ msg: "bad", type: "value_error" }], []); // => "bad"
  * ```
  */
 function detailMessages(detail: unknown[], types: string[]): string | undefined {
@@ -286,7 +266,7 @@ function tryParseJson(body: Uint8Array): unknown {
  * @returns The error to throw.
  * @example
  * ```ts
- * throw classifyHttpFailure(response);
+ * classifyHttpFailure({ status: 404, headers: new Headers(), body: new Uint8Array() }).message; // => "[ai] fal rejected the request (HTTP 404)."
  * ```
  */
 function classifyHttpFailure(response: FalResponse): Error {
@@ -324,7 +304,7 @@ function classifyHttpFailure(response: FalResponse): Error {
  * @returns The value to throw.
  * @example
  * ```ts
- * throw transportFailure(error, request.signal, timeout);
+ * transportFailure(new Error("x"), undefined, AbortSignal.abort()); // => RetryableProviderError "[ai] fal request timed out.", kind "timeout"
  * ```
  */
 function transportFailure(
@@ -346,7 +326,7 @@ function transportFailure(
  * @returns Header record.
  * @example
  * ```ts
- * headersOf({ url, method: "GET", apiKey: "k", timeoutMs: 1 }); // => { Authorization: "Key k" }
+ * headersOf({ url: "https://queue.fal.run", method: "GET", apiKey: "k", timeoutMs: 1 }); // => { Authorization: "Key k" }
  * ```
  */
 function headersOf(request: FalRequest): Record<string, string> {
@@ -364,7 +344,7 @@ function headersOf(request: FalRequest): Record<string, string> {
  * @returns JSON text, raw bytes, or undefined.
  * @example
  * ```ts
- * bodyOf({ url, method: "POST", json: { a: 1 }, timeoutMs: 1 }); // => '{"a":1}'
+ * bodyOf({ url: "https://queue.fal.run", method: "POST", json: { a: 1 }, timeoutMs: 1 }); // => '{"a":1}'
  * ```
  */
 function bodyOf(request: FalRequest): string | Uint8Array<ArrayBuffer> | undefined {
@@ -383,16 +363,14 @@ function bodyOf(request: FalRequest): string | Uint8Array<ArrayBuffer> | undefin
  * @throws {RetryableProviderError} On 5xx, 429, a timeout, or a network failure.
  * @throws {TerminalProviderError} On any other non-2xx status.
  * @throws {FlaggedProviderError} When fal names a content-policy rejection.
- * @example
- * ```ts
- * const response = await falFetch({ url: statusUrl, method: "GET", apiKey, timeoutMs: 60_000 });
- * ```
  */
 export async function falFetch(request: FalRequest): Promise<FalResponse> {
+  // Our timeout, joined with the caller's abort when there is one.
   const timeout = AbortSignal.timeout(request.timeoutMs);
   const signal =
     request.signal === undefined ? timeout : AbortSignal.any([request.signal, timeout]);
 
+  // Fetch and read the whole body; a transport failure is classified here.
   let response: FalResponse;
   try {
     const raw = await fetch(request.url, {
@@ -407,6 +385,7 @@ export async function falFetch(request: FalRequest): Promise<FalResponse> {
     throw transportFailure(error, request.signal, timeout);
   }
 
+  // Only a 2xx passes; every other status is classified.
   const isSuccess = response.status >= 200 && response.status < 300;
   if (!isSuccess) throw classifyHttpFailure(response);
   return response;
@@ -421,7 +400,7 @@ export async function falFetch(request: FalRequest): Promise<FalResponse> {
  * @throws {Error} A plain (terminal) error when the body is not JSON.
  * @example
  * ```ts
- * const body = parseJson(response, "status response");
+ * parseJson({ status: 200, headers: new Headers(), body: new TextEncoder().encode('{"a":1}') }, "status response"); // => { a: 1 }
  * ```
  */
 export function parseJson(response: FalResponse, what: string): unknown {

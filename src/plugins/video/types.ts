@@ -37,7 +37,8 @@ export type Config = {
  *
  * @example
  * ```ts
- * const clip = await app.video.generate({ model: "minimax-h3", prompt: "slow push-in" });
+ * const image = { path: "shots/s01.png", mimeType: "image/png", hash: "c".repeat(64) };
+ * const clip = await app.video.generate({ model: "minimax-h3", prompt: "slow push-in", image });
  * ```
  */
 export type VideoApi = {
@@ -54,7 +55,10 @@ export type VideoApi = {
    * @returns The generated video result.
    * @example
    * ```ts
-   * await app.video.generate({ model: "minimax-h3", prompt: "push-in" }, { provider: "fal" });
+   * // Animate one keyframe outside the runner: nothing is journaled.
+   * const image = { path: "shots/s01.png", mimeType: "image/png", hash: "c".repeat(64) };
+   * await app.video.generate({ model: "minimax-h3", prompt: "push-in", image }, { provider: "fal" });
+   * // => { video: Uint8Array, mimeType: "video/mp4", costUsd: 0.3, meta: { seconds: 5, ... } }
    * ```
    */
   generate(
@@ -71,7 +75,7 @@ export type VideoApi = {
    * @returns The estimated cost in USD.
    * @example
    * ```ts
-   * app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => { usd: 0.25 }
+   * app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => { usd: 0.3 }
    * ```
    */
   estimate(request: VideoRequest, opts?: { provider?: string }): { usd: number };
@@ -94,11 +98,6 @@ export type { RegistryApi } from "../registry";
  * Domain context for the video API factory. `video` is a stateless facade
  * over `registry` (no `createState`), so `state` is the empty-object shape;
  * `require` is narrowed to the one dependency this plugin calls.
- *
- * @example
- * ```ts
- * export const createVideoApi = (ctx: VideoContext): VideoApi => ({ ... });
- * ```
  */
 export type VideoContext = PluginCtx<Config, Record<string, never>> & {
   /** Resolves a dependency plugin's API by instance reference. */
