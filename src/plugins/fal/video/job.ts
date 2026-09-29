@@ -7,11 +7,6 @@ import { readField, readString } from "../client";
 
 /**
  * A submitted fal queue job: everything `poll` needs, journaled as JSON.
- *
- * @example
- * ```ts
- * const job: FalJob = { endpoint: "minimax/h3/image-to-video", requestId: "r1", statusUrl, responseUrl };
- * ```
  */
 export type FalJob = {
   /** fal endpoint id the job was submitted to. */
@@ -26,11 +21,6 @@ export type FalJob = {
 
 /**
  * Where the finished clip is, narrowed from fal's result body.
- *
- * @example
- * ```ts
- * const video: FalVideoFile = { url: "https://v3.fal.media/clip.mp4", contentType: "video/mp4" };
- * ```
  */
 export type FalVideoFile = {
   /** CDN URL of the clip. */
@@ -49,7 +39,7 @@ const MAX_QUOTED_ID = 80;
  * @returns JSON text.
  * @example
  * ```ts
- * encodeJobId(job); // => '{"endpoint":"...","requestId":"r1","statusUrl":"...","responseUrl":"..."}'
+ * encodeJobId({ endpoint: "e", requestId: "r1", statusUrl: "s", responseUrl: "r" }); // => '{"endpoint":"e","requestId":"r1","statusUrl":"s","responseUrl":"r"}'
  * ```
  */
 export function encodeJobId(job: FalJob): string {
@@ -68,7 +58,7 @@ export function encodeJobId(job: FalJob): string {
  * @returns The job, or undefined when a field is missing.
  * @example
  * ```ts
- * jobFrom(JSON.parse(jobId));
+ * jobFrom({ endpoint: "e", requestId: "r1" }); // => undefined
  * ```
  */
 function jobFrom(value: unknown): FalJob | undefined {
@@ -92,7 +82,7 @@ function jobFrom(value: unknown): FalJob | undefined {
  * @throws {Error} A plain (terminal) error when the id is not a fal job id.
  * @example
  * ```ts
- * const job = decodeJobId(jobId);
+ * decodeJobId("nope"); // throws: [ai] fal job id "nope" is not valid.
  * ```
  */
 export function decodeJobId(jobId: string): FalJob {
@@ -120,7 +110,7 @@ export function decodeJobId(jobId: string): FalJob {
  * @throws {Error} A plain (terminal) error when a queue field is missing.
  * @example
  * ```ts
- * const job = parseSubmitResponse(body, "minimax/h3/image-to-video");
+ * parseSubmitResponse({ request_id: "r1", status_url: "s", response_url: "r" }, "e"); // => { endpoint: "e", requestId: "r1", statusUrl: "s", responseUrl: "r" }
  * ```
  */
 export function parseSubmitResponse(body: unknown, endpoint: string): FalJob {

@@ -36,10 +36,6 @@ export const falPlugin = createPlugin("fal", {
    * Registers the fal video handler with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.video.providers(); // ["fal", ...]
-   * ```
    */
   onInit: ctx => {
     ctx.require(registryPlugin).register("video", "fal", createVideoHandler(ctx));
