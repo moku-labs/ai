@@ -43,7 +43,7 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallo
 ## Layout
 
 ```
-index.ts types.ts state.ts api.ts log.ts prices.ts   prices.ts = merge + prefix only
+index.ts types.ts errors.ts state.ts api.ts log.ts prices.ts   prices.ts = merge + prefix only
 client/  http.ts queue.ts upload.ts                  shared: fetch + errors, queue + wait, generic upload
 video/   handler.ts job.ts models.ts prices.ts image-size.ts upload.ts
 image/   handler.ts models.ts prices.ts

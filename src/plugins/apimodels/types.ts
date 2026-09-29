@@ -125,7 +125,7 @@ export type FlaggedProviderError = FlaggedProviderErrorClass;
  *
  * @example
  * ```ts
- * const error: ApimodelsProviderError = new TerminalProviderError("[ai] apimodels rejected the request (HTTP 400).\n  Check the request fields.", 400);
+ * const error: ApimodelsProviderError = new ApimodelsErrors.TerminalProviderError("[ai] apimodels rejected the request (HTTP 400).\n  Check the request fields.", 400);
  * ```
  */
 export type ApimodelsProviderError =

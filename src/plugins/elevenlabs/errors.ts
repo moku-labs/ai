@@ -1,6 +1,6 @@
 /**
  * @file elevenlabs provider plugin — runtime provider error classes (values;
- * `types.ts` stays types-only and re-exports them with `export type`). This is
+ * `types.ts` stays types-only and declares a type alias per class). This is
  * the runner-compatible provider error taxonomy that `client.ts` throws;
  * `runner/retry.ts`'s `classifyError` buckets each class by its structural
  * fields alone. Imports nothing from `./types`, so there is no module cycle.

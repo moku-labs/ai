@@ -261,7 +261,7 @@ export type FlaggedProviderError = FlaggedProviderErrorClass;
  *
  * @example
  * ```ts
- * const error: FalProviderError = new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400);
+ * const error: FalProviderError = new FalErrors.TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400);
  * ```
  */
 export type FalProviderError =

@@ -176,7 +176,7 @@ export type FlaggedProviderError = FlaggedProviderErrorClass;
  *
  * @example
  * ```ts
- * const error: ArkProviderError = new TerminalProviderError("[ai] ark task cgt-1 is cancelled.", 410);
+ * const error: ArkProviderError = new ArkErrors.TerminalProviderError("[ai] ark task cgt-1 is cancelled.", 410);
  * ```
  */
 export type ArkProviderError =
