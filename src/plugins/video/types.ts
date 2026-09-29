@@ -37,7 +37,8 @@ export type Config = {
  *
  * @example
  * ```ts
- * const clip = await app.video.generate({ model: "minimax-h3", prompt: "slow push-in" });
+ * const image = { path: "shots/s01.png", mimeType: "image/png", hash: "c".repeat(64) };
+ * const clip = await app.video.generate({ model: "minimax-h3", prompt: "slow push-in", image });
  * ```
  */
 export type VideoApi = {
@@ -54,7 +55,10 @@ export type VideoApi = {
    * @returns The generated video result.
    * @example
    * ```ts
-   * await app.video.generate({ model: "minimax-h3", prompt: "push-in" }, { provider: "fal" });
+   * // Animate one keyframe outside the runner: nothing is journaled.
+   * const image = { path: "shots/s01.png", mimeType: "image/png", hash: "c".repeat(64) };
+   * await app.video.generate({ model: "minimax-h3", prompt: "push-in", image }, { provider: "fal" });
+   * // => { video: Uint8Array, mimeType: "video/mp4", costUsd: 0.3, meta: { seconds: 5, ... } }
    * ```
    */
   generate(

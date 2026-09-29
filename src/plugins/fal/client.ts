@@ -326,7 +326,7 @@ function transportFailure(
  * @returns Header record.
  * @example
  * ```ts
- * headersOf({ url, method: "GET", apiKey: "k", timeoutMs: 1 }); // => { Authorization: "Key k" }
+ * headersOf({ url: "https://queue.fal.run", method: "GET", apiKey: "k", timeoutMs: 1 }); // => { Authorization: "Key k" }
  * ```
  */
 function headersOf(request: FalRequest): Record<string, string> {
@@ -344,7 +344,7 @@ function headersOf(request: FalRequest): Record<string, string> {
  * @returns JSON text, raw bytes, or undefined.
  * @example
  * ```ts
- * bodyOf({ url, method: "POST", json: { a: 1 }, timeoutMs: 1 }); // => '{"a":1}'
+ * bodyOf({ url: "https://queue.fal.run", method: "POST", json: { a: 1 }, timeoutMs: 1 }); // => '{"a":1}'
  * ```
  */
 function bodyOf(request: FalRequest): string | Uint8Array<ArrayBuffer> | undefined {
