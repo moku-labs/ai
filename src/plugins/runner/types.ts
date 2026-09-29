@@ -242,7 +242,7 @@ export type ActiveRun = {
  * How the item holding an artifact claim ended, copied by the items waiting
  * on it: `done` (reuse its artifact), `flagged` / `failed` (record the same
  * verdict, no submit), or `open` (it stopped without a final provider
- * verdict: a drain, a budget stop, a refused lane, or retryable attempts
+ * verdict: a drain, a budget stop, a refused gate, or retryable attempts
  * exhausted; its job, if any, stays adoptable).
  */
 export type ClaimVerdict =

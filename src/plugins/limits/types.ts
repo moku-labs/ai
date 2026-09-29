@@ -48,8 +48,8 @@ export type LaneState = {
   /** Timestamp (ms epoch) the breaker stays open until; 0 means closed. */
   openUntil: number;
   /**
-   * Claim id of the single half-open trial probe in flight; `0` when none. Cleared by
-   * reportOutcome, or by `release()` of the acquisition that still owns this id.
+   * Claim id of the single half-open trial probe in flight; `0` when none. Held until
+   * the owner's `release()` (or its aborted wait) frees it; `reportOutcome` never clears it.
    */
   probe: number;
   /** Counter the next probe claim id is drawn from. */
@@ -85,10 +85,10 @@ export type LimitsApi = {
    * function that MUST be called exactly once when the request settles.
    * Rejects immediately (reason `"breaker-open"`) when the breaker is open.
    * An aborted wait leaves no leaked token or concurrency slot. In the
-   * half-open phase the first caller holds the single probe slot until it
-   * calls `reportOutcome` or `release()`, so a caller that never reports
-   * does not lock the lane. A late `release()` frees only its own claim,
-   * never a newer probe's.
+   * half-open phase the first caller holds the single probe slot until the
+   * owner's `release()`: a report from any caller, the probe included, does
+   * not free it, and a caller that never reports does not lock the lane.
+   * A `release()` frees only its own claim, never a newer probe's.
    *
    * @example
    * ```ts

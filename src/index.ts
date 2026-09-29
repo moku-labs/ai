@@ -6,7 +6,7 @@
  * Plugins, in registration (dependency) order, and their options. Every
  * option has a default; override any of them per app with
  * `createApp({ pluginConfigs: { <plugin>: { ... } } })`. Core plugins
- * (`journal`, `store`, `limits`) are set at `createCore` and injected as
+ * (`journal`, `store`, `limits`) are registered in `createCoreConfig` and injected as
  * `ctx.journal` / `ctx.store` / `ctx.limits`.
  *
  * | Plugin | Option | Default |
@@ -16,7 +16,7 @@
  * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{}` |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
- * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` | `3` · `1000` · `10_000` · `5000` · `1_800_000` |
+ * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
  * | voiceover | `defaultProvider` · `defaultFormat` | `"elevenlabs"` · `"mp3"` |
  * | translate | `defaultProvider` | `"openai"` |
  * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |

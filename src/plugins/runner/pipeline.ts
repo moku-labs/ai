@@ -143,54 +143,69 @@ function laneOf(item: ItemRow): string {
 }
 
 /**
- * Waits for lane capacity, translating an abort or breaker-open rejection
- * into `undefined` instead of a thrown error.
+ * What {@link acquireLane} got: the lane slot, `"breaker-open"` when the
+ * lane's breaker refused it, or `undefined` when the drain aborted the wait.
+ */
+type LaneAdmission = { release: () => void } | "breaker-open" | undefined;
+
+/**
+ * Waits for lane capacity. An aborted wait comes back as `undefined` and an
+ * open breaker as `"breaker-open"`, so the caller can wait out the cooldown
+ * and ask again. Any other rejection is a bug and is rethrown.
  *
  * @param ctx - Runner domain context.
  * @param lane - Lane key to acquire capacity on.
  * @param signal - Drain signal; aborts the wait cleanly.
- * @returns The release handle, or undefined when the wait was aborted or the breaker is open.
- * @example
- * ```ts
- * const admission = await acquireLane(ctx, lane, drain.signal);
- * ```
+ * @returns The release handle, `"breaker-open"`, or undefined when the wait was aborted.
+ * @throws {Error} Any rejection that is neither an abort nor an open breaker.
  */
 async function acquireLane(
   ctx: RunnerContext,
   lane: string,
   signal: AbortSignal
-): Promise<{ release: () => void } | undefined> {
+): Promise<LaneAdmission> {
   try {
     return await ctx.limits.acquire(lane, { signal });
-  } catch {
-    return undefined;
+  } catch (error) {
+    // A pause ends the wait quietly; an open breaker is the caller's to wait out.
+    if (signal.aborted) return undefined;
+    const isBreakerOpen =
+      typeof error === "object" &&
+      error !== null &&
+      "reason" in error &&
+      error.reason === "breaker-open";
+    if (isBreakerOpen) return "breaker-open";
+    throw error;
   }
 }
 
 /**
- * Resolves after `ms` milliseconds, or immediately when `signal` is already
- * aborted or fires during the wait.
+ * Resolves after `ms` milliseconds, or at once when `signal` is already
+ * aborted or fires during the wait. The abort listener comes off the signal
+ * when the timer fires, so poll ticks, backoffs and breaker cooldowns never
+ * pile listeners onto the run-long drain signal.
  *
  * @param ms - Delay in milliseconds.
  * @param signal - Drain signal; aborts the wait cleanly.
  * @returns Resolves once the delay elapses or the signal aborts.
  * @example
  * ```ts
- * await delay(1_000, drain.signal);
+ * await delay(1_000, AbortSignal.abort()); // resolves at once: the signal is already aborted
  * ```
  */
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted || ms <= 0) return Promise.resolve();
+
   return new Promise(resolve => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true }
-    );
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -708,12 +723,11 @@ async function runHandler(
 }
 
 /**
- * Result of {@link applyOutcome}: the item stopped (with the verdict its
- * artifact claim settles with), or it retries after `waitMs`.
+ * Result of {@link applyOutcome} and {@link dispatchAdmitted}: the item
+ * stopped, with the verdict its artifact claim settles with, or it retries
+ * as attempt `attempt` after `waitMs`.
  */
-type OutcomeApplied =
-  | { terminal: true; verdict: ClaimVerdict }
-  | { terminal: false; attempt: number; waitMs: number };
+type AttemptStep = { verdict: ClaimVerdict } | { attempt: number; waitMs: number };
 
 /**
  * Applies one attempt's outcome: reports the matching stream event for a
@@ -725,7 +739,7 @@ type OutcomeApplied =
  * `flagged`, `failed` with its class for a non-retryable failure, or `open`
  * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
  * timeout error can pass on a later try, so a follower tries for itself.
- * Extracted from {@link executeItem} to keep its loop body flat.
+ * Extracted to keep the {@link runAttempts} loop flat.
  *
  * @param ctx - Runner domain context.
  * @param item - The item the attempt belongs to.
@@ -733,12 +747,12 @@ type OutcomeApplied =
  * @param attempt - The attempt count going into this outcome (before increment).
  * @param outcome - The attempt's outcome.
  * @param report - Callback invoked with the resulting stream event.
- * @returns Whether the item reached a terminal state, or the next attempt count and backoff delay.
+ * @returns The verdict when the item stops, or the next attempt count and backoff delay.
  * @example
  * ```ts
  * // Attempt 1 of 3 hit a retryable 503: the item is re-queued with a backoff.
  * const retryable = { kind: "retryable", errorClass: "http-5xx", retryAfterMs: undefined } as const;
- * applyOutcome(ctx, item, 3, 0, retryable, report); // { terminal: false, attempt: 1, waitMs: 500..1000 }
+ * applyOutcome(ctx, item, 3, 0, retryable, report); // { attempt: 1, waitMs: 500..1000 }
  * ```
  */
 function applyOutcome(
@@ -748,9 +762,9 @@ function applyOutcome(
   attempt: number,
   outcome: AttemptOutcomeResult,
   report: (event: UnstampedRunEvent) => void
-): OutcomeApplied {
+): AttemptStep {
   // Terminal outcomes: report the matching record and stop the item.
-  if (outcome.kind === "aborted") return { terminal: true, verdict: OPEN_VERDICT };
+  if (outcome.kind === "aborted") return { verdict: OPEN_VERDICT };
   if (outcome.kind === "done") {
     report({
       type: "item:done",
@@ -758,15 +772,15 @@ function applyOutcome(
       costUsd: outcome.costUsd,
       contentHash: outcome.contentHash
     });
-    return { terminal: true, verdict: { kind: "done" } };
+    return { verdict: { kind: "done" } };
   }
   if (outcome.kind === "flagged") {
     report({ type: "item:flagged", itemId: item.id });
-    return { terminal: true, verdict: { kind: "flagged" } };
+    return { verdict: { kind: "flagged" } };
   }
   if (outcome.kind === "terminal-failed") {
     report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { terminal: true, verdict: { kind: "failed", errorClass: outcome.errorClass } };
+    return { verdict: { kind: "failed", errorClass: outcome.errorClass } };
   }
 
   // Retryable: out of attempts is a terminal failure, else re-queue with a backoff.
@@ -774,7 +788,7 @@ function applyOutcome(
   if (nextAttempt >= maxAttempts) {
     ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: true });
     report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { terminal: true, verdict: OPEN_VERDICT };
+    return { verdict: OPEN_VERDICT };
   }
 
   ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: false });
@@ -785,7 +799,7 @@ function applyOutcome(
     attempt: nextAttempt
   });
   const waitMs = backoffMs(nextAttempt, ctx.config.retryBaseMs, outcome.retryAfterMs);
-  return { terminal: false, attempt: nextAttempt, waitMs };
+  return { attempt: nextAttempt, waitMs };
 }
 
 /**
@@ -796,10 +810,6 @@ function applyOutcome(
  * @param item - The queued item.
  * @param plan - The item's plan (target id → planning key).
  * @returns Resolved files by target id, or undefined when a target is not done.
- * @example
- * ```ts
- * const refFiles = resolveReferenceFiles(ctx, item, plan);
- * ```
  */
 function resolveReferenceFiles(
   ctx: RunnerContext,
@@ -825,19 +835,64 @@ function resolveReferenceFiles(
 }
 
 /**
- * The per-item attempt loop: admit(limits.acquire) → gate(journal,
- * atomic) → attempt → apply the outcome, looping on retryable failures until
- * the item stops. The lane slot is released before the retry backoff, and
- * every retry re-acquires it. Returns the verdict its artifact claim settles with: `open`
- * when it stopped without a final provider verdict (lane refused, gate
- * refused, drained, aborted mid-attempt, retryable attempts exhausted).
+ * One admitted attempt: gate(journal, atomic) → attempt → apply the outcome.
+ * The lane slot is released in a `finally` before this returns, so the retry
+ * backoff that may follow never holds it. A gate refusal stops the item
+ * `open`; a `"budget"` refusal also triggers the run's budget stop.
  *
  * @param ctx - Runner domain context.
  * @param item - The queued item.
  * @param plan - The item's plan (maxAttempts).
  * @param request - The resolved request.
  * @param drain - The run's drain controller.
- * @param active - The run's live bookkeeping (in-flight counter).
+ * @param admission - The lane slot `limits.acquire` granted.
+ * @param admission.release - Frees the lane slot; called once, in the `finally`.
+ * @param attempt - The attempt count going into this attempt.
+ * @param report - Stream callback.
+ * @returns The verdict when the item stops, or the next attempt count and backoff delay.
+ */
+async function dispatchAdmitted(
+  ctx: RunnerContext,
+  item: ItemRow,
+  plan: PlannedItem,
+  request: HandlerRequest,
+  drain: DrainController,
+  admission: { release: () => void },
+  attempt: number,
+  report: (event: UnstampedRunEvent) => void
+): Promise<AttemptStep> {
+  try {
+    // Gate: budget, dedup and the move to dispatching, in one transaction.
+    const gate = ctx.journal.gateToDispatching(item.id);
+    if (!gate.ok) {
+      if (gate.reason === "budget") drain.triggerBudgetStop();
+      return { verdict: OPEN_VERDICT };
+    }
+    report({ type: "item:dispatching", itemId: item.id });
+
+    // Attempt, then turn its outcome into a stop or a retry.
+    const outcome = await attemptOnce(ctx, item, request, drain.signal);
+    return applyOutcome(ctx, item, plan.maxAttempts, attempt, outcome, report);
+  } finally {
+    admission.release();
+  }
+}
+
+/**
+ * The per-item attempt loop: admit(limits.acquire) → gate(journal, atomic) →
+ * attempt → apply the outcome, looping on retryable failures until the item
+ * stops. An open lane breaker is waited out: the item logs `runner:lane-open`,
+ * sleeps the lane's `breakerCooldownMs` and asks again, so it is never left
+ * queued without a record. The lane slot is released before the retry
+ * backoff, and every retry re-acquires it. Returns the verdict its artifact
+ * claim settles with: `open` when it stopped without a final provider verdict
+ * (gate refused, drained, aborted mid-attempt, retryable attempts exhausted).
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The queued item.
+ * @param plan - The item's plan (maxAttempts).
+ * @param request - The resolved request.
+ * @param drain - The run's drain controller.
  * @param report - Stream callback.
  * @returns The item's claim verdict.
  */
@@ -847,42 +902,38 @@ async function runAttempts(
   plan: PlannedItem,
   request: HandlerRequest,
   drain: DrainController,
-  active: ActiveRun,
   report: (event: UnstampedRunEvent) => void
 ): Promise<ClaimVerdict> {
+  const lane = laneOf(item);
   let attempt = item.attemptCount;
+
   while (!drain.signal.aborted) {
-    active.inFlight += 1;
-    try {
-      const lane = laneOf(item);
-      const admission = await acquireLane(ctx, lane, drain.signal);
-      if (!admission) return OPEN_VERDICT;
-
-      let waitMs: number;
-      try {
-        const gate = ctx.journal.gateToDispatching(item.id);
-        if (!gate.ok) {
-          if (gate.reason === "budget") drain.triggerBudgetStop();
-          return OPEN_VERDICT;
-        }
-        report({ type: "item:dispatching", itemId: item.id });
-
-        const outcome = await attemptOnce(ctx, item, request, drain.signal);
-        const applied = applyOutcome(ctx, item, plan.maxAttempts, attempt, outcome, report);
-        if (applied.terminal) return applied.verdict;
-
-        attempt = applied.attempt;
-        waitMs = applied.waitMs;
-      } finally {
-        admission.release();
-      }
-
-      // The backoff sleeps with the lane slot released, so a long Retry-After
-      // never keeps one of the lane's concurrency slots busy.
-      await delay(waitMs, drain.signal);
-    } finally {
-      active.inFlight -= 1;
+    // Admit: an open breaker is waited out, then the lane is asked again.
+    const admission = await acquireLane(ctx, lane, drain.signal);
+    if (admission === "breaker-open") {
+      ctx.log.warn("runner:lane-open", { itemId: item.id, lane });
+      await delay(ctx.limits.laneConfig(lane).breakerCooldownMs, drain.signal);
+      continue;
     }
+    if (!admission) return OPEN_VERDICT;
+
+    // Gate, attempt and outcome; the lane slot is free again once this returns.
+    const step = await dispatchAdmitted(
+      ctx,
+      item,
+      plan,
+      request,
+      drain,
+      admission,
+      attempt,
+      report
+    );
+    if ("verdict" in step) return step.verdict;
+    attempt = step.attempt;
+
+    // The backoff sleeps with the lane slot released, so a long Retry-After
+    // never keeps one of the lane's concurrency slots busy.
+    await delay(step.waitMs, drain.signal);
   }
   return OPEN_VERDICT;
 }
@@ -894,13 +945,14 @@ export type ItemSettlement = "settled" | "blocked";
  * Drives one item through the durable pipeline to a terminal outcome:
  * reuse(journal, D2) → wait for `$ref` targets (D10) → resolve references →
  * claim the artifact key (cross-run dedupe: wait for, and copy, the verdict
- * of an item of another run that holds it) → admit(limits.acquire) →
- * gate(journal.gateToDispatching, atomic) → execute or submit+poll →
- * persist → report, looping on retryable failures (each retry re-enters
- * admit+gate, since `markFailed` returns the item to `queued`) until it
- * reaches `done`/`failed`/`flagged`, exhausts `maxAttempts`, or the drain
- * signal aborts (leaving it `queued`, or `dispatching` when a job was in
- * flight, for a future resume). The claim is settled with the item's
+ * of an item of another run that holds it) → admit(limits.acquire, an open
+ * breaker waited out) → gate(journal.gateToDispatching, atomic) → execute or
+ * submit+poll → persist → report, looping on retryable failures (each retry
+ * re-enters admit+gate, since `markFailed` returns the item to `queued`)
+ * until it reaches `done`/`failed`/`flagged`, exhausts `maxAttempts`, or the
+ * drain signal aborts (leaving it `queued`, or `dispatching` when a job was
+ * in flight, for a future resume). The item counts in `active.inFlight`
+ * while it is in the attempt loop. The claim is settled with the item's
  * verdict in a `finally`, so a thrown bug settles it `open`. Reports every
  * transition via `report`, including the initial `item:queued` marker.
  *
@@ -912,10 +964,7 @@ export type ItemSettlement = "settled" | "blocked";
  * @param report - Callback invoked with every per-item stream record; the run stamps its runId.
  * @param dependencies - Settles once every `$ref` target of this item has settled.
  * @returns `"blocked"` when a `$ref` target did not finish `done`, else `"settled"`.
- * @example
- * ```ts
- * await executeItem(ctx, item, plan, drain, active, report, Promise.resolve()); // "settled"
- * ```
+ * @throws {Error} A bug in the pipeline (no handler registered, an unexpected lane rejection).
  */
 export async function executeItem(
   ctx: RunnerContext,
@@ -940,11 +989,14 @@ export async function executeItem(
   const settleClaim = await claimArtifact(ctx, item, drain, report);
   if (!settleClaim) return "settled";
 
+  // Attempts until the item stops; the claim settles with its verdict even when a bug throws.
   let verdict = OPEN_VERDICT;
+  active.inFlight += 1;
   try {
-    verdict = await runAttempts(ctx, item, plan, request, drain, active, report);
+    verdict = await runAttempts(ctx, item, plan, request, drain, report);
     return "settled";
   } finally {
+    active.inFlight -= 1;
     settleClaim(verdict);
   }
 }

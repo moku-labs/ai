@@ -1,5 +1,5 @@
 /**
- * Standard tier — Claude provider: text generation over the local Claude
+ * Complex tier — Claude provider: text generation over the local Claude
  * Code CLI (`claude -p --output-format json`), plan-billed at an explicit $0.
  * Registers `prompt-gen/claude` in onInit. No events, no state.
  *
@@ -20,7 +20,7 @@ const defaultConfig: Config = {
 };
 
 /**
- * claude — Standard tier text provider over the local Claude Code CLI.
+ * claude — Complex tier text provider over the local Claude Code CLI.
  * Depends on registry (onInit registration); the promptGen and image
  * contracts are contract-file imports, not plugin edges.
  *

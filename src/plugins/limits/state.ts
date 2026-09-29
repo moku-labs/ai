@@ -15,7 +15,7 @@ import type { LaneConfig, LaneState, State } from "./types";
  * @returns Initial limits state.
  * @example
  * ```ts
- * const state = createLimitsState();
+ * createLimitsState(); // → { lanes: Map(0) {} }
  * ```
  */
 export function createLimitsState(): State {
@@ -29,10 +29,6 @@ export function createLimitsState(): State {
  * @param config - Effective settings for this lane.
  * @param now - Current time (ms epoch), used as the initial refill timestamp.
  * @returns A newly initialized lane state.
- * @example
- * ```ts
- * createLaneState(config, Date.now());
- * ```
  */
 function createLaneState(config: LaneConfig, now: number): LaneState {
   return {
@@ -56,10 +52,6 @@ function createLaneState(config: LaneConfig, now: number): LaneState {
  * @param config - Effective settings for this lane.
  * @param now - Current time (ms epoch).
  * @returns The lane's mutable state.
- * @example
- * ```ts
- * const lane = getOrCreateLane(state, "voiceover/elevenlabs/default", cfg, Date.now());
- * ```
  */
 export function getOrCreateLane(
   state: State,
@@ -82,10 +74,6 @@ export function getOrCreateLane(
  * @param state - Root limits state.
  * @param lane - Lane key.
  * @returns The tracked lane state, or `undefined` if never touched.
- * @example
- * ```ts
- * peekLane(state, "voiceover/elevenlabs/default");
- * ```
  */
 export function peekLane(state: State, lane: string): LaneState | undefined {
   return state.lanes.get(lane);
@@ -99,10 +87,6 @@ export function peekLane(state: State, lane: string): LaneState | undefined {
  * @param lane - Lane state to refill (mutated in place).
  * @param config - Effective settings for this lane.
  * @param now - Current time (ms epoch).
- * @example
- * ```ts
- * refillTokens(lane, config, Date.now());
- * ```
  */
 export function refillTokens(lane: LaneState, config: LaneConfig, now: number): void {
   if (now <= lane.lastRefillAt) return;
@@ -123,10 +107,6 @@ export function refillTokens(lane: LaneState, config: LaneConfig, now: number): 
  * @param now - Current time (ms epoch).
  * @returns Milliseconds the caller must wait before the reserved token is
  *   actually available; `0` if a token was immediately free.
- * @example
- * ```ts
- * reserveToken(lane, config, Date.now());
- * ```
  */
 export function reserveToken(lane: LaneState, config: LaneConfig, now: number): number {
   refillTokens(lane, config, now);
@@ -142,10 +122,6 @@ export function reserveToken(lane: LaneState, config: LaneConfig, now: number): 
  * clean-abort path where the reservation was never consumed.
  *
  * @param lane - Lane state to refund (mutated in place).
- * @example
- * ```ts
- * refundToken(lane);
- * ```
  */
 export function refundToken(lane: LaneState): void {
   lane.tokens += 1;
@@ -159,10 +135,6 @@ export function refundToken(lane: LaneState): void {
  * @param lane - Lane state to inspect.
  * @param now - Current time (ms epoch).
  * @returns The breaker's current phase.
- * @example
- * ```ts
- * breakerPhase(lane, Date.now());
- * ```
  */
 export function breakerPhase(lane: LaneState, now: number): "closed" | "open" | "half-open" {
   if (lane.openUntil === 0) return "closed";
@@ -173,16 +145,14 @@ export function breakerPhase(lane: LaneState, now: number): "closed" | "open" | 
  * Records a request outcome against the breaker: `"ok"` resets the failure
  * count and closes the breaker; `"retryable-error"` advances the failure
  * count and (re)opens the breaker once `breakerThreshold` is reached.
- * Either outcome settles a pending half-open probe (clears `probe`).
+ * Neither outcome touches the half-open probe claim: only the owning
+ * acquisition's `release()` frees it, so a report from an acquisition
+ * admitted before the trip cannot let a second probe in.
  *
  * @param lane - Lane state to update (mutated in place).
  * @param config - Effective settings for this lane.
  * @param outcome - The observed request outcome.
  * @param now - Current time (ms epoch).
- * @example
- * ```ts
- * recordOutcome(lane, config, "ok", Date.now());
- * ```
  */
 export function recordOutcome(
   lane: LaneState,
@@ -190,8 +160,6 @@ export function recordOutcome(
   outcome: "ok" | "retryable-error",
   now: number
 ): void {
-  lane.probe = 0;
-
   if (outcome === "ok") {
     lane.consecutiveFailures = 0;
     lane.openUntil = 0;
