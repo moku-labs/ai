@@ -13,7 +13,10 @@ describe("createArkApi().info()", () => {
       configured: { video: true, assets: true },
       models: modelsOf("intl")
     });
-    expect(api.info().models).toContain("dreamina-seedance-2-0-260128");
+    expect(api.info().models).toEqual([
+      "dreamina-seedance-2-0-260128",
+      "dreamina-seedance-2-5-260628"
+    ]);
   });
 
   it("reports nothing configured, without throwing, when no key is set", () => {
@@ -46,6 +49,6 @@ describe("createArkApi().info()", () => {
     expect(info.region).toBe("cn");
     expect(info.configured.video).toBe(true);
     expect(info.models).toEqual(modelsOf("cn"));
-    expect(info.models).toContain("doubao-seedance-2-0-260128");
+    expect(info.models).toEqual(["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"]);
   });
 });

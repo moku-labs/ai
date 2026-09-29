@@ -11,6 +11,8 @@ import {
 
 const INTL_20 = "dreamina-seedance-2-0-260128";
 const CN_20 = "doubao-seedance-2-0-260128";
+const INTL_25 = "dreamina-seedance-2-5-260628";
+const CN_25 = "doubao-seedance-2-5-260628";
 
 describe("catalog", () => {
   it("has the Seedance 2.0 row of each region", () => {
@@ -53,6 +55,64 @@ describe("catalog", () => {
   });
 });
 
+describe("Seedance 2.5 rows", () => {
+  it("resolves each 2.5 id in its own region with the documented data", () => {
+    expect(resolveArkModel(INTL_25, "intl")).toEqual({
+      id: INTL_25,
+      region: "intl",
+      minSeconds: 4,
+      maxSeconds: 30,
+      resolutions: ["480p", "720p"],
+      maxRefImages: 30,
+      maxRefVideos: 10,
+      maxRefAudios: 10,
+      supportsSeed: false,
+      supportsAudio: true,
+      price: { base: 10.7, withVideoInput: 6.4 }
+    });
+    expect(resolveArkModel(CN_25, "cn")).toEqual({
+      id: CN_25,
+      region: "cn",
+      minSeconds: 4,
+      maxSeconds: 30,
+      resolutions: ["480p", "720p"],
+      maxRefImages: 30,
+      maxRefVideos: 10,
+      maxRefAudios: 10,
+      supportsSeed: false,
+      supportsAudio: true,
+      price: { base: 70, withVideoInput: 42 }
+    });
+  });
+
+  it("rejects each 2.5 id in the other region", () => {
+    expect(() => resolveArkModel(INTL_25, "cn")).toThrow(
+      `[ai] Model ${INTL_25} is a intl model.\n  Set ark region to "intl" or pick a cn model.`
+    );
+    expect(() => resolveArkModel(CN_25, "intl")).toThrow(
+      `[ai] Model ${CN_25} is a cn model.\n  Set ark region to "cn" or pick a intl model.`
+    );
+  });
+
+  it("takes a 25 s clip on 2.5 but not on 2.0", () => {
+    for (const [id25, id20, region] of [
+      [INTL_25, INTL_20, "intl"],
+      [CN_25, CN_20, "cn"]
+    ] as const) {
+      expect(checkSeconds(resolveArkModel(id25, region), 25)).toBe(25);
+      expect(() => checkSeconds(resolveArkModel(id20, region), 25)).toThrow(
+        `[ai] Model ${id20} takes 4 to 15 seconds.\n  Got 25; set input.seconds in that range.`
+      );
+    }
+  });
+
+  it("rejects 1080p on 2.5", () => {
+    expect(() => checkResolution(resolveArkModel(INTL_25, "intl"), "1080p")).toThrow(
+      `[ai] Model ${INTL_25} does not take resolution "1080p".\n  Use one of: 480p, 720p.`
+    );
+  });
+});
+
 describe("modelsOf", () => {
   it("lists only the region's rows, in catalog order", () => {
     const intl = modelsOf("intl");
@@ -62,6 +122,8 @@ describe("modelsOf", () => {
     expect(intl).not.toContain(CN_20);
     expect(cn).toContain(CN_20);
     expect(cn).not.toContain(INTL_20);
+    expect(intl).toEqual([INTL_20, INTL_25]);
+    expect(cn).toEqual([CN_20, CN_25]);
     expect([...intl, ...cn].toSorted()).toEqual(arkModels.map(model => model.id).toSorted());
   });
 });

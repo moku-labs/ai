@@ -86,6 +86,34 @@ export const arkModels: readonly ArkVideoModel[] = [
     supportsSeed: false,
     supportsAudio: true,
     price: { base: 46, withVideoInput: 28 }
+  },
+  // source: https://raw.githubusercontent.com/byteplus-sa/ark-mcp/main/docs/models.md + https://cellcog.ai/blog/seedance-2-5-pricing/ (verify in console)
+  {
+    id: "dreamina-seedance-2-5-260628",
+    region: "intl",
+    minSeconds: 4,
+    maxSeconds: 30,
+    resolutions: ["480p", "720p"],
+    maxRefImages: 30,
+    maxRefVideos: 10,
+    maxRefAudios: 10,
+    supportsSeed: false,
+    supportsAudio: true,
+    price: { base: 10.7, withVideoInput: 6.4 }
+  },
+  // source: https://www.aitop100.cn/infomation/details/34378.html + reseller docs (id unverified; verify in console)
+  {
+    id: "doubao-seedance-2-5-260628",
+    region: "cn",
+    minSeconds: 4,
+    maxSeconds: 30,
+    resolutions: ["480p", "720p"],
+    maxRefImages: 30,
+    maxRefVideos: 10,
+    maxRefAudios: 10,
+    supportsSeed: false,
+    supportsAudio: true,
+    price: { base: 70, withVideoInput: 42 }
   }
 ];
 
@@ -96,7 +124,7 @@ export const arkModels: readonly ArkVideoModel[] = [
  * @returns Model ids.
  * @example
  * ```ts
- * modelsOf("cn"); // => ["doubao-seedance-2-0-260128"]
+ * modelsOf("cn"); // => ["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"]
  * ```
  */
 export function modelsOf(region: ArkRegion): string[] {

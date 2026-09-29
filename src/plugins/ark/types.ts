@@ -79,7 +79,7 @@ export type State = {
  * ```ts
  * const info: ArkInfo = {
  *   provider: "ark", region: "intl", configured: { video: true, assets: false },
- *   models: ["dreamina-seedance-2-0-260128"]
+ *   models: ["dreamina-seedance-2-0-260128", "dreamina-seedance-2-5-260628"]
  * };
  * ```
  */
