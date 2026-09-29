@@ -82,7 +82,7 @@ const LIMIT_PATTERN = /usage limit|rate limit|\b429\b|too many requests/i;
  * @returns The argv, without the executable.
  * @example
  * ```ts
- * buildCodexArguments({ model: "gpt-6-astra", reasoningEffort: "low", dir, refPaths: [], prompt });
+ * buildCodexArguments({ model: "gpt-6-astra", reasoningEffort: "low", dir: "/d", refPaths: [], prompt: "a cat" }).slice(-2); // => ["--", "a cat"]
  * ```
  */
 export function buildCodexArguments(options: CodexArgumentsOptions): string[] {
@@ -115,8 +115,7 @@ export function buildCodexArguments(options: CodexArgumentsOptions): string[] {
  * @returns The argv, without the executable.
  * @example
  * ```ts
- * buildCodexPromptArguments({ model: undefined, reasoningEffort: "low", dir: "/d", imagePaths: [], hasSchema: false, prompt: "Say ok" });
- * // => ["exec", "-c", 'model_reasoning_effort="low"', "--sandbox", "read-only", ..., "--", "Say ok"]
+ * buildCodexPromptArguments({ model: undefined, reasoningEffort: "low", dir: "/d", imagePaths: [], hasSchema: false, prompt: "Say ok" }).slice(0, 5); // => ["exec", "-c", 'model_reasoning_effort="low"', "--sandbox", "read-only"]
  * ```
  */
 export function buildCodexPromptArguments(options: CodexPromptArgumentsOptions): string[] {
@@ -154,7 +153,7 @@ export function buildCodexPromptArguments(options: CodexPromptArgumentsOptions):
  * @returns True when the executable file exists.
  * @example
  * ```ts
- * isBinResolvable("codex", ctx.env.get("PATH"));
+ * isBinResolvable("/no/such/codex", undefined); // => false
  * ```
  */
 export function isBinResolvable(bin: string, pathValue: string | undefined): boolean {
@@ -258,7 +257,7 @@ function spawnError(
  * @throws {unknown} The caller's `signal.reason`, unchanged, on abort.
  * @example
  * ```ts
- * await runCodex({ bin: "codex", args, cwd: dir, timeoutMs: 600_000, signal });
+ * await runCodex({ bin: "true", args: [], cwd: "/tmp", timeoutMs: 1000 }); // => undefined
  * ```
  */
 export function runCodex(options: RunCodexOptions): Promise<void> {
@@ -266,6 +265,7 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason);
 
   return new Promise<void>((resolve, reject) => {
+    // Spawn and track why we kill
     const child = spawn(options.bin, options.args, {
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"]
@@ -279,10 +279,6 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
      * SIGKILL after the grace period in case the process ignores it.
      *
      * @param reason - Why the process is killed.
-     * @example
-     * ```ts
-     * kill("timeout");
-     * ```
      */
     const kill = (reason: "timeout" | "abort"): void => {
       killedFor = reason;
@@ -293,23 +289,16 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
      * Kills the process when the caller aborts.
      *
      * @returns Nothing.
-     * @example
-     * ```ts
-     * signal.addEventListener("abort", onAbort);
-     * ```
      */
     const onAbort = (): void => kill("abort");
     const timer = setTimeout(() => kill("timeout"), options.timeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
 
+    // Settle exactly once, releasing timer and listener
     /**
      * Settles the promise once and releases the timer and abort listener.
      *
      * @param error - Rejection reason; undefined resolves.
-     * @example
-     * ```ts
-     * settle(new TerminalProviderError("[ai] Codex exited with code 1.\n  Retry."));
-     * ```
      */
     const settle = (error?: unknown): void => {
       if (settled) return;
@@ -320,6 +309,7 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
       else reject(error);
     };
 
+    // Wire stream and exit events
     child.stdout.resume();
     child.stderr.on("data", (chunk: Buffer) => {
       stderr = (stderr + chunk.toString("utf8")).slice(-STDERR_TAIL_CHARS);

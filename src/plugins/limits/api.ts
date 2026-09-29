@@ -252,7 +252,8 @@ export function createLimitsApi(ctx: {
     const laneState = getOrCreateLane(ctx.state, lane, config, Date.now());
 
     // Breaker gate: open rejects everyone; half-open admits exactly ONE
-    // trial probe (claimed synchronously here, settled by reportOutcome).
+    // trial probe (claimed synchronously here, settled by reportOutcome or
+    // handed back by release).
     const phase = breakerPhase(laneState, Date.now());
     if (phase === "open" || (phase === "half-open" && laneState.probing)) {
       throw breakerOpenError(lane);
@@ -261,8 +262,9 @@ export function createLimitsApi(ctx: {
     if (isProbe) laneState.probing = true;
 
     /**
-     * Releases the half-open probe claim on an abandoned (aborted) wait so
-     * the lane is not locked out of probing forever.
+     * Releases the half-open probe claim so the lane is not locked out of
+     * probing forever. Runs on an abandoned (aborted) wait and on
+     * `release()`, which covers callers that never call `reportOutcome`.
      *
      * @example
      * ```ts
@@ -296,7 +298,8 @@ export function createLimitsApi(ctx: {
     let released = false;
     return {
       /**
-       * Releases the held concurrency slot; a no-op after the first call.
+       * Releases the held concurrency slot and any half-open probe claim;
+       * a no-op after the first call.
        *
        * @example
        * ```ts
@@ -306,6 +309,7 @@ export function createLimitsApi(ctx: {
       release: () => {
         if (released) return;
         released = true;
+        releaseProbeClaim();
         laneState.inFlight -= 1;
         const next = laneState.waiters.shift();
         next?.();

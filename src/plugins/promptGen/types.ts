@@ -107,8 +107,8 @@ export type PromptGenApi = {
    * @returns Provider names in registration order (first = task default).
    * @example
    * ```ts
-   * // List the names `opts.provider` accepts, for a provider picker.
-   * app.promptGen.providers(); // ["openai"]
+   * // Fill a provider picker. A default app registers openai, codex and claude, in plugin order.
+   * app.promptGen.providers(); // ["openai", "codex", "claude"]
    * ```
    */
   providers(): string[];

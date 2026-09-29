@@ -47,7 +47,7 @@ export type LaneState = {
   consecutiveFailures: number;
   /** Timestamp (ms epoch) the breaker stays open until; 0 means closed. */
   openUntil: number;
-  /** Whether the single half-open trial probe is currently in flight (settled by reportOutcome). */
+  /** Whether the single half-open trial probe is currently in flight (cleared by reportOutcome or release). */
   probing: boolean;
 };
 
@@ -79,7 +79,10 @@ export type LimitsApi = {
    * token available, and a concurrency slot. Resolves with a release
    * function that MUST be called exactly once when the request settles.
    * Rejects immediately (reason `"breaker-open"`) when the breaker is open.
-   * An aborted wait leaves no leaked token or concurrency slot.
+   * An aborted wait leaves no leaked token or concurrency slot. In the
+   * half-open phase the first caller holds the single probe slot until it
+   * calls `reportOutcome` or `release()`, so a caller that never reports
+   * does not lock the lane.
    *
    * @example
    * ```ts

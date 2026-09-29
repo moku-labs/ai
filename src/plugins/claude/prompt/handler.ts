@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
 import { buildClaudeArguments, runClaude } from "../cli";
-import type { ClaudeContext } from "../types";
+import type { ClaudeContext, ClaudePromptMeta, Effort } from "../types";
 import { copyImages } from "./files";
 import { effortFor, mapModel } from "./model";
 import type { PromptParameters } from "./params";
@@ -39,23 +39,34 @@ async function createCallDirectory(workDirectory: string): Promise<string> {
   return mkdtemp(path.join(root, CALL_DIR_PREFIX));
 }
 
+/** Per-call inputs of {@link answerIn}. */
+type CallInputs = {
+  /** Validated request params. */
+  params: PromptParameters;
+  /** Mapped `--model`, if any. */
+  model: string | undefined;
+  /** `--effort` level, if any. */
+  effort: Effort | undefined;
+  /** Per-call temp dir. */
+  dir: string;
+  /** Caller abort signal, if any. */
+  signal?: AbortSignal;
+};
+
 /**
- * Runs claude inside `dir` and reads its answer.
+ * Runs claude inside `call.dir` and reads its answer.
  *
  * @param ctx - Plugin context (bin, timeout).
  * @param request - The prompt-gen request.
- * @param call - Validated params, mapped model, call dir and abort signal.
- * @param call.params - Validated request params.
- * @param call.model - Mapped `--model`, if any.
- * @param call.dir - Per-call temp dir.
- * @param call.signal - Caller abort signal, if any.
+ * @param call - Validated params, mapped model, effort, call dir and abort signal.
  * @returns The answer text, list price and token usage.
  */
 async function answerIn(
   ctx: ClaudeContext,
   request: PromptGenRequest,
-  call: { params: PromptParameters; model: string | undefined; dir: string; signal?: AbortSignal }
+  call: CallInputs
 ): Promise<ClaudeAnswer> {
+  // Stage images and build the stdin prompt and argv
   const imageNames = await copyImages(call.params.images, call.dir);
   const prompt = buildClaudePrompt({
     prompt: request.prompt,
@@ -66,9 +77,10 @@ async function answerIn(
     system: request.system,
     withImages: imageNames.length > 0,
     model: call.model,
-    effort: effortFor(call.params.reasoning)
+    effort: call.effort
   });
 
+  // Run the CLI once and parse its JSON result
   const run = await runClaude({
     bin: ctx.config.bin,
     args,
@@ -81,28 +93,31 @@ async function answerIn(
 }
 
 /**
- * Result meta: provider, mapped model, the requested id when it differs,
+ * Result meta: provider, mapped model, the requested id, the effort passed,
  * the CLI's list price, token usage, and ignored request fields.
  *
  * @param request - The prompt-gen request.
- * @param model - Mapped `--model`, if any.
+ * @param flags - The `--model` and `--effort` values passed, if any.
+ * @param flags.model - Mapped `--model`, if any.
+ * @param flags.effort - `--effort` level, if any.
  * @param answer - The parsed answer.
  * @returns The `meta` record.
  * @example
  * ```ts
- * buildMeta({ prompt: "p" }, undefined, { text: "ok", listCostUsd: 0.1, inputTokens: 1, outputTokens: 1 });
- * // => { provider: "claude", listCostUsd: 0.1, usage: { inputTokens: 1, outputTokens: 1 } }
+ * buildMeta({ prompt: "p" }, { model: undefined, effort: "low" }, { text: "ok", listCostUsd: 0.1, inputTokens: 1, outputTokens: 1 });
+ * // => { provider: "claude", effort: "low", listCostUsd: 0.1, usage: { inputTokens: 1, outputTokens: 1 } }
  * ```
  */
 function buildMeta(
   request: PromptGenRequest,
-  model: string | undefined,
+  flags: { model: string | undefined; effort: Effort | undefined },
   answer: ClaudeAnswer
-): Record<string, unknown> {
+): ClaudePromptMeta {
   return {
     provider: "claude",
-    ...(model === undefined ? {} : { model }),
+    ...(flags.model === undefined ? {} : { model: flags.model }),
     ...(request.model === undefined ? {} : { modelRequested: request.model }),
+    ...(flags.effort === undefined ? {} : { effort: flags.effort }),
     listCostUsd: answer.listCostUsd,
     usage: { inputTokens: answer.inputTokens, outputTokens: answer.outputTokens },
     ...(request.temperature === undefined ? {} : { ignored: ["temperature"] })
@@ -113,7 +128,7 @@ function buildMeta(
  * Creates the claude prompt-gen handler: `estimate()` validates params and
  * returns $0 (plan-billed); `execute()` runs `claude -p` in a fresh temp dir.
  * `temperature` is ignored and listed in `meta.ignored`. Logs
- * `claude:prompt:done` with the model and the text length only.
+ * `claude:prompt-gen:done` with the model and the answer length only.
  *
  * @param ctx - Plugin context (config, log).
  * @returns The `PromptGenHandler` registered under the "prompt-gen" task.
@@ -129,20 +144,23 @@ export function createPromptGenHandler(ctx: ClaudeContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
+      // Validate params and map the model
       const params = readParameters(request.params);
       const model = mapModel(ctx.config, request.model);
-      const dir = await createCallDirectory(ctx.config.workDir);
+      const effort = effortFor(params.reasoning);
 
+      // Run in a fresh call dir, always cleaned up
+      const dir = await createCallDirectory(ctx.config.workDir);
       try {
-        const call = { params, model, dir, ...(opts.signal ? { signal: opts.signal } : {}) };
-        const answer = await answerIn(ctx, request, call);
+        const signal = opts.signal ? { signal: opts.signal } : {};
+        const answer = await answerIn(ctx, request, { params, model, effort, dir, ...signal });
         const text =
           params.schema === undefined
             ? answer.text
             : parseSchemaAnswer(answer.text, params.schema.validator);
 
-        ctx.log.info("claude:prompt:done", { model: model ?? "default", textLength: text.length });
-        return { text, costUsd: 0, meta: buildMeta(request, model, answer) };
+        ctx.log.info("claude:prompt-gen:done", { model: model ?? "default", chars: text.length });
+        return { text, costUsd: 0, meta: buildMeta(request, { model, effort }, answer) };
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

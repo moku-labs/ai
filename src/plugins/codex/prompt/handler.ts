@@ -1,17 +1,19 @@
 /**
  * @file codex prompt-gen handler — implements the task-owned contract
  * (`../../promptGen/contract.ts`). Each call owns a temp dir under
- * `config.workDir`: images and the schema are written in, `codex exec` runs
- * read-only there, the answer is read from `last-message.txt`, and the dir is
- * removed in `finally`. Plan-billed: every result costs $0.
+ * `config.workDir` (`os.tmpdir()` when it is ""): images and the schema
+ * are written in, `codex exec` runs read-only there, the answer is read from
+ * `last-message.txt`, and the dir is removed in `finally`. Plan-billed: every
+ * result costs $0.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
 import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex, SCHEMA_FILE } from "../cli";
 import { copyReferences } from "../image/files";
 import type { CodexContext } from "../types";
 import { TerminalProviderError } from "../types";
+import { createCallDirectory } from "../workdir";
 import { mapModel } from "./model";
 import type { PromptParameters } from "./params";
 import { readPromptParameters } from "./params";
@@ -126,10 +128,12 @@ async function answerIn(
   dir: string,
   signal: AbortSignal | undefined
 ): Promise<string> {
+  // Stage the reference images and schema in the call dir
   const { schemaText } = plan.params;
   const imagePaths = await copyReferences(plan.params.images, dir);
   if (schemaText !== undefined) await writeFile(path.join(dir, SCHEMA_FILE), schemaText);
 
+  // Run codex read-only in the call dir
   const args = buildCodexPromptArguments({
     model: plan.model,
     reasoningEffort: plan.params.reasoningEffort,
@@ -146,6 +150,7 @@ async function answerIn(
     ...(signal === undefined ? {} : { signal })
   });
 
+  // Read the answer and enforce JSON when a schema is set
   const text = await readAnswer(dir);
   if (schemaText !== undefined && !isJson(text)) {
     throw new TerminalProviderError(
@@ -163,7 +168,7 @@ async function answerIn(
  * @returns The meta object.
  * @example
  * ```ts
- * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params }); // => { provider: "codex", reasoningEffort: "low" }
+ * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params: { images: [], schemaText: undefined, reasoningEffort: "low", ignored: [] } }); // => { provider: "codex", reasoningEffort: "low" }
  * ```
  */
 function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
@@ -179,53 +184,43 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 /**
  * Creates the codex prompt-gen handler: `estimate()` validates the params
  * and returns $0; `execute()` runs `codex exec` read-only in a fresh temp
- * dir. Never logs the prompt or the answer.
+ * dir and returns the answer at $0 with meta. Never logs the prompt or the
+ * answer. Both throw `Error` when `images`, `responseSchema` or `reasoning`
+ * has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
+ * the CLI is missing, not logged in, or out of plan or rate limit;
+ * `TerminalProviderError` on a non-zero exit, no answer, or no JSON while a
+ * schema is set; `RetryableProviderError` with kind "timeout" after
+ * `timeoutMs`; and the caller's `signal.reason`, unchanged, on abort.
  *
  * @param ctx - Plugin context (config, log).
  * @returns The `PromptGenHandler` registered under the "prompt-gen" task.
  */
 export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
   return {
-    /**
-     * Price of `request` without running it: always $0, after the params
-     * are validated.
-     *
-     * @param request - The prompt-gen request.
-     * @returns `{ usd: 0 }`.
-     * @throws {Error} When `images`, `responseSchema` or `reasoning` has a bad shape.
-     */
-    estimate(request: PromptGenRequest): { usd: number } {
+    estimate: (request: PromptGenRequest): { usd: number } => {
       readPromptParameters(request, ctx.config.reasoningEffort);
       return { usd: 0 };
     },
 
-    /**
-     * Answers one prompt with the codex CLI. Never logs the prompt.
-     *
-     * @param request - The prompt-gen request.
-     * @param opts - Execution options.
-     * @param opts.signal - Abort signal; aborting kills codex and rethrows its reason.
-     * @returns The answer text at $0, with meta.
-     * @throws {PromptGenUnavailableError} CLI missing, not logged in, or out of plan or rate limit.
-     * @throws {TerminalProviderError} Non-zero exit, no answer, or no JSON while a schema is set.
-     * @throws {RetryableProviderError} With kind "timeout" after `timeoutMs`.
-     */
-    async execute(
+    execute: async (
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
-    ): Promise<PromptGenResult> {
+    ): Promise<PromptGenResult> => {
+      // Validate params and map the model
       const plan: PromptPlan = {
         prompt: promptTextOf(request),
         model: mapModel(ctx.config, request.model),
         params: readPromptParameters(request, ctx.config.reasoningEffort)
       };
-      const workDirectory = path.resolve(ctx.config.workDir);
-      await mkdir(workDirectory, { recursive: true });
-      const dir = await mkdtemp(path.join(workDirectory, "codex-"));
 
+      // Run in a fresh call dir, always cleaned up
+      const dir = await createCallDirectory(ctx.config.workDir);
       try {
         const text = await answerIn(ctx, plan, dir, opts.signal);
-        ctx.log.info("codex:prompt:done", { model: plan.model ?? "default", chars: text.length });
+        ctx.log.info("codex:prompt-gen:done", {
+          model: plan.model ?? "default",
+          chars: text.length
+        });
         return { text, costUsd: 0, meta: metaOf(request, plan) };
       } finally {
         await rm(dir, { recursive: true, force: true });

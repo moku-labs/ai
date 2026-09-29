@@ -50,6 +50,46 @@ export type Reasoning = "off" | "low" | "medium" | "high";
 export type Effort = "low" | "medium" | "high";
 
 /**
+ * `meta` of a claude prompt-gen result. Optional fields appear only when
+ * they carry a value: `model` when `--model` was passed, `effort` when
+ * `--effort` was passed, `modelRequested` when the request named a model,
+ * `ignored` when the request set fields claude cannot honour.
+ *
+ * @example
+ * ```ts
+ * const meta: ClaudePromptMeta = {
+ *   provider: "claude",
+ *   model: "claude-opus-5-5",
+ *   modelRequested: "anthropic/claude-opus-5.5",
+ *   effort: "low",
+ *   listCostUsd: 0.114_22,
+ *   usage: { inputTokens: 12, outputTokens: 3 }
+ * };
+ * ```
+ */
+export type ClaudePromptMeta = {
+  /** Provider name. */
+  provider: "claude";
+  /** Mapped model passed as `--model`. Absent: the CLI's default model. */
+  model?: string;
+  /** Model id as the request named it. */
+  modelRequested?: string;
+  /** Level passed as `--effort`. Absent: no `--effort` flag. */
+  effort?: Effort;
+  /** The CLI's own list price (`total_cost_usd`), for reference only. */
+  listCostUsd: number;
+  /** Token usage reported by the CLI. */
+  usage: {
+    /** Input tokens. */
+    inputTokens: number;
+    /** Output tokens. */
+    outputTokens: number;
+  };
+  /** Request fields claude ignores, e.g. `["temperature"]`. */
+  ignored?: string[];
+};
+
+/**
  * Provider info returned by `app.claude.info()`.
  *
  * @example
@@ -95,6 +135,7 @@ export type ClaudeApi = {
  * field the runner's `classifyError` reads to bucket it as retryable.
  */
 export class RetryableProviderError extends Error {
+  /** Retry classification read by the runner's classifyError. */
   readonly kind: "timeout" | "network";
 
   /**

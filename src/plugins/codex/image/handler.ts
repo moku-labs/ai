@@ -1,16 +1,18 @@
 /**
  * @file codex image handler — implements the task-owned contract
  * (`../../image/contract.ts`). Each call owns a temp dir under
- * `config.workDir`: refs are copied in, `codex exec` runs there, the image
- * it wrote is read back, and the dir is removed in `finally`.
+ * `config.workDir` (`os.tmpdir()` when it is ""): refs are copied in,
+ * `codex exec` runs there, the image it wrote is read back, and the dir is
+ * removed in `finally`.
  */
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ImageHandler, ImageRequest, ImageResult } from "../../image/contract";
 import { buildCodexArguments, runCodex } from "../cli";
 import { priceOf } from "../prices";
 import type { CodexContext } from "../types";
 import { TerminalProviderError } from "../types";
+import { createCallDirectory } from "../workdir";
 import { copyReferences, findResultImage, mimeForFile } from "./files";
 import { buildImagePrompt } from "./prompt";
 
@@ -128,9 +130,7 @@ export function createImageHandler(ctx: CodexContext): ImageHandler {
     async execute(request: ImageRequest, opts: { signal?: AbortSignal }): Promise<ImageResult> {
       const model = resolveModel(ctx, request);
       const costUsd = priceOf(ctx, model);
-      const workDirectory = path.resolve(ctx.config.workDir);
-      await mkdir(workDirectory, { recursive: true });
-      const dir = await mkdtemp(path.join(workDirectory, "codex-"));
+      const dir = await createCallDirectory(ctx.config.workDir);
 
       try {
         const { image, mimeType } = await generateIn(ctx, request, model, dir, opts.signal);

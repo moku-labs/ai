@@ -176,6 +176,7 @@ export function runClaude(options: RunClaudeOptions): Promise<ClaudeRun> {
   if (signal?.aborted) return Promise.reject(signal.reason);
 
   return new Promise<ClaudeRun>((resolve, reject) => {
+    // Spawn and track why we kill
     const child = spawn(options.bin, options.args, {
       cwd: options.cwd,
       stdio: ["pipe", "pipe", "pipe"]
@@ -205,6 +206,7 @@ export function runClaude(options: RunClaudeOptions): Promise<ClaudeRun> {
     const timer = setTimeout(() => kill("timeout"), options.timeoutMs);
     signal?.addEventListener("abort", onAbort, { once: true });
 
+    // Settle exactly once, releasing timer and listener
     /**
      * Settles the promise once and releases the timer and abort listener.
      *
@@ -219,6 +221,7 @@ export function runClaude(options: RunClaudeOptions): Promise<ClaudeRun> {
       else reject(outcome.error);
     };
 
+    // Write the prompt, collect output
     // A child that dies before reading stdin makes the write fail with EPIPE;
     // the exit or spawn error that follows carries the real cause.
     child.stdin.on("error", () => {
@@ -230,6 +233,7 @@ export function runClaude(options: RunClaudeOptions): Promise<ClaudeRun> {
       stderr = (stderr + chunk.toString("utf8")).slice(-STDERR_TAIL_CHARS);
     });
 
+    // Wire exit events
     child.on("error", error => settle({ error: spawnError(error, options.bin) }));
     // A killed process may leave grandchildren holding the pipes open, so
     // kills settle on "exit"; normal runs wait for "close" to get all output.
