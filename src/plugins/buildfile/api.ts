@@ -319,6 +319,13 @@ items: []
 #     prompt: "Slow push-in on the counter."
 #     image: { $ref: shot-01-key }
 #     seconds: 5
+#
+# - task: music
+#   id: teaser-score
+#   input:
+#     model: "elevenlabs-music-v2.5"
+#     prompt: "Tense synth pulse, rising."
+#     lengthMs: 30000
 `;
 }
 

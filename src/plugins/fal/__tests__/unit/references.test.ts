@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ASSET_MIME } from "../../../asset/contract";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { buildFalBody, resolveFalModel } from "../../models";
 import { TerminalProviderError } from "../../types";
-import { uploadInputs } from "../../upload";
 import { createVideoHandler } from "../../video/handler";
+import { buildFalBody, resolveFalModel } from "../../video/models";
+import { uploadInputs } from "../../video/upload";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

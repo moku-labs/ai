@@ -10,8 +10,8 @@ import path from "node:path";
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import { vi } from "vitest";
 import type { VideoFile } from "../../../video/contract";
-import type { Config, FalContext, RegistryApi, State } from "../../types";
-import { fileNameOf } from "../../upload";
+import { fileNameOf } from "../../client/upload";
+import type { Config, FalContext, LocalFile, RegistryApi, State } from "../../types";
 
 /** Default config fixture, matching `falPlugin`'s own defaults except a 0 ms poll interval. */
 export const DEFAULT_CONFIG: Config = {
@@ -20,7 +20,13 @@ export const DEFAULT_CONFIG: Config = {
   uploadUrl: "https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3",
   upload: "storage",
   timeoutMs: 60_000,
-  priceOverrides: {}
+  priceOverrides: {},
+  runUrl: "https://fal.run",
+  imageDefaultModel: "gpt-image-2.5",
+  llmDefaultModel: "anthropic/claude-opus-5.5",
+  pollIntervalMs: 0,
+  jobTimeoutMs: 900_000,
+  requestLog: ""
 };
 
 /** The fake key every test context resolves (never a real key). */
@@ -90,8 +96,13 @@ export type TestCtxOverrides = {
 /** Builds a fake `FalContext`: default config, uncomputed prices, an empty upload cache, fake registry/env/log. */
 export function createTestCtx(overrides: TestCtxOverrides = {}): FalContext {
   const config: Config = { ...DEFAULT_CONFIG, ...overrides.config };
-  // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`; mirrors createFalState's sentinel
-  const state: State = { prices: null, uploads: new Map(), ...overrides.state };
+  const state: State = {
+    // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`; mirrors createFalState's sentinel
+    prices: null,
+    uploads: new Map(),
+    requestLogWarned: false,
+    ...overrides.state
+  };
   const registry = overrides.registry ?? createFakeRegistry();
   const env = overrides.env ?? createFakeEnv();
   const log = overrides.log ?? createFakeLog();
@@ -172,6 +183,22 @@ export function createTempFiles(): TempFiles {
     cleanup() {
       rmSync(dir, { recursive: true, force: true });
     }
+  };
+}
+
+/** Writes `bytes` to a new temp file and returns the `LocalFile` for it, plus a cleanup. */
+export function createLocalFile(
+  name: string,
+  bytes: Uint8Array,
+  mimeType: string,
+  hash: string
+): { file: LocalFile; cleanup: () => void } {
+  const dir = mkdtempSync(path.join(tmpdir(), "moku-fal-local-"));
+  const filePath = path.join(dir, name);
+  writeFileSync(filePath, bytes);
+  return {
+    file: { path: filePath, mimeType, hash },
+    cleanup: () => rmSync(dir, { recursive: true, force: true })
   };
 }
 

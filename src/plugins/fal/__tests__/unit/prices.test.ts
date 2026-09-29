@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bundledPrices, lookupPrice, mergePrices, resolvePrices, videoCostUsd } from "../../prices";
+import { mergePrices, resolvePrices } from "../../prices";
+import { videoPrices as bundledPrices, lookupPrice, videoCostUsd } from "../../video/prices";
 import { createTestCtx } from "./fixtures";
 
 describe("bundled price table", () => {

@@ -22,12 +22,13 @@
  * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
+ * | music | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
  * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
- * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
+ * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` · `runUrl` · `imageDefaultModel` · `llmDefaultModel` · `pollIntervalMs` · `jobTimeoutMs` · `requestLog` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` · `"https://fal.run"` · `"gpt-image-2.5"` · `"anthropic/claude-opus-5.5"` · `2000` · `900_000` · `""` (off) |
  * | apimodels | `apiKeyEnv` · `baseUrl` · `assetGroup` · `timeoutMs` · `priceOverrides` | `"APIMODELS_API_KEY"` · `"https://api.apimodels.app/v1"` · `"moku-ai"` · `60_000` · `{}` |
  * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
@@ -61,6 +62,7 @@ import {
   elevenlabsPlugin,
   falPlugin,
   imagePlugin,
+  musicPlugin,
   openaiPlugin,
   promptGenPlugin,
   registryPlugin,
@@ -81,6 +83,7 @@ const framework = createCore(coreConfig, {
     promptGenPlugin,
     imagePlugin,
     videoPlugin,
+    musicPlugin,
     assetPlugin,
     elevenlabsPlugin,
     openaiPlugin,
@@ -140,6 +143,7 @@ export {
   imagePlugin,
   journalPlugin,
   limitsPlugin,
+  musicPlugin,
   openaiPlugin,
   promptGenPlugin,
   registryPlugin,
@@ -170,6 +174,7 @@ export {
   Image,
   Journal,
   Limits,
+  Music,
   Openai,
   PromptGen,
   Runner,
