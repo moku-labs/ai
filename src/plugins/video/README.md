@@ -51,6 +51,7 @@ types as `Video.VideoHandler` etc.
 | `prompt` | `string` | yes | Motion and scene prompt. |
 | `negative` | `string` | no | Things to avoid. Ignored by models without a negative prompt. |
 | `image` | `VideoFile` | no | First frame / keyframe. |
+| `endImage` | `VideoFile` | no | Last frame: the clip ends on this image. A model without an end frame rejects the request before any upload or charge, never drops it. |
 | `refs` | `VideoFile[]` | no | Extra references: images, audio or video files, told apart by MIME type. |
 | `seconds` | `number` | no | Clip length in seconds. Default 5. |
 | `aspect` | `string` | no | Aspect ratio. Default `"9:16"`. |
