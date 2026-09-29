@@ -1,16 +1,16 @@
 /**
  * @file codex provider plugin — types (Config/State/API), the
  * runner-compatible provider error classes, and the domain context type
- * shared by `api.ts`, `prices.ts` and `image/handler.ts`.
+ * shared by `api.ts`, `prices.ts`, `image/handler.ts` and `prompt/handler.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
 
 /**
- * codex plugin configuration: which CLI to run, which model and reasoning
- * effort to ask for, the per-call timeout, where per-call temp dirs live,
- * and per-model price overrides.
+ * codex plugin configuration: which CLI to run, which image and text models
+ * and reasoning effort to ask for, the per-call timeout, where per-call temp
+ * dirs live, per-model image price overrides, and the prompt-gen model map.
  *
  * @example
  * ```ts
@@ -20,16 +20,18 @@ import type { RegistryApi, registryPlugin } from "../registry";
  *   reasoningEffort: "low",
  *   timeoutMs: 600_000,
  *   workDir: ".moku/tmp",
- *   priceOverrides: {}
+ *   priceOverrides: {},
+ *   textModel: "gpt-6-sol",
+ *   modelMap: { "openai/gpt-6-sol-pro": "gpt-6-sol" }
  * };
  * ```
  */
 export type Config = {
   /** Codex executable: a bare name looked up on PATH, or a path. Default: "codex". */
   bin: string;
-  /** Codex model used when a request names none. Default: "gpt-6-astra". */
+  /** Image model used when an image request names none. Default: "gpt-6-astra". */
   model: string;
-  /** Value passed as `-c model_reasoning_effort="<effort>"`. Default: "low". */
+  /** Value passed as `-c model_reasoning_effort="<effort>"` for both tasks. Default: "low". */
   reasoningEffort: string;
   /** Kill the CLI after this long, ms. Default: 600_000. */
   timeoutMs: number;
@@ -37,6 +39,10 @@ export type Config = {
   workDir: string;
   /** USD per image by model, merged over the bundled table. Default: {}. */
   priceOverrides: Record<string, number>;
+  /** Prompt-gen model when the request model maps to none; "" leaves `-m` out (codex's own default). Default: "". */
+  textModel: string;
+  /** Exact request-model id (OpenRouter style) to codex model, checked before every other mapping rule. Default: {}. */
+  modelMap: Record<string, string>;
 };
 
 /**
@@ -120,7 +126,8 @@ export class RetryableProviderError extends Error {
 }
 
 /**
- * Terminal failure: CLI missing, non-zero exit, or no image written. Has no
+ * Terminal failure: CLI not startable, non-zero exit, no image written, or
+ * no (valid) prompt-gen answer. Has no
  * `kind` and no `status`, so the runner buckets it as "unknown" (terminal,
  * never retried).
  */
@@ -144,7 +151,8 @@ export class TerminalProviderError extends Error {
 export type { RegistryApi } from "../registry";
 
 /**
- * Domain context shared by `api.ts`, `prices.ts` and `image/handler.ts`:
+ * Domain context shared by `api.ts`, `prices.ts`, `image/handler.ts` and
+ * `prompt/handler.ts`:
  * `config`/`state`/`emit` from `PluginCtx`, `require` narrowed to the
  * registry, and the injected `env`/`log` core APIs.
  *
