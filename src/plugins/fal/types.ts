@@ -9,9 +9,9 @@ import type { RegistryApi, registryPlugin } from "../registry";
 import type { VideoFile, VideoRequest } from "../video/contract";
 
 /**
- * A request image or ref at estimate time: a resolved file, or still the
- * build-file reference the runner resolves before submit (the runner
- * estimates the unresolved request).
+ * A request image, end frame or ref at estimate time: a resolved file, or
+ * still the build-file reference the runner resolves before submit (the
+ * runner estimates the unresolved request).
  *
  * @example
  * ```ts
@@ -21,17 +21,21 @@ import type { VideoFile, VideoRequest } from "../video/contract";
 export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
 
 /**
- * A video request at estimate time: its first frame and refs may still be
- * build-file references. Every `VideoRequest` is one.
+ * A video request at estimate time: its first frame, end frame and refs may
+ * still be build-file references. Every `VideoRequest` is one.
  *
  * @example
  * ```ts
- * const request: EstimateRequest = { model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "s01.key" } };
+ * const request: EstimateRequest = {
+ *   model: "minimax-h3-max-i2v", prompt: "p", image: { $ref: "s01.key" }, endImage: { $ref: "s01.end" }
+ * };
  * ```
  */
-export type EstimateRequest = Omit<VideoRequest, "image" | "refs"> & {
+export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
   /** First frame, resolved or not. */
   image?: EstimateInput;
+  /** End frame, resolved or not. It does not change the price. */
+  endImage?: EstimateInput;
   /** Refs, resolved or not. */
   refs?: EstimateInput[];
 };

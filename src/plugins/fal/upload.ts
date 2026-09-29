@@ -4,9 +4,10 @@
  * presigned URL and sends the returned file URL. When an upload fails, the
  * rest of that request falls back to base64 data URIs (logged once as
  * `fal:upload:fallback`). `"data-uri"` mode always inlines. The first frame
- * goes first, then the refs in parallel, at most {@link UPLOAD_SLOTS} at a
- * time. A storage URL is cached in `state.uploads` by MIME type and content
- * sha256, so the same bytes are uploaded once per process.
+ * goes first, then the refs and the end frame (last) in parallel, at most
+ * {@link UPLOAD_SLOTS} at a time. A storage URL is cached in `state.uploads`
+ * by MIME type and content sha256, so the same bytes are uploaded once per
+ * process.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -48,7 +49,7 @@ type StorageTarget = {
  */
 type UploadSession = { mode: UploadMode };
 
-/** How many ref uploads of one request run at once. */
+/** How many ref and end-frame uploads of one request run at once. */
 const UPLOAD_SLOTS = 4;
 
 /** File extensions by MIME type, for the storage file name. */
@@ -333,45 +334,47 @@ async function mapInSlots<Item, Result>(
 }
 
 /**
- * Makes a request's first frame and refs readable by fal: the first frame
- * first, then the image, audio and video refs in parallel, at most
- * {@link UPLOAD_SLOTS} at a time. After an upload failure the remaining
- * files of this call go as data URIs.
+ * Makes a request's first frame, refs and end frame readable by fal: the
+ * first frame first, then the image, audio and video refs and the end frame
+ * (last) in parallel, at most {@link UPLOAD_SLOTS} at a time. After an upload
+ * failure the remaining files of this call go as data URIs.
  *
  * @param ctx - Plugin context (`config.upload`, `config.uploadUrl`, `config.timeoutMs`, `state.uploads`, `log`).
  * @param image - The first frame.
  * @param references - Image, audio and video refs, already checked against the model's limits.
  * @param options - Key and caller signal.
- * @returns URLs (or data URIs) for the image and for each image, audio and video ref, in order.
+ * @param endImage - The end frame, when the request has one (the model was checked to take it).
+ * @returns URLs (or data URIs) for the image, for each image, audio and video ref in order, and for the end frame when there is one.
  * @throws {Error} When a file cannot be read, or the caller aborted.
- * @example
- * ```ts
- * const urls = await uploadInputs(ctx, request.image, { images: [], audio: [], videos: [] }, { apiKey });
- * ```
  */
 export async function uploadInputs(
   ctx: FalContext,
   image: VideoFile,
   references: SplitReferences,
-  options: UploadOptions
+  options: UploadOptions,
+  endImage?: VideoFile
 ): Promise<UploadedUrls> {
   // The first frame goes first, alone; a failure here flips the session to data-uri
   const session: UploadSession = { mode: ctx.config.upload };
   const imageUrl = await uploadOne(ctx, session, image, options);
 
-  // Every ref in parallel, UPLOAD_SLOTS at a time, in request order
+  // Every ref, then the end frame, in parallel, UPLOAD_SLOTS at a time, in request order
   const files = [...references.images, ...references.audio, ...references.videos];
+  if (endImage !== undefined) files.push(endImage);
   const urls = await mapInSlots(files, UPLOAD_SLOTS, file =>
     uploadOne(ctx, session, file, options)
   );
 
-  // Slice the flat URL list back into the three groups
+  // Slice the flat URL list back into the three groups and the end frame
   const audioStart = references.images.length;
   const videoStart = audioStart + references.audio.length;
-  return {
+  const endStart = videoStart + references.videos.length;
+  const base: UploadedUrls = {
     image: imageUrl,
     refs: urls.slice(0, audioStart),
     audioRefs: urls.slice(audioStart, videoStart),
-    videoRefs: urls.slice(videoStart)
+    videoRefs: urls.slice(videoStart, endStart)
   };
+  const endUrl = urls[endStart];
+  return endUrl === undefined ? base : { ...base, endImage: endUrl };
 }

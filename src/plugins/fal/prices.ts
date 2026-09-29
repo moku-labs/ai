@@ -37,6 +37,10 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "minimax-h3-max-ref@1080P": 0.16,
   "minimax-h3-max-ref#refTokensIncluded": 4096,
   "minimax-h3-max-ref#refTokenUsdPer1k": 0.02,
+  // H3 Max image-to-video: the list rate after the promo ends on 2026-09-30, so the estimate stays an upper bound.
+  "minimax-h3-max-i2v@480P": 0.05,
+  "minimax-h3-max-i2v@768P": 0.08,
+  "minimax-h3-max-i2v@1080P": 0.16,
   "minimax-h3-ref@480P": 0.05,
   "minimax-h3-ref@768P": 0.06,
   "minimax-h3-ref@2K": 0.13,

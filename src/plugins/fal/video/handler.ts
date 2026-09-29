@@ -9,7 +9,7 @@
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
-import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
+import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
 import type { FalContext, FalProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
@@ -93,6 +93,26 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
     );
   }
   return request.image;
+}
+
+/**
+ * Refuses an end frame on a model that takes none, before any upload.
+ *
+ * @param model - The resolved catalog row.
+ * @param request - The video request.
+ * @throws {Error} A plain (terminal) two-line error listing the models that take an end frame.
+ * @example
+ * ```ts
+ * requireEndFrameSupport(resolveFalModel("veo-3.1-fast"), { model: "veo-3.1-fast", prompt: "p", endImage: { path: "end.png", mimeType: "image/png", hash: "h" } });
+ * // throws: [ai] fal model "veo-3.1-fast" takes no end frame.
+ * ```
+ */
+function requireEndFrameSupport(model: ResolvedFalModel, request: VideoRequest): void {
+  if (request.endImage === undefined || model.endFrame) return;
+
+  throw new Error(
+    `[ai] fal model "${model.alias}" takes no end frame.\n  Remove input.endImage, or use a model that takes one: ${endFrameAliases().join(", ")}.`
+  );
 }
 
 /**
@@ -241,10 +261,11 @@ async function submitJob(
 ): Promise<{ jobId: string }> {
   const model = resolveFalModel(request.model);
   const image = requireImage(model, request);
+  requireEndFrameSupport(model, request);
   const apiKey = resolveApiKey(ctx);
 
   const references = splitReferences(model, request.refs ?? []);
-  const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
+  const urls = await uploadInputs(ctx, image, references, { apiKey, signal }, request.endImage);
 
   // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
   signal?.throwIfAborted();
