@@ -5,7 +5,7 @@ import type { State } from "./types";
 
 /**
  * Creates initial apimodels state: price table not yet computed, empty
- * upload, asset and group caches, no journal skip logged yet.
+ * upload, asset and group caches, nothing in flight, no journal skip logged yet.
  *
  * @returns Initial apimodels state.
  */
@@ -16,6 +16,9 @@ export function createApimodelsState(): State {
     uploads: new Map(),
     assets: new Map(),
     groups: new Map(),
+    groupsInFlight: new Map(),
+    assetsInFlight: new Map(),
+    uploadsInFlight: new Map(),
     journalSkipLogged: false
   };
 }

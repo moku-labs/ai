@@ -150,6 +150,9 @@ export function createTestCtx(overrides: TestCtxOverrides = {}): ApimodelsContex
     uploads: new Map(),
     assets: new Map(),
     groups: new Map(),
+    groupsInFlight: new Map(),
+    assetsInFlight: new Map(),
+    uploadsInFlight: new Map(),
     journalSkipLogged: false,
     ...overrides.state
   };

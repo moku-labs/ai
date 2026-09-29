@@ -5,7 +5,9 @@
  * input: `state.assets` → journal provider record → register (upload →
  * group id → `POST /assets`). New ids go to both tiers, the journal in one
  * write per submit. Keys use the `VideoFile.hash` the runner delivered and a
- * non-reversible account fingerprint, never the key. A stale id
+ * non-reversible account fingerprint, never the key. Concurrent submits share
+ * the group creation, the registration and the upload still in flight. A
+ * group apimodels no longer knows is created again once. A stale id
  * (`INVALID_INPUT` naming an asset) drops the records so the next attempt
  * registers again, once per request.
  */
@@ -17,7 +19,7 @@ import { assetPriceUsd, roundUsd } from "./prices";
 import type { ApimodelsContext, EstimateRequest } from "./types";
 import { RetryableProviderError, TerminalProviderError } from "./types";
 import type { UploadOptions } from "./upload";
-import { mapInSlots, SLOTS, uploadFiles } from "./upload";
+import { mapInSlots, SLOTS, shareInFlight, uploadFiles } from "./upload";
 
 /**
  * One request input with the selector that names it in `params.assets`.
@@ -46,13 +48,14 @@ export type NamedInput = {
 export type ResolvedAssets = {
   /** One `asset://` id per named input, in order. */
   urls: string[];
-  /** USD of the registrations this submit made (cache hits are free). */
+  /** USD of the registrations this submit made (cache hits and joined registrations are free). */
   assetUsd: number;
 };
 
 /**
  * The asset ids a request used, rebuilt from the request alone: its account,
- * the hashes of its named inputs, and one key for its whole input set.
+ * the hashes of its named inputs, and one key for the item (model, prompt,
+ * seconds and every input).
  *
  * @example
  * ```ts
@@ -64,7 +67,7 @@ export type UsedAssets = {
   account: string;
   /** Hashes of the inputs named in `params.assets`. */
   hashes: string[];
-  /** `account + ":" + sha256(image, endImage, refs hashes)`: the same in submit and poll. */
+  /** `account + ":" + sha256(model, prompt, seconds, image, endImage, refs hashes)`: the same in submit and poll. */
   requestKey: string;
 };
 
@@ -80,8 +83,20 @@ type Registration = {
   options: UploadOptions;
   /** Asset ids by input hash. */
   found: Map<string, string>;
-  /** New records, written to the journal in one call. */
+  /** New records of the calls this submit made, written to the journal in one call. */
   records: ProviderRecord[];
+};
+
+/**
+ * One face to register: its file, its upload URL and the group it goes to.
+ */
+type Face = {
+  /** The face's input file. */
+  file: VideoFile;
+  /** Its upload URL. */
+  publicUrl: string;
+  /** The account's asset group id. */
+  groupId: string;
 };
 
 /** Plugin name that owns the journal records. */
@@ -113,6 +128,9 @@ const INVALID_INPUT = "INVALID_INPUT";
 
 /** How apimodels' text names an asset. */
 const NAMES_ASSET = /asset/i;
+
+/** How apimodels' text names the asset group. */
+const NAMES_GROUP = /group/i;
 
 /** Status of a validation refusal or a final stale answer. */
 const BAD_REQUEST = 400;
@@ -370,28 +388,31 @@ function incomplete(what: string, field: string): TerminalProviderError {
 }
 
 /**
- * The asset group id of the account: `state.groups`, then the journal
- * record (`asset-group`, key `config.assetGroup`), else `POST /assets/groups`
- * once, recorded for the journal write of this submit.
+ * The journal identity of an account's asset group record.
+ *
+ * @param ctx - Plugin context (`config.assetGroup`).
+ * @param account - Account fingerprint.
+ * @returns Provider, account, kind `asset-group` and the group name.
+ */
+function groupQueryOf(ctx: ApimodelsContext, account: string): Omit<ProviderRecord, "value"> {
+  return { provider: PROVIDER, account, kind: GROUP_KIND, key: ctx.config.assetGroup };
+}
+
+/**
+ * Creates the account's asset group with `POST /assets/groups` and keeps its
+ * id in the state tier before the call settles.
  *
  * @param ctx - Plugin context.
- * @param registration - Account, journal availability, options and pending records.
+ * @param account - Account fingerprint.
+ * @param options - Key and caller signal.
  * @returns The group id.
  * @throws {TerminalProviderError} When the response has no id.
  */
-async function resolveGroup(ctx: ApimodelsContext, registration: Registration): Promise<string> {
-  // The group of this account, from either tier.
-  const { account, durable, options } = registration;
-  const cached = ctx.state.groups.get(account);
-  if (cached !== undefined) return cached;
-  const query = { provider: PROVIDER, account, kind: GROUP_KIND, key: ctx.config.assetGroup };
-  const stored = durable ? ctx.journal.findProviderRecord(query) : undefined;
-  if (stored !== undefined) {
-    ctx.state.groups.set(account, stored);
-    return stored;
-  }
-
-  // None yet: create it once for this account.
+async function createGroup(
+  ctx: ApimodelsContext,
+  account: string,
+  options: UploadOptions
+): Promise<string> {
   const create = (): Promise<unknown> =>
     apiData(
       {
@@ -410,10 +431,77 @@ async function resolveGroup(ctx: ApimodelsContext, registration: Registration): 
   );
   if (groupId === undefined) throw incomplete("asset group response", "data.id");
 
-  // Keep it in both tiers.
   ctx.state.groups.set(account, groupId);
-  registration.records.push({ ...query, value: groupId });
   return groupId;
+}
+
+/**
+ * The asset group id of the account: `state.groups`, then the journal
+ * record (`asset-group`, key `config.assetGroup`), else `POST /assets/groups`
+ * once. A concurrent submit joins that call; only the submit that made it
+ * records the group for its journal write.
+ *
+ * @param ctx - Plugin context.
+ * @param registration - Account, journal availability, options and pending records.
+ * @returns The group id.
+ * @throws {TerminalProviderError} When the response has no id.
+ */
+async function resolveGroup(ctx: ApimodelsContext, registration: Registration): Promise<string> {
+  // The group of this account, from either tier.
+  const { account, durable, options } = registration;
+  const cached = ctx.state.groups.get(account);
+  if (cached !== undefined) return cached;
+  const query = groupQueryOf(ctx, account);
+  const stored = durable ? ctx.journal.findProviderRecord(query) : undefined;
+  if (stored !== undefined) {
+    ctx.state.groups.set(account, stored);
+    return stored;
+  }
+
+  // None yet: create it once for this account; a concurrent submit joins this call.
+  const shared = shareInFlight(ctx.state.groupsInFlight, account, () =>
+    createGroup(ctx, account, options)
+  );
+  const groupId = await shared.result;
+  if (shared.started) registration.records.push({ ...query, value: groupId });
+  return groupId;
+}
+
+/**
+ * Whether a rejected registration names the asset group: a terminal 4xx
+ * whose message or apimodels' text mentions the group (deleted upstream).
+ *
+ * @param error - What `POST /assets` threw.
+ * @returns True for a stale group.
+ * @example
+ * ```ts
+ * isStaleGroupRejection(new TerminalProviderError("x", 404, { detail: "asset group not found" })); // => true
+ * ```
+ */
+export function isStaleGroupRejection(error: unknown): boolean {
+  if (!(error instanceof TerminalProviderError)) return false;
+  const isClientError = error.status >= 400 && error.status < 500;
+  const namesGroup = NAMES_GROUP.test(error.detail ?? "") || NAMES_GROUP.test(error.message);
+  return isClientError && namesGroup;
+}
+
+/**
+ * Forgets an asset group apimodels no longer knows: the state tier and the
+ * journal record, each only while it still holds that id (a concurrent
+ * submit may already have stored a new one).
+ *
+ * @param ctx - Plugin context (state, journal, log).
+ * @param registration - Account and journal availability.
+ * @param groupId - The stale group id.
+ */
+function forgetGroup(ctx: ApimodelsContext, registration: Registration, groupId: string): void {
+  const { account, durable } = registration;
+  if (ctx.state.groups.get(account) === groupId) ctx.state.groups.delete(account);
+  const query = groupQueryOf(ctx, account);
+  if (durable && ctx.journal.findProviderRecord(query) === groupId) {
+    ctx.journal.deleteProviderRecord(query);
+  }
+  ctx.log.warn("apimodels:asset-group:stale", { account });
 }
 
 /**
@@ -454,10 +542,86 @@ async function registerImage(
 }
 
 /**
- * Registers the faces no tier knows: uploads them, resolves the group, then
- * registers each, {@link SLOTS} at a time. Each new id goes to the state
- * tier and the pending records at once, and is logged with its price, so a
+ * Registers one face in the account's group. When apimodels answers that the
+ * group is gone, the group is forgotten, resolved again (created once, shared
+ * with concurrent submits) and the face registered once more; a second
+ * failure is thrown as is.
+ *
+ * @param ctx - Plugin context.
+ * @param registration - Account, journal availability, options and pending records.
+ * @param face - The face, its upload URL and its group.
+ * @returns The `asset://` id.
+ */
+async function registerInGroup(
+  ctx: ApimodelsContext,
+  registration: Registration,
+  face: Face
+): Promise<string> {
+  try {
+    return await registerImage(ctx, face.publicUrl, face.groupId, registration.options);
+  } catch (error) {
+    if (!isStaleGroupRejection(error)) throw error;
+  }
+
+  // The group is gone upstream: forget it, find or create it again, register once more.
+  forgetGroup(ctx, registration, face.groupId);
+  const groupId = await resolveGroup(ctx, registration);
+  return registerImage(ctx, face.publicUrl, groupId, registration.options);
+}
+
+/**
+ * Registers one face no tier knew, once per account and face. A concurrent
+ * submit registering the same face is joined, and its id is free here. Only
+ * the submit that registered keeps the record and logs the price, so a
  * submit that fails later still leaves an audit line.
+ *
+ * @param ctx - Plugin context.
+ * @param registration - Account, journal availability, options, found ids and pending records.
+ * @param face - The face, its upload URL and its group.
+ * @param usd - Price of one registration.
+ */
+async function registerFace(
+  ctx: ApimodelsContext,
+  registration: Registration,
+  face: Face,
+  usd: number
+): Promise<void> {
+  // Registered meanwhile by a concurrent submit: its id is free here.
+  const { account } = registration;
+  const { hash } = face.file;
+  const stateKey = `${account}:${hash}`;
+  const known = ctx.state.assets.get(stateKey);
+  if (known !== undefined) {
+    registration.found.set(hash, known);
+    return;
+  }
+
+  // Register it once: a concurrent submit with the same face joins this call.
+  const register = async (): Promise<string> => {
+    const assetUrl = await registerInGroup(ctx, registration, face);
+    ctx.state.assets.set(stateKey, assetUrl);
+    return assetUrl;
+  };
+  const shared = shareInFlight(ctx.state.assetsInFlight, stateKey, register);
+  const assetUrl = await shared.result;
+  registration.found.set(hash, assetUrl);
+  if (!shared.started) return;
+
+  // The submit that registered keeps the record and the audit line.
+  registration.records.push({
+    provider: PROVIDER,
+    account,
+    kind: ASSET_KIND,
+    key: hash,
+    value: assetUrl
+  });
+  ctx.log.info("apimodels:asset:registered", { account, usd });
+}
+
+/**
+ * Registers the faces no tier knows: uploads them, resolves the group, then
+ * registers each, {@link SLOTS} at a time. Concurrent submits share the
+ * upload, the group and the registration of the same face.
  *
  * @param ctx - Plugin context.
  * @param registration - Account, journal availability, options, found ids and pending records.
@@ -471,25 +635,14 @@ async function registerMissing(
   if (missing.length === 0) return;
 
   // Upload the faces, then find or create the group.
-  const { account, options } = registration;
-  const publicUrls = await uploadFiles(ctx, missing, options);
+  const publicUrls = await uploadFiles(ctx, missing, registration.options);
   const groupId = await resolveGroup(ctx, registration);
   const usd = assetPriceUsd(ctx);
 
-  // Register each face and keep its id in the state tier and the pending records.
-  await mapInSlots([...missing.entries()], SLOTS, async ([index, file]) => {
-    const assetUrl = await registerImage(ctx, publicUrls[index] ?? "", groupId, options);
-    registration.found.set(file.hash, assetUrl);
-    ctx.state.assets.set(`${account}:${file.hash}`, assetUrl);
-    registration.records.push({
-      provider: PROVIDER,
-      account,
-      kind: ASSET_KIND,
-      key: file.hash,
-      value: assetUrl
-    });
-    ctx.log.info("apimodels:asset:registered", { account, usd });
-  });
+  // Register each face.
+  await mapInSlots([...missing.entries()], SLOTS, ([index, file]) =>
+    registerFace(ctx, registration, { file, publicUrl: publicUrls[index] ?? "", groupId }, usd)
+  );
 }
 
 /**
@@ -501,7 +654,7 @@ async function registerMissing(
  * @param ctx - Plugin context (config, state, journal, log).
  * @param files - The named, image-checked inputs (duplicates allowed).
  * @param options - Key and caller signal.
- * @returns One id per input, in order, and the USD of the new registrations.
+ * @returns One id per input, in order, and the USD of the registrations this submit made.
  * @throws {FlaggedProviderError} When apimodels refuses an image (422).
  * @throws {TerminalProviderError} On 402 or an incomplete response.
  * @throws {RetryableProviderError} On 429 (after one wait), 5xx, timeout or network.
@@ -540,15 +693,19 @@ export async function resolveAssets(
   }
   if (failure !== undefined) throw failure.error;
 
+  // A registration a concurrent submit made is free here.
+  const registered = registration.records.filter(record => record.kind === ASSET_KIND).length;
   return {
     urls: files.map(file => registration.found.get(file.hash) ?? ""),
-    assetUsd: roundUsd(missing.length * assetPriceUsd(ctx))
+    assetUsd: roundUsd(registered * assetPriceUsd(ctx))
   };
 }
 
 /**
  * The asset ids a request used, rebuilt from the request alone (so `poll`
  * after a restart finds the same records and the same once-per-request key).
+ * The key covers model, prompt and seconds too: two items that share a face
+ * each get their own retry, a re-submit of one item keeps its key.
  *
  * @param request - The resolved request.
  * @param apiKey - The API key (only its fingerprint is kept).
@@ -565,13 +722,18 @@ export function usedAssetsOf(request: VideoRequest, apiKey: string): UsedAssets 
     const file = inputOf(request, selector);
     return file === undefined ? [] : [file.hash];
   });
-  const inputHashes = [
+
+  // One key per item: model, prompt and length, then every input hash.
+  const keyParts = [
+    request.model,
+    request.prompt,
+    String(request.seconds ?? ""),
     request.image?.hash ?? "",
     request.endImage?.hash ?? "",
     ...(request.refs ?? []).map(ref => ref.hash)
   ];
-  const inputsDigest = createHash("sha256").update(inputHashes.join(":")).digest("hex");
-  return { account, hashes, requestKey: `${account}:${inputsDigest}` };
+  const requestDigest = createHash("sha256").update(keyParts.join(":")).digest("hex");
+  return { account, hashes, requestKey: `${account}:${requestDigest}` };
 }
 
 /**

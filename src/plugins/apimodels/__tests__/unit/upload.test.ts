@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile } from "../../../video/contract";
 import { RetryableProviderError, TerminalProviderError } from "../../types";
-import { fileNameOf, mapInSlots, SLOTS, uploadFiles, uploadKey } from "../../upload";
+import { fileNameOf, mapInSlots, SLOTS, shareInFlight, uploadFiles, uploadKey } from "../../upload";
 import type { TempFiles } from "./fixtures";
 import {
   BASE,
@@ -97,6 +97,41 @@ describe("uploadFiles", () => {
     expect(api.count("upload")).toBe(1);
   });
 
+  it("two concurrent calls with the same file share one POST /files", async () => {
+    const api = stubApi();
+    const ctx = createTestCtx();
+
+    const [first, second] = await Promise.all([
+      uploadFiles(ctx, [png], OPTIONS),
+      uploadFiles(ctx, [png], OPTIONS)
+    ]);
+
+    expect(api.count("upload")).toBe(1);
+    expect(second).toEqual(first);
+    expect(ctx.state.uploadsInFlight.size).toBe(0);
+  });
+
+  it("a shared upload that failed is dropped, so the next call uploads again", async () => {
+    const api = stubApi({
+      upload: (n, form) =>
+        n === 1
+          ? jsonResponse(500, { code: 500 })
+          : envelope({ publicUrl: publicUrlOf((form.get("file") as File).name) })
+    });
+    const ctx = createTestCtx();
+
+    const failures = await Promise.allSettled([
+      uploadFiles(ctx, [png], OPTIONS),
+      uploadFiles(ctx, [png], OPTIONS)
+    ]);
+    const urls = await uploadFiles(ctx, [png], OPTIONS);
+
+    expect(failures.map(outcome => outcome.status)).toEqual(["rejected", "rejected"]);
+    expect(urls).toEqual([publicUrlOf(fileNameOf(png))]);
+    expect(api.count("upload")).toBe(2);
+    expect(ctx.state.uploadsInFlight.size).toBe(0);
+  });
+
   it("uploads the same file named twice in one call once", async () => {
     const api = stubApi();
     const urls = await uploadFiles(createTestCtx(), [png, jpg, png], OPTIONS);
@@ -171,6 +206,31 @@ describe("uploadFiles", () => {
       `[ai] Cannot read apimodels input file "${missing.path}".\n  Check that the $ref or $file it came from still exists.`
     );
     expect(api.count("upload")).toBe(0);
+  });
+});
+
+describe("shareInFlight", () => {
+  it("hands a second caller of the same key the pending call, and forgets it once settled", async () => {
+    const pending = new Map<string, Promise<string>>();
+    const start = vi.fn(async () => "url");
+
+    const first = shareInFlight(pending, "k", start);
+    const second = shareInFlight(pending, "k", start);
+
+    expect(first.started).toBe(true);
+    expect(second.started).toBe(false);
+    expect(second.result).toBe(first.result);
+    expect(await second.result).toBe("url");
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(pending.size).toBe(0);
+    expect(shareInFlight(pending, "k", start).started).toBe(true);
+  });
+
+  it("keeps other keys apart", () => {
+    const pending = new Map<string, Promise<string>>();
+    shareInFlight(pending, "a", async () => "1");
+    expect(shareInFlight(pending, "b", async () => "2").started).toBe(true);
+    expect(pending.size).toBe(2);
   });
 });
 

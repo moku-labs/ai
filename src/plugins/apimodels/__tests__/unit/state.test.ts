@@ -13,6 +13,13 @@ describe("createApimodelsState", () => {
     expect(state.groups).toEqual(new Map());
   });
 
+  it("starts with no group, registration or upload in flight", () => {
+    const state = createApimodelsState();
+    expect(state.groupsInFlight).toEqual(new Map());
+    expect(state.assetsInFlight).toEqual(new Map());
+    expect(state.uploadsInFlight).toEqual(new Map());
+  });
+
   it("has not logged a journal skip yet", () => {
     expect(createApimodelsState().journalSkipLogged).toBe(false);
   });

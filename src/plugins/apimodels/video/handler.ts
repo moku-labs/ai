@@ -6,7 +6,9 @@
  * task once and, when it is completed, downloads the clip and reads the real
  * charge. There is no `execute`: the runner and the `video` facade both drive
  * `submit` + `poll`. The job id is JSON (task id, alias, asset cost), so a
- * restart adopts the task instead of paying again.
+ * restart adopts the task instead of paying again. A key that is missing or
+ * refused at poll time throws a plain error: the runner marks the job
+ * expired, and the next run adopts the same task.
  */
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import {
@@ -78,6 +80,9 @@ const DEAD_RESULT_STATUSES: ReadonlySet<number> = new Set([403, 404, 410]);
 /** Poll status of a task apimodels does not know. */
 const TASK_UNKNOWN = 404;
 
+/** Statuses apimodels answers for a bad or missing key. */
+const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+
 /** Status of a failure the runner should retry by submitting (or polling) again. */
 const RETRY_STATUS = 503;
 
@@ -94,19 +99,46 @@ const FAILED_EVENT = "apimodels:video:failed";
  * Reads the key through the injected env API (MC3), at request time.
  *
  * @param ctx - Plugin context.
+ * @returns The key, or undefined when it is not set.
+ */
+function readApiKey(ctx: ApimodelsContext): string | undefined {
+  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
+  return apiKey === undefined || apiKey === "" ? undefined : apiKey;
+}
+
+/**
+ * Reads the key for a submit.
+ *
+ * @param ctx - Plugin context.
  * @returns The key.
  * @throws {TerminalProviderError} A 401 when the key is not set.
  */
 function resolveApiKey(ctx: ApimodelsContext): string {
-  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  const isMissingKey = apiKey === undefined || apiKey === "";
-  if (isMissingKey) {
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) {
     throw new TerminalProviderError(
       "[ai] apimodels needs an API key.\n  Set APIMODELS_API_KEY (or the env var named by apimodels.apiKeyEnv).",
       401
     );
   }
   return apiKey;
+}
+
+/**
+ * The error of a poll without a valid key: a plain `Error` with no `status`
+ * and no `kind`. The runner classifies it `unknown` and marks the job
+ * expired, so the next run adopts the same task instead of paying again.
+ *
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * pollKeyError().message; // => "[ai] apimodels cannot poll without a valid API key.\n  Fix APIMODELS_API_KEY; the next run adopts the same task."
+ * ```
+ */
+function pollKeyError(): Error {
+  return new Error(
+    "[ai] apimodels cannot poll without a valid API key.\n  Fix APIMODELS_API_KEY; the next run adopts the same task."
+  );
 }
 
 /**
@@ -401,6 +433,20 @@ function failedPoll(
 }
 
 /**
+ * Whether a poll failure says apimodels refused the key.
+ *
+ * @param error - What the poll call threw.
+ * @returns True for a terminal 401 or 403.
+ * @example
+ * ```ts
+ * isKeyRejection(new TerminalProviderError("x", 403)); // => true
+ * ```
+ */
+function isKeyRejection(error: unknown): boolean {
+  return error instanceof TerminalProviderError && AUTH_STATUSES.has(error.status);
+}
+
+/**
  * Whether a poll failure says apimodels does not know the task.
  *
  * @param error - What the poll call threw.
@@ -569,7 +615,9 @@ async function finishTask(
  * Polls a task once: pending, failed with the classified error, or done
  * with the downloaded clip. A poll 404 (task unknown) returns failed with a
  * retryable 503; a 429, 5xx, timeout or network failure is thrown, so the
- * runner keeps the job pending.
+ * runner keeps the job pending. A key missing or refused (401/403) is thrown
+ * as a plain error, so the runner marks the job expired and a later run
+ * adopts the same task.
  *
  * @param ctx - Plugin context.
  * @param staleSeen - Request keys already answered stale in this process.
@@ -585,9 +633,12 @@ async function pollJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<VideoJobPoll> {
-  // Read the task once; a task apimodels does not know is lost, so the runner submits anew.
+  // Without a valid key the task stays adoptable: the job must not read as failed.
   const job = decodeJobId(jobId);
-  const apiKey = resolveApiKey(ctx);
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) throw pollKeyError();
+
+  // Read the task once; a task apimodels does not know is lost, so the runner submits anew.
   let data: unknown;
   try {
     data = await apiData(
@@ -602,6 +653,7 @@ async function pollJob(
       "poll response"
     );
   } catch (error) {
+    if (isKeyRejection(error)) throw pollKeyError();
     if (!isTaskUnknown(error)) throw error;
     return lostTaskPoll(ctx, job);
   }

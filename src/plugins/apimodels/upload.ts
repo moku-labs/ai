@@ -5,6 +5,7 @@
  * by MIME type and the `VideoFile.hash` the runner delivered (never
  * recomputed). One call uploads each distinct file once, at most
  * {@link SLOTS} at a time; a 429 waits `Retry-After` once before it is thrown.
+ * Concurrent submits share an upload still in flight ({@link shareInFlight}).
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,22 @@ export type UploadOptions = {
   apiKey: string;
   /** Caller abort signal. */
   signal?: AbortSignal | undefined;
+};
+
+/**
+ * What {@link shareInFlight} hands a caller: the pending call, and whether
+ * this caller started it.
+ *
+ * @example
+ * ```ts
+ * const shared: InFlight<string> = { result: Promise.resolve("https://files.apimodels.app/a.png"), started: true };
+ * ```
+ */
+export type InFlight<T> = {
+  /** The pending call, the same promise for every caller of one key while it runs. */
+  result: Promise<T>;
+  /** True for the caller that started the call; false for one that joined it. */
+  started: boolean;
 };
 
 /** How many uploads (and, in `assets.ts`, registrations) of one submit run at once. */
@@ -128,6 +145,39 @@ export async function mapInSlots<Item, Result>(
 }
 
 /**
+ * Runs `start` once per key while it is pending: a caller that comes with a
+ * key already in `pending` joins that call instead of starting its own. The
+ * entry is removed when the call settles, so a failed call is tried again by
+ * the next caller. `start` keeps its own cache write inside, so no caller
+ * sees neither the cache nor the call.
+ *
+ * @param pending - The calls in flight, by key (a `State` map).
+ * @param key - What the call is for, e.g. an upload key.
+ * @param start - Starts the call.
+ * @returns The shared call, and whether this caller started it.
+ * @example
+ * ```ts
+ * const pending = new Map<string, Promise<string>>();
+ * shareInFlight(pending, "k", async () => "url").started; // => true
+ * shareInFlight(pending, "k", async () => "other").started; // => false: it joins the first call
+ * ```
+ */
+export function shareInFlight<T>(
+  pending: Map<string, Promise<T>>,
+  key: string,
+  start: () => Promise<T>
+): InFlight<T> {
+  const running = pending.get(key);
+  if (running !== undefined) return { result: running, started: false };
+
+  const result = start().finally(() => {
+    pending.delete(key);
+  });
+  pending.set(key, result);
+  return { result, started: true };
+}
+
+/**
  * Reads an input file's bytes.
  *
  * @param file - The input file.
@@ -194,9 +244,10 @@ async function postFile(
 }
 
 /**
- * Makes one file readable by apimodels: its cached URL, or a new upload.
+ * Makes one file readable by apimodels: its cached URL, the upload of a
+ * concurrent submit still in flight, or a new upload.
  *
- * @param ctx - Plugin context (`state.uploads`).
+ * @param ctx - Plugin context (`state.uploads`, `state.uploadsInFlight`).
  * @param file - The input file.
  * @param options - Key and caller signal.
  * @returns The public URL.
@@ -210,9 +261,13 @@ async function uploadOne(
   const cached = ctx.state.uploads.get(key);
   if (cached !== undefined) return cached;
 
-  const url = await postFile(ctx, file, await readInput(file), options);
-  ctx.state.uploads.set(key, url);
-  return url;
+  // Upload it once: a concurrent submit with the same file joins this call.
+  const upload = async (): Promise<string> => {
+    const url = await postFile(ctx, file, await readInput(file), options);
+    ctx.state.uploads.set(key, url);
+    return url;
+  };
+  return shareInFlight(ctx.state.uploadsInFlight, key, upload).result;
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   invalidateStaleAssets,
   isStaleAssetFailure,
   isStaleAssetRejection,
+  isStaleGroupRejection,
   listInputs,
   readAssetSelectors,
   resolveAssets,
@@ -431,6 +432,167 @@ describe("resolveAssets", () => {
   });
 });
 
+describe("resolveAssets in flight", () => {
+  it("two concurrent calls with the same face share one upload, one group and one registration", async () => {
+    const api = stubApi();
+    const journal = createFakeJournal();
+    const ctx = createTestCtx({ journal });
+
+    const [first, second] = await Promise.all([
+      resolveAssets(ctx, [anna], OPTIONS),
+      resolveAssets(ctx, [anna], OPTIONS)
+    ]);
+
+    expect(api.count("upload")).toBe(1);
+    expect(api.count("group")).toBe(1);
+    expect(api.count("register")).toBe(1);
+    expect(first.urls).toEqual(["asset://asset-1"]);
+    expect(second.urls).toEqual(["asset://asset-1"]);
+    expect(first.assetUsd + second.assetUsd).toBe(0.01);
+    expect(journal.putProviderRecords).toHaveBeenCalledTimes(1);
+    expect(ctx.state.groupsInFlight.size).toBe(0);
+    expect(ctx.state.assetsInFlight.size).toBe(0);
+    expect(ctx.state.uploadsInFlight.size).toBe(0);
+  });
+
+  it("a shared registration that failed is dropped, so the next call registers again", async () => {
+    const api = stubApi({
+      register: n =>
+        n === 1
+          ? jsonResponse(500, { code: 500 })
+          : envelope({ id: "a", asset_url: "asset://again" })
+    });
+    const ctx = createTestCtx();
+
+    const failures = await Promise.allSettled([
+      resolveAssets(ctx, [anna], OPTIONS),
+      resolveAssets(ctx, [anna], OPTIONS)
+    ]);
+    const retried = await resolveAssets(ctx, [anna], OPTIONS);
+
+    expect(failures.map(outcome => outcome.status)).toEqual(["rejected", "rejected"]);
+    expect(retried.urls).toEqual(["asset://again"]);
+    expect(api.count("register")).toBe(2);
+    expect(ctx.state.assetsInFlight.size).toBe(0);
+  });
+});
+
+/** A register answer saying the group is gone. */
+function groupGone(): Response {
+  return jsonResponse(404, { code: 404, msg: "asset group grp-old does not exist" });
+}
+
+describe("stale asset group", () => {
+  /** The journal identity of the test account's group record. */
+  const groupKey = recordKey({
+    provider: "apimodels",
+    account: ACCOUNT,
+    kind: "asset-group",
+    key: "moku-ai"
+  });
+
+  it("isStaleGroupRejection: a terminal 4xx whose text names the group", () => {
+    expect(
+      isStaleGroupRejection(new TerminalProviderError("x", 404, upstream(undefined, "group gone")))
+    ).toBe(true);
+    expect(
+      isStaleGroupRejection(new TerminalProviderError("x", 400, upstream(undefined, "bad url")))
+    ).toBe(false);
+    expect(
+      isStaleGroupRejection(new TerminalProviderError("x", 500, upstream(undefined, "group")))
+    ).toBe(false);
+    expect(isStaleGroupRejection(new RetryableProviderError("group", { status: 503 }))).toBe(false);
+    expect(isStaleGroupRejection(new FlaggedProviderError("group"))).toBe(false);
+  });
+
+  it("a register 4xx naming the group: forgets it in both tiers, creates it once more, registers again", async () => {
+    const api = stubApi({
+      register: n => (n === 1 ? groupGone() : envelope({ id: "a2", asset_url: "asset://a2" })),
+      group: () => envelope({ id: "grp-new" })
+    });
+    const journal = createFakeJournal();
+    journal.records.set(groupKey, "grp-old");
+    const ctx = createTestCtx({ journal });
+
+    const resolved = await resolveAssets(ctx, [anna], OPTIONS);
+
+    expect(resolved).toEqual({ urls: ["asset://a2"], assetUsd: 0.01 });
+    expect(api.count("group")).toBe(1);
+    expect(api.calls("register").map(call => jsonBodyOf(call).group_id)).toEqual([
+      "grp-old",
+      "grp-new"
+    ]);
+    expect(journal.deleteProviderRecord).toHaveBeenCalledWith({
+      provider: "apimodels",
+      account: ACCOUNT,
+      kind: "asset-group",
+      key: "moku-ai"
+    });
+    expect(journal.records.get(groupKey)).toBe("grp-new");
+    expect(ctx.state.groups.get(ACCOUNT)).toBe("grp-new");
+    expect(journal.records.get(assetRecordKey(anna))).toBe("asset://a2");
+  });
+
+  it("journal not open: forgets the state tier only, then creates the group once more", async () => {
+    const api = stubApi({
+      register: n => (n === 1 ? groupGone() : envelope({ id: "a2", asset_url: "asset://a2" })),
+      group: () => envelope({ id: "grp-new" })
+    });
+    const journal = createFakeJournal(false);
+    const ctx = createTestCtx({ journal });
+    ctx.state.groups.set(ACCOUNT, "grp-old");
+
+    const resolved = await resolveAssets(ctx, [anna], OPTIONS);
+
+    expect(resolved.urls).toEqual(["asset://a2"]);
+    expect(api.count("group")).toBe(1);
+    expect(ctx.state.groups.get(ACCOUNT)).toBe("grp-new");
+    expect(journal.deleteProviderRecord).not.toHaveBeenCalled();
+  });
+
+  it("a second group failure is thrown as is", async () => {
+    const api = stubApi({ register: groupGone });
+    const ctx = createTestCtx();
+    ctx.state.groups.set(ACCOUNT, "grp-old");
+
+    const error = await rejectionOf(() => resolveAssets(ctx, [anna], OPTIONS));
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ status: 404 });
+    expect((error as Error).message).toContain("asset group grp-old does not exist");
+    expect(api.count("register")).toBe(2);
+    expect(api.count("group")).toBe(1);
+  });
+
+  it("a register 4xx that does not name the group is thrown at once", async () => {
+    const api = stubApi({ register: () => jsonResponse(400, { code: 400, msg: "bad url" }) });
+
+    const error = await rejectionOf(() => resolveAssets(createTestCtx(), [anna], OPTIONS));
+
+    expect(error).toMatchObject({ status: 400 });
+    expect(api.count("register")).toBe(1);
+    expect(api.count("group")).toBe(1);
+  });
+
+  it("two faces of one submit that hit the stale group create one new group", async () => {
+    const api = stubApi({
+      register: (_n, body) =>
+        body.group_id === "grp-old"
+          ? groupGone()
+          : envelope({ id: String(body.url), asset_url: `asset://${String(body.url).length}` }),
+      group: () => envelope({ id: "grp-new" })
+    });
+    const ctx = createTestCtx();
+    ctx.state.groups.set(ACCOUNT, "grp-old");
+
+    const resolved = await resolveAssets(ctx, [anna, ben], OPTIONS);
+
+    expect(resolved.urls).toHaveLength(2);
+    expect(api.count("group")).toBe(1);
+    expect(api.count("register")).toBe(4);
+  });
+});
+
 describe("stale assets", () => {
   it("isStaleAssetFailure: INVALID_INPUT whose text mentions an asset", () => {
     expect(isStaleAssetFailure("INVALID_INPUT", "Asset asset://a1 not found")).toBe(true);
@@ -461,21 +623,36 @@ describe("stale assets", () => {
     expect(isStaleAssetRejection(new RetryableProviderError("asset", { status: 503 }))).toBe(false);
   });
 
-  it("usedAssetsOf: the account, the named hashes, and one key for the whole input set", () => {
+  it("usedAssetsOf: the account, the named hashes, and one key for the model, prompt, seconds and inputs", () => {
     const used = usedAssetsOf(staleRequest(), TEST_KEY);
-    const inputsHash = createHash("sha256")
-      .update([anna.hash, "", ben.hash].join(":"))
+    const requestHash = createHash("sha256")
+      .update(["seedance-2.5-ref", "p", "", anna.hash, "", ben.hash].join(":"))
       .digest("hex");
     expect(used).toEqual({
       account: ACCOUNT,
       hashes: [anna.hash, ben.hash],
-      requestKey: `${ACCOUNT}:${inputsHash}`
+      requestKey: `${ACCOUNT}:${requestHash}`
     });
     expect(
       usedAssetsOf({ ...staleRequest(), refs: [voice], params: { assets: ["image"] } }, TEST_KEY)
         .requestKey
     ).not.toBe(used.requestKey);
     expect(usedAssetsOf({ ...staleRequest(), params: {} }, TEST_KEY).hashes).toEqual([]);
+  });
+
+  it("usedAssetsOf: a re-submit of the same item keeps its key; another item with the same face does not", () => {
+    const used = usedAssetsOf(staleRequest(), TEST_KEY);
+
+    expect(usedAssetsOf(staleRequest(), TEST_KEY).requestKey).toBe(used.requestKey);
+    expect(usedAssetsOf({ ...staleRequest(), prompt: "other" }, TEST_KEY).requestKey).not.toBe(
+      used.requestKey
+    );
+    expect(usedAssetsOf({ ...staleRequest(), seconds: 8 }, TEST_KEY).requestKey).not.toBe(
+      used.requestKey
+    );
+    expect(
+      usedAssetsOf({ ...staleRequest(), model: "seedance-2.0-ref" }, TEST_KEY).requestKey
+    ).not.toBe(used.requestKey);
   });
 
   it("first time: drops both tiers and returns a retryable 503; second time: terminal 400", () => {

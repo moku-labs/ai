@@ -13,7 +13,7 @@ import type { VideoHandler } from "../../../video/contract";
 import { apimodelsPlugin } from "../../index";
 import type { ApimodelsApi, ApimodelsContext, ApimodelsInfo, Config } from "../../types";
 import { createVideoHandler } from "../../video/handler";
-import { CLIP, completedTask, envelope, stubApi } from "../unit/fixtures";
+import { CLIP, completedTask, envelope, jsonResponse, stubApi } from "../unit/fixtures";
 
 // ---------------------------------------------------------------------------
 // Integration: apimodels registered in onInit through the real createApp
@@ -196,6 +196,36 @@ describe("apimodels integration", () => {
     expect(api.count("submit")).toBe(1);
     expect(api.calls("poll").map(call => new URL(call.url).searchParams.get("task_id"))).toEqual([
       "task-42"
+    ]);
+  });
+
+  it("a 401 on the poll leaves the job expired, not failed: the next run adopts the same task", async () => {
+    let isKeyValid = false;
+    const api = stubApi({
+      poll: taskId => (isKeyValid ? completedTask(taskId) : jsonResponse(401, {}))
+    });
+    writeFileSync(
+      path.join(dir, "shots.moku.yaml"),
+      buildYaml("shot-03", "She turns to the window.")
+    );
+    const app = await startApp();
+
+    const first = await app.runner.run({ files });
+    const [item] = app.probe.journal.listItems(first.runId);
+    const live = app.probe.journal.findLiveJob(item?.artifactKey ?? "");
+
+    expect(first.totals).toMatchObject({ done: 0, failed: 1 });
+    expect(live?.jobState).toBe("expired");
+    expect(JSON.parse(live?.externalId ?? "{}")).toMatchObject({ taskId: "task-1" });
+
+    isKeyValid = true;
+    const second = await app.runner.run({ files });
+
+    expect(second.totals).toMatchObject({ done: 1, failed: 0 });
+    expect(api.count("submit")).toBe(1);
+    expect(api.calls("poll").map(call => new URL(call.url).searchParams.get("task_id"))).toEqual([
+      "task-1",
+      "task-1"
     ]);
   });
 

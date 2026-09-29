@@ -82,6 +82,19 @@ function failedTask(failure: Record<string, unknown>): Response {
   return envelope({ taskId: "task-1", state: "failed", ...failure });
 }
 
+/**
+ * Asserts a poll error is the plain key error: no status, no kind, so the
+ * runner classifies it `unknown` and keeps the task adoptable.
+ */
+function expectPollAuthError(error: unknown): void {
+  expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+  expect(error).not.toHaveProperty("status");
+  expect(error).not.toHaveProperty("kind");
+  expect((error as Error).message).toBe(
+    "[ai] apimodels cannot poll without a valid API key.\n  Fix APIMODELS_API_KEY; the next run adopts the same task."
+  );
+}
+
 /** A submit apimodels rejects because an asset id is stale. */
 function staleAnswer(): Response {
   return jsonResponse(400, {
@@ -409,6 +422,43 @@ describe("submit", () => {
     expect(second).toMatchObject({ status: 400 });
   });
 
+  it("two items sharing a face each get the retryable path on their first stale answer", async () => {
+    const api = stubApi({ submit: staleAnswer });
+    const handler = createVideoHandler(createTestCtx());
+    const first = shot({ prompt: "She turns to the window.", params: { assets: ["image"] } });
+    const second = shot({ prompt: "She smiles at the camera.", params: { assets: ["image"] } });
+
+    const firstError = await rejectionOf(() => handler.submit(first, {}));
+    const secondError = await rejectionOf(() => handler.submit(second, {}));
+
+    expect(firstError).toBeInstanceOf(RetryableProviderError);
+    expect(secondError).toBeInstanceOf(RetryableProviderError);
+    expect(secondError).toMatchObject({ status: 503 });
+    expect(api.count("submit")).toBe(2);
+  });
+
+  it("two concurrent submits with the same face: one POST /files, one POST /assets/groups, one POST /assets", async () => {
+    const api = stubApi();
+    const ctx = createTestCtx();
+    const handler = createVideoHandler(ctx);
+
+    const jobs = await Promise.all([
+      handler.submit(shot({ prompt: "one", params: { assets: ["image"] } }), {}),
+      handler.submit(shot({ prompt: "two", params: { assets: ["image"] } }), {})
+    ]);
+
+    expect(api.count("upload")).toBe(1);
+    expect(api.count("group")).toBe(1);
+    expect(api.count("register")).toBe(1);
+    expect(api.count("submit")).toBe(2);
+    expect(api.calls("submit").map(call => jsonBodyOf(call).first_frame_url)).toEqual([
+      "asset://asset-1",
+      "asset://asset-1"
+    ]);
+    const assetUsd = jobs.map(job => (JSON.parse(job.jobId) as { assetUsd: number }).assetUsd);
+    expect(assetUsd.toSorted((left, right) => left - right)).toEqual([0, 0.01]);
+  });
+
   it("an INVALID_INPUT naming an asset is terminal when the request named no assets", async () => {
     stubApi({
       submit: () =>
@@ -703,13 +753,35 @@ describe("poll", () => {
     expect(error).toBeInstanceOf(RetryableProviderError);
   });
 
-  it("a 401 on the poll is thrown terminal", async () => {
-    stubApi({ poll: () => jsonResponse(401, {}) });
+  it.each([
+    [401],
+    [403]
+  ])("an HTTP %d on the poll is thrown as a plain error with no status (the runner marks the job expired)", async status => {
+    stubApi({ poll: () => jsonResponse(status, {}) });
+
     const error = await rejectionOf(() =>
       createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
     );
-    expect(error).toBeInstanceOf(TerminalProviderError);
-    expect(error).toMatchObject({ status: 401 });
+
+    expectPollAuthError(error);
+  });
+
+  it("an envelope code 401 on the poll is thrown as the same plain error", async () => {
+    stubApi({ poll: () => envelope(undefined, 401) });
+    const error = await rejectionOf(() =>
+      createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
+    );
+    expectPollAuthError(error);
+  });
+
+  it("a missing key at poll time is thrown as the same plain error, before any fetch", async () => {
+    const fetchMock = stubFetch();
+    const handler = createVideoHandler(createTestCtx({ env: createFakeEnv({}) }));
+
+    const error = await rejectionOf(() => handler.poll(jobIdOf(), shot(), {}));
+
+    expectPollAuthError(error);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("a malformed job id is thrown terminal 400, before any fetch", async () => {

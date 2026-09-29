@@ -65,8 +65,9 @@ export type Config = {
 };
 
 /**
- * apimodels plugin state: the memoized price table and the process-wide
- * caches of uploads, asset ids and asset group ids.
+ * apimodels plugin state: the memoized price table, the process-wide
+ * caches of uploads, asset ids and asset group ids, and the calls of those
+ * three kinds still in flight, so concurrent submits share one call.
  */
 export type State = {
   /** Merged price table (bundled + overrides), memoized on first use. */
@@ -77,6 +78,12 @@ export type State = {
   assets: Map<string, string>;
   /** Asset group id per account fingerprint, first tier. */
   groups: Map<string, string>;
+  /** In-flight group creation per account, so concurrent submits share one POST /assets/groups. */
+  groupsInFlight: Map<string, Promise<string>>;
+  /** In-flight registration per "<account>:<hash>", so concurrent submits share one POST /assets. */
+  assetsInFlight: Map<string, Promise<string>>;
+  /** In-flight upload per upload key, so concurrent submits share one POST /files. */
+  uploadsInFlight: Map<string, Promise<string>>;
   /** True once a "journal not open" skip was logged, so it logs once. */
   journalSkipLogged: boolean;
 };

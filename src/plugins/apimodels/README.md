@@ -92,12 +92,16 @@ by itself. Name only portraits: props, locations and sketch sheets never need to
 - **Cost.** A registration costs `asset` (0.01). Each one logs `apimodels:asset:registered { account, usd }`, so a
   submit that fails later still leaves an audit line. The submit's registrations ride in the job id and are added
   to the done cost. The estimate adds 0.01 per named input: a worst case, it cannot see the cache.
+- **In flight.** Concurrent submits share one pending call: the group per account, the registration per account
+  and face, the upload per file. The entry is dropped when the call settles; only the submit that made a call pays for it.
+- **Stale group.** A 4xx on `POST /assets` whose text names the group drops the group id from both tiers, resolves
+  the group again (created once) and registers once more. A second failure is thrown as is.
 - **Moderation.** A 422 on `POST /assets` (moderation, or a URL apimodels cannot fetch; not charged) is flagged
   before any clip is paid. 402 is terminal. 429 and 5xx are retryable.
 - **Stale ids.** A submit or poll that fails with `INVALID_INPUT` naming an asset drops every asset record the
   request used, from both tiers. `submit` throws a retryable 503, `poll` returns `failed` with a retryable 503, so
-  the next attempt registers again. The second stale answer for the same account and input set in one process is
-  a terminal 400.
+  the next attempt registers again. The second stale answer for the same item (account, model, prompt, seconds and
+  inputs) in one process is a terminal 400. Two items that share a face each get their own retry.
 - **Slots.** Uploads and registrations of one submit run 4 at a time. A 429 among them waits `Retry-After` once
   (capped at `timeoutMs`, 1 s without the header), then is thrown.
 
@@ -122,6 +126,7 @@ by itself. Name only portraits: props, locations and sketch sheets never need to
 | `failed`, `retryable: true`, or `UPSTREAM_BUSY` / `UPSTREAM_FAILED` / `TIMEOUT` / `INTERNAL_ERROR` / `OTHER` | `failed`, retryable 503 |
 | `failed`, anything else | `failed`, terminal 400 |
 | HTTP 429 / 5xx / timeout / network on the poll | thrown retryable: the runner keeps the job pending |
+| Key missing at poll time, or HTTP 401/403 on the poll | thrown plain error, no status: the runner marks the job expired; fix the key and the next run adopts the same task |
 
 `data.retryable` wins over the failCode when present.
 
@@ -134,9 +139,9 @@ clip is paid again. A dead result counts as one failed attempt: an item with one
 
 | Condition | Result |
 | --- | --- |
-| Key not set | Terminal 401, before any network call |
+| Key not set at submit | Terminal 401, before any network call |
 | Unknown model, missing image, refused field, bad resolution or seconds, too many refs, bad `params.assets` | Terminal 400, before any upload |
-| 401 / 403 | Terminal: check `APIMODELS_API_KEY` |
+| 401 / 403 at submit | Terminal: check `APIMODELS_API_KEY` |
 | 402 | Terminal: balance too low |
 | 422 on asset registration, or failCode `CONTENT_MODERATION` | Flagged, never re-queued |
 | Other 4xx | Terminal |
