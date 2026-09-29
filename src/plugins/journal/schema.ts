@@ -72,10 +72,6 @@ const ADDED_COLUMNS: Readonly<Record<string, ReadonlyArray<readonly [string, str
  * missing. Reads `PRAGMA table_info` per table, so running it twice is a no-op.
  *
  * @param driver - Open SQLite driver.
- * @example
- * ```ts
- * migrateSchema(driver);
- * ```
  */
 export function migrateSchema(driver: SqliteDriver): void {
   for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
@@ -95,10 +91,6 @@ export function migrateSchema(driver: SqliteDriver): void {
  * Never a free-form payload column, by construction.
  *
  * @param driver - Open SQLite driver.
- * @example
- * ```ts
- * createSchema(driver);
- * ```
  */
 export function createSchema(driver: SqliteDriver): void {
   driver.exec(SCHEMA_SQL);

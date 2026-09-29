@@ -6,6 +6,11 @@ import type { SqliteDriver } from "./driver/types";
 /**
  * Journal core plugin configuration: durable file path, checkpoint cadence,
  * and SQLite busy-timeout tuning.
+ *
+ * @example
+ * ```ts
+ * const app = createApp({ pluginConfigs: { journal: { path: ".moku/journal.db" } } });
+ * ```
  */
 export type Config = {
   /** Path to the journal database file. */

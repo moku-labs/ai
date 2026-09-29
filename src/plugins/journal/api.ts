@@ -79,10 +79,6 @@ type RunDatabaseRow = {
  *
  * @param row - Raw database row.
  * @returns The public item representation.
- * @example
- * ```ts
- * const item = mapItem(row);
- * ```
  */
 function mapItem(row: ItemDatabaseRow): ItemRow {
   return {
@@ -111,10 +107,6 @@ function mapItem(row: ItemDatabaseRow): ItemRow {
  *
  * @param row - Raw database row.
  * @returns The public run representation.
- * @example
- * ```ts
- * const run = mapRun(row);
- * ```
  */
 function mapRun(row: RunDatabaseRow): RunRow {
   return {
@@ -133,10 +125,6 @@ function mapRun(row: RunDatabaseRow): RunRow {
  * @param state - Journal plugin state.
  * @returns The open SqliteDriver.
  * @throws {Error} When `onStart` has not run yet (driver is null).
- * @example
- * ```ts
- * const driver = requireDriver(state);
- * ```
  */
 function requireDriver(state: State): SqliteDriver {
   if (!state.driver) {
@@ -151,10 +139,6 @@ function requireDriver(state: State): SqliteDriver {
  * @param driver - Any open SqliteDriver (primary or short-lived).
  * @param runId - Run id to look up.
  * @returns The run row, or undefined if not found.
- * @example
- * ```ts
- * const run = readRun(driver, runId);
- * ```
  */
 function readRun(driver: SqliteDriver, runId: string): RunRow | undefined {
   const row = driver.get<RunDatabaseRow>("SELECT * FROM runs WHERE id = ?", [runId]);
@@ -167,10 +151,6 @@ function readRun(driver: SqliteDriver, runId: string): RunRow | undefined {
  * @param driver - Any open SqliteDriver (primary or short-lived).
  * @param runId - Run id to aggregate.
  * @returns Aggregate counts and spend for the run.
- * @example
- * ```ts
- * const totals = readTotals(driver, runId);
- * ```
  */
 function readTotals(driver: SqliteDriver, runId: string): RunTotals {
   const row = driver.get<{
@@ -216,10 +196,6 @@ function readTotals(driver: SqliteDriver, runId: string): RunTotals {
  * @param runId - Run id to read.
  * @param limit - Maximum number of rows to return.
  * @returns The most recently updated items, newest first.
- * @example
- * ```ts
- * const recent = readRecentItems(driver, runId, 20);
- * ```
  */
 function readRecentItems(driver: SqliteDriver, runId: string, limit: number): ItemRow[] {
   return driver
@@ -237,16 +213,12 @@ function readRecentItems(driver: SqliteDriver, runId: string, limit: number): It
  * @param runId - Run id to filter by.
  * @param filter - Optional status/limit/afterUpdatedAt filter.
  * @returns The SQL text and its bound parameters.
- * @example
- * ```ts
- * const { sql, params } = buildListItemsQuery(runId, { status: "queued" });
- * ```
  */
 function buildListItemsQuery(
   runId: string,
   filter?: ItemFilter
-): { sql: string; params: unknown[] } {
-  const params: unknown[] = [runId];
+): { sql: string; params: (string | number)[] } {
+  const params: (string | number)[] = [runId];
   let sql = "SELECT * FROM items WHERE run_id = ?";
 
   if (filter?.status) {
@@ -275,10 +247,6 @@ function buildListItemsQuery(
  * @param item - Planning-time intent for the item.
  * @param now - Current time (ms epoch), used as `updated_at` for new rows.
  * @returns The existing or newly inserted item row.
- * @example
- * ```ts
- * const row = insertOneItem(driver, runId, intent, Date.now());
- * ```
  */
 function insertOneItem(
   driver: SqliteDriver,
@@ -343,10 +311,6 @@ function insertOneItem(
  * @param item - The candidate item's raw row.
  * @param maxCostUsd - The run's budget cap, or null when uncapped.
  * @returns True when admitting this item would stay within the cap.
- * @example
- * ```ts
- * const withinBudget = isWithinBudget(driver, item, run.max_cost_usd);
- * ```
  */
 function isWithinBudget(
   driver: SqliteDriver,
@@ -378,10 +342,6 @@ function isWithinBudget(
  * @param opts.glob - The invocation's file pattern.
  * @param opts.maxCostUsd - Optional budget cap; omit for no cap.
  * @returns The newly created run row (status `active`).
- * @example
- * ```ts
- * const run = openRun(state, { glob: "voice/*.yaml" });
- * ```
  */
 function openRun(state: State, opts: { glob: string; maxCostUsd?: number }): RunRow {
   const driver = requireDriver(state);
@@ -410,10 +370,6 @@ function openRun(state: State, opts: { glob: string; maxCostUsd?: number }): Run
  * @param state - Journal plugin state.
  * @param runId - Run id to look up.
  * @returns The run row, or undefined if not found.
- * @example
- * ```ts
- * const run = getRun(state, runId);
- * ```
  */
 function getRun(state: State, runId: string): RunRow | undefined {
   const driver = requireDriver(state);
@@ -454,10 +410,6 @@ function latestResumableRun(
  * @param runId - Run id the items belong to.
  * @param items - Planning-time item intents.
  * @returns The existing or newly inserted item rows, in input order.
- * @example
- * ```ts
- * const rows = insertItems(state, runId, [intent]);
- * ```
  */
 function insertItems(state: State, runId: string, items: ItemIntent[]): ItemRow[] {
   const driver = requireDriver(state);
@@ -474,10 +426,6 @@ function insertItems(state: State, runId: string, items: ItemIntent[]): ItemRow[
  * @param state - Journal plugin state.
  * @param runId - Run id to requeue.
  * @returns The number of items requeued.
- * @example
- * ```ts
- * const count = requeueDispatching(state, runId);
- * ```
  */
 function requeueDispatching(state: State, runId: string): number {
   const driver = requireDriver(state);
@@ -501,10 +449,6 @@ function requeueDispatching(state: State, runId: string): number {
  * @returns `{ ok: true }` on admission, or `{ ok: false, reason }` when
  *   blocked by the budget cap or a duplicate admission attempt.
  * @throws {Error} When the item or its run cannot be found.
- * @example
- * ```ts
- * const result = gateToDispatching(state, itemId);
- * ```
  */
 function gateToDispatching(state: State, itemId: string): GateResult {
   const driver = requireDriver(state);
@@ -548,10 +492,6 @@ function gateToDispatching(state: State, itemId: string): GateResult {
  * @param itemId - Item id the attempt belongs to.
  * @param attempt - Provider, account, and start time.
  * @returns The new attempt's id.
- * @example
- * ```ts
- * const attemptId = recordAttempt(state, itemId, { provider: "elevenlabs", account: "default", startedAt: Date.now() });
- * ```
  */
 function recordAttempt(state: State, itemId: string, attempt: AttemptStart): number {
   const driver = requireDriver(state);
@@ -571,10 +511,6 @@ function recordAttempt(state: State, itemId: string, attempt: AttemptStart): num
  * @param state - Journal plugin state.
  * @param attemptId - Attempt id, from `recordAttempt`.
  * @param end - End time, outcome, and optional error class / cost.
- * @example
- * ```ts
- * finishAttempt(state, attemptId, { endedAt: Date.now(), outcome: "done" });
- * ```
  */
 function finishAttempt(state: State, attemptId: number, end: AttemptEnd): void {
   const driver = requireDriver(state);
@@ -597,10 +533,6 @@ function finishAttempt(state: State, attemptId: number, end: AttemptEnd): void {
  * @param result.artifactKey - Artifact identity key (planning key + provider + pack version).
  * @param result.contentHash - CAS content hash of the produced artifact.
  * @param result.mimeType - MIME type of the produced artifact, when known.
- * @example
- * ```ts
- * commitDone(state, itemId, { actualCostUsd: 0.2, artifactKey, contentHash });
- * ```
  */
 function commitDone(
   state: State,
@@ -630,10 +562,6 @@ function commitDone(
  * @param state - Journal plugin state.
  * @param artifactKey - Artifact identity key.
  * @returns The artifact's content hash and mime type, or undefined.
- * @example
- * ```ts
- * const hit = findDoneArtifact(state, artifactKey);
- * ```
  */
 function findDoneArtifact(state: State, artifactKey: string): DoneArtifact | undefined {
   const driver = requireDriver(state);
@@ -652,10 +580,6 @@ function findDoneArtifact(state: State, artifactKey: string): DoneArtifact | und
  * @param state - Journal plugin state.
  * @param itemId - Item id to complete.
  * @param artifact - The reused artifact's content hash and mime type.
- * @example
- * ```ts
- * reuseDone(state, itemId, { contentHash, mimeType: "video/mp4" });
- * ```
  */
 function reuseDone(state: State, itemId: string, artifact: DoneArtifact): void {
   const driver = requireDriver(state);
@@ -675,10 +599,6 @@ function reuseDone(state: State, itemId: string, artifact: DoneArtifact): void {
  * @param job - The provider job id (when known) and the job state.
  * @param job.externalId - Provider job id; omit to keep the stored one.
  * @param job.jobState - The job's lifecycle state.
- * @example
- * ```ts
- * setAttemptJob(state, attemptId, { externalId: "req-1", jobState: "submitted" });
- * ```
  */
 function setAttemptJob(
   state: State,
@@ -705,10 +625,6 @@ function setAttemptJob(
  * @param state - Journal plugin state.
  * @param artifactKey - Artifact identity key.
  * @returns The live job, or undefined.
- * @example
- * ```ts
- * const live = findLiveJob(state, artifactKey);
- * ```
  */
 function findLiveJob(state: State, artifactKey: string): LiveJob | undefined {
   const driver = requireDriver(state);
@@ -735,10 +651,6 @@ function findLiveJob(state: State, artifactKey: string): LiveJob | undefined {
  *
  * @param state - Journal plugin state.
  * @returns The newest run, or undefined when the journal is empty.
- * @example
- * ```ts
- * const run = latestRun(state);
- * ```
  */
 function latestRun(state: State): RunRow | undefined {
   const driver = requireDriver(state);
@@ -755,10 +667,6 @@ function latestRun(state: State): RunRow | undefined {
  * @param runId - Run id the item belongs to.
  * @param planningKey - The item's planning key.
  * @returns The item row, or undefined.
- * @example
- * ```ts
- * const dep = getItem(state, runId, planningKey);
- * ```
  */
 function getItem(state: State, runId: string, planningKey: string): ItemRow | undefined {
   const driver = requireDriver(state);
@@ -778,10 +686,6 @@ function getItem(state: State, runId: string, planningKey: string): ItemRow | un
  * @param result - The error class and whether it is terminal.
  * @param result.errorClass - Classification of the failure.
  * @param result.terminal - True for a terminal failure; false to retry (re-queue).
- * @example
- * ```ts
- * markFailed(state, itemId, { errorClass: "http-5xx", terminal: false });
- * ```
  */
 function markFailed(
   state: State,
@@ -810,10 +714,6 @@ function markFailed(
  *
  * @param state - Journal plugin state.
  * @param itemId - Item id to flag.
- * @example
- * ```ts
- * markFlagged(state, itemId);
- * ```
  */
 function markFlagged(state: State, itemId: string): void {
   const driver = requireDriver(state);
@@ -832,10 +732,6 @@ function markFlagged(state: State, itemId: string): void {
  * @param state - Journal plugin state.
  * @param runId - Run id to update.
  * @param status - The new run status.
- * @example
- * ```ts
- * setRunStatus(state, runId, "done");
- * ```
  */
 function setRunStatus(state: State, runId: string, status: RunStatus): void {
   const driver = requireDriver(state);
@@ -854,10 +750,6 @@ function setRunStatus(state: State, runId: string, status: RunStatus): void {
  * @param state - Journal plugin state.
  * @param runId - Run id to aggregate.
  * @returns Aggregate counts and spend for the run.
- * @example
- * ```ts
- * const totals = totalsOf(state, runId);
- * ```
  */
 function totalsOf(state: State, runId: string): RunTotals {
   const driver = requireDriver(state);
@@ -872,10 +764,6 @@ function totalsOf(state: State, runId: string): RunTotals {
  * @param runId - Run id to list.
  * @param filter - Optional status/limit/afterUpdatedAt filter.
  * @returns The matching items, oldest-updated first.
- * @example
- * ```ts
- * const queued = listItemsOf(state, runId, { status: "queued" });
- * ```
  */
 function listItemsOf(state: State, runId: string, filter?: ItemFilter): ItemRow[] {
   const driver = requireDriver(state);
@@ -893,10 +781,6 @@ function listItemsOf(state: State, runId: string, filter?: ItemFilter): ItemRow[
  * @param runId - Run id to read.
  * @returns The run's snapshot.
  * @throws {Error} When the run cannot be found.
- * @example
- * ```ts
- * const snapshot = readRunSnapshot(state, config, runId);
- * ```
  */
 function readRunSnapshot(state: State, config: Config, runId: string): RunSnapshot {
   requireDriver(state);
@@ -925,10 +809,6 @@ function readRunSnapshot(state: State, config: Config, runId: string): RunSnapsh
  * Runs a manual `wal_checkpoint(TRUNCATE)` on the primary connection.
  *
  * @param state - Journal plugin state.
- * @example
- * ```ts
- * checkpointNow(state);
- * ```
  */
 function checkpointNow(state: State): void {
   const driver = requireDriver(state);
@@ -941,131 +821,41 @@ function checkpointNow(state: State): void {
  * @param ctx - Core plugin context (config + state).
  * @returns The journal's public API, injected as `ctx.journal` on every
  *   regular plugin's context.
- * @example
- * ```ts
- * const api = createJournalApi({ config, state });
- * ```
  */
 export function createJournalApi(ctx: CorePluginContext<Config, State>): JournalApi {
   const { config, state } = ctx;
 
-  /**
-   * Creates the single `runs` row for one invocation, bound to this API's state.
-   *
-   * @param opts - The invocation's file glob and optional budget cap.
-   * @param opts.glob - The invocation's file pattern.
-   * @param opts.maxCostUsd - Optional budget cap; omit for no cap.
-   * @returns The newly created run row (status `active`).
-   * @example
-   * ```ts
-   * const run = api.openRun({ glob: "voice/*.yaml" });
-   * ```
-   */
+  // Creates the single `runs` row for one invocation.
   const boundOpenRun = (opts: { glob: string; maxCostUsd?: number }): RunRow =>
     openRun(state, opts);
 
-  /**
-   * Looks up one run by id, bound to this API's state.
-   *
-   * @param runId - Run id to look up.
-   * @returns The run row, or undefined if not found.
-   * @example
-   * ```ts
-   * const run = api.getRun(runId);
-   * ```
-   */
+  // Looks up one run by id.
   const boundGetRun = (runId: string): RunRow | undefined => getRun(state, runId);
 
-  /**
-   * Finds the latest resumable run not in `exclude`, bound to this API's state.
-   *
-   * @param opts - Optional filter.
-   * @param opts.exclude - Run ids to skip; omitted or empty skips none.
-   * @returns The latest resumable run, or undefined if none exists.
-   */
+  // Finds the latest resumable run not in `exclude`.
   const boundLatestResumableRun = (opts?: { exclude?: readonly string[] }): RunRow | undefined =>
     latestResumableRun(state, opts);
 
-  /**
-   * Inserts planning-time item intents, bound to this API's state.
-   *
-   * @param runId - Run id the items belong to.
-   * @param items - Planning-time item intents.
-   * @returns The existing or newly inserted item rows, in input order.
-   * @example
-   * ```ts
-   * const rows = api.insertItems(runId, [intent]);
-   * ```
-   */
+  // Inserts planning-time item intents.
   const boundInsertItems = (runId: string, items: ItemIntent[]): ItemRow[] =>
     insertItems(state, runId, items);
 
-  /**
-   * Requeues every dispatching item of a run, bound to this API's state.
-   *
-   * @param runId - Run id to requeue.
-   * @returns The number of items requeued.
-   * @example
-   * ```ts
-   * const count = api.requeueDispatching(runId);
-   * ```
-   */
+  // Requeues every dispatching item of a run.
   const boundRequeueDispatching = (runId: string): number => requeueDispatching(state, runId);
 
-  /**
-   * The atomic budget + dedup gate, bound to this API's state.
-   *
-   * @param itemId - Item id to admit.
-   * @returns `{ ok: true }` on admission, or `{ ok: false, reason }` when blocked.
-   * @example
-   * ```ts
-   * const result = api.gateToDispatching(itemId);
-   * ```
-   */
+  // The atomic budget + dedup gate.
   const boundGateToDispatching = (itemId: string): GateResult => gateToDispatching(state, itemId);
 
-  /**
-   * Records the start of a provider attempt, bound to this API's state.
-   *
-   * @param itemId - Item id the attempt belongs to.
-   * @param attempt - Provider, account, and start time.
-   * @returns The new attempt's id.
-   * @example
-   * ```ts
-   * const attemptId = api.recordAttempt(itemId, { provider: "elevenlabs", account: "default", startedAt: Date.now() });
-   * ```
-   */
+  // Records the start of a provider attempt.
   const boundRecordAttempt = (itemId: string, attempt: AttemptStart): number =>
     recordAttempt(state, itemId, attempt);
 
-  /**
-   * Records the end of a provider attempt, bound to this API's state.
-   *
-   * @param attemptId - Attempt id, from `recordAttempt`.
-   * @param end - End time, outcome, and optional error class / cost.
-   * @example
-   * ```ts
-   * api.finishAttempt(attemptId, { endedAt: Date.now(), outcome: "done" });
-   * ```
-   */
+  // Records the end of a provider attempt.
   const boundFinishAttempt = (attemptId: number, end: AttemptEnd): void => {
     finishAttempt(state, attemptId, end);
   };
 
-  /**
-   * Transitions an item to done, bound to this API's state.
-   *
-   * @param itemId - Item id to complete.
-   * @param result - Actual cost, artifact key, and content hash.
-   * @param result.actualCostUsd - The item's actual, realized cost.
-   * @param result.artifactKey - Artifact identity key (planning key + provider + pack version).
-   * @param result.contentHash - CAS content hash of the produced artifact.
-   * @param result.mimeType - MIME type of the produced artifact, when known.
-   * @example
-   * ```ts
-   * api.commitDone(itemId, { actualCostUsd: 0.2, artifactKey, contentHash });
-   * ```
-   */
+  // Transitions an item to done.
   const boundCommitDone = (
     itemId: string,
     result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
@@ -1073,18 +863,7 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     commitDone(state, itemId, result);
   };
 
-  /**
-   * Transitions an item to failed or back to queued, bound to this API's state.
-   *
-   * @param itemId - Item id that failed.
-   * @param result - The error class and whether it is terminal.
-   * @param result.errorClass - Classification of the failure.
-   * @param result.terminal - True for a terminal failure; false to retry (re-queue).
-   * @example
-   * ```ts
-   * api.markFailed(itemId, { errorClass: "http-5xx", terminal: false });
-   * ```
-   */
+  // Transitions an item to failed or back to queued.
   const boundMarkFailed = (
     itemId: string,
     result: { errorClass: ErrorClass; terminal: boolean }
@@ -1092,80 +871,27 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     markFailed(state, itemId, result);
   };
 
-  /**
-   * Transitions an item to flagged, bound to this API's state.
-   *
-   * @param itemId - Item id to flag.
-   * @example
-   * ```ts
-   * api.markFlagged(itemId);
-   * ```
-   */
+  // Transitions an item to flagged.
   const boundMarkFlagged = (itemId: string): void => {
     markFlagged(state, itemId);
   };
 
-  /**
-   * Sets a run's status, bound to this API's state.
-   *
-   * @param runId - Run id to update.
-   * @param status - The new run status.
-   * @example
-   * ```ts
-   * api.setRunStatus(runId, "done");
-   * ```
-   */
+  // Sets a run's status.
   const boundSetRunStatus = (runId: string, status: RunStatus): void => {
     setRunStatus(state, runId, status);
   };
 
-  /**
-   * Computes aggregate item counts and spend, bound to this API's state.
-   *
-   * @param runId - Run id to aggregate.
-   * @returns Aggregate counts and spend for the run.
-   * @example
-   * ```ts
-   * const totals = api.totals(runId);
-   * ```
-   */
+  // Computes aggregate item counts and spend.
   const boundTotals = (runId: string): RunTotals => totalsOf(state, runId);
 
-  /**
-   * Lists a run's items, bound to this API's state.
-   *
-   * @param runId - Run id to list.
-   * @param filter - Optional status/limit/afterUpdatedAt filter.
-   * @returns The matching items, oldest-updated first.
-   * @example
-   * ```ts
-   * const queued = api.listItems(runId, { status: "queued" });
-   * ```
-   */
+  // Lists a run's items.
   const boundListItems = (runId: string, filter?: ItemFilter): ItemRow[] =>
     listItemsOf(state, runId, filter);
 
-  /**
-   * Reads a point-in-time run snapshot on its own short-lived connection,
-   * bound to this API's state and config.
-   *
-   * @param runId - Run id to read.
-   * @returns The run's snapshot.
-   * @example
-   * ```ts
-   * const snapshot = api.readSnapshot(runId);
-   * ```
-   */
+  // Reads a point-in-time run snapshot on its own short-lived connection.
   const boundReadSnapshot = (runId: string): RunSnapshot => readRunSnapshot(state, config, runId);
 
-  /**
-   * Runs a manual checkpoint, bound to this API's state.
-   *
-   * @example
-   * ```ts
-   * api.checkpoint();
-   * ```
-   */
+  // Runs a manual checkpoint.
   const boundCheckpoint = (): void => {
     checkpointNow(state);
   };
@@ -1180,77 +906,21 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     recordAttempt: boundRecordAttempt,
     finishAttempt: boundFinishAttempt,
     commitDone: boundCommitDone,
-    /**
-     * Finds a reusable done artifact by key, in any run. See {@link findDoneArtifact}.
-     *
-     * @param artifactKey - Artifact identity key.
-     * @returns The artifact, or undefined.
-     * @example
-     * ```ts
-     * api.findDoneArtifact(artifactKey);
-     * ```
-     */
+    // Finds a reusable done artifact by key, in any run.
     findDoneArtifact: (artifactKey: string) => findDoneArtifact(state, artifactKey),
-    /**
-     * Completes a queued item with a reused artifact. See {@link reuseDone}.
-     *
-     * @param itemId - Item id to complete.
-     * @param artifact - The reused artifact.
-     * @example
-     * ```ts
-     * api.reuseDone(itemId, artifact);
-     * ```
-     */
+    // Completes a queued item with a reused artifact.
     reuseDone: (itemId: string, artifact: DoneArtifact) => {
       reuseDone(state, itemId, artifact);
     },
-    /**
-     * Records a provider job on an attempt. See {@link setAttemptJob}.
-     *
-     * @param attemptId - Attempt id.
-     * @param job - Job id and state.
-     * @param job.externalId - Provider job id; omit to keep the stored one.
-     * @param job.jobState - The job's lifecycle state.
-     * @example
-     * ```ts
-     * api.setAttemptJob(attemptId, { externalId: "req-1", jobState: "submitted" });
-     * ```
-     */
+    // Records a provider job on an attempt.
     setAttemptJob: (attemptId: number, job: { externalId?: string; jobState: JobState }) => {
       setAttemptJob(state, attemptId, job);
     },
-    /**
-     * Finds a live provider job for an artifact key. See {@link findLiveJob}.
-     *
-     * @param artifactKey - Artifact identity key.
-     * @returns The live job (id, state, attempt row), or undefined.
-     * @example
-     * ```ts
-     * api.findLiveJob(artifactKey);
-     * ```
-     */
+    // Finds a live provider job for an artifact key.
     findLiveJob: (artifactKey: string) => findLiveJob(state, artifactKey),
-    /**
-     * Finds the newest run of any status. See {@link latestRun}.
-     *
-     * @returns The newest run, or undefined.
-     * @example
-     * ```ts
-     * api.latestRun();
-     * ```
-     */
+    // Finds the newest run of any status.
     latestRun: () => latestRun(state),
-    /**
-     * Looks up one item by run and planning key. See {@link getItem}.
-     *
-     * @param runId - Run id.
-     * @param planningKey - Planning key.
-     * @returns The item row, or undefined.
-     * @example
-     * ```ts
-     * api.getItem(runId, planningKey);
-     * ```
-     */
+    // Looks up one item by run and planning key.
     getItem: (runId: string, planningKey: string) => getItem(state, runId, planningKey),
     markFailed: boundMarkFailed,
     markFlagged: boundMarkFlagged,
