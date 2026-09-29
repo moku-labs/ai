@@ -215,6 +215,9 @@ const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 /** HTTP statuses that mean a plan or rate limit. */
 const LIMIT_STATUSES: ReadonlySet<number> = new Set([402, 429]);
 
+/** Lowest HTTP status of a server error (5xx): retried. */
+const MIN_SERVER_ERROR = 500;
+
 /**
  * A terminal 400 for a bad request field.
  *
@@ -471,9 +474,11 @@ function answerFailure(text: string): Error {
  * ```
  */
 export function readAnswer(body: unknown): ChatAnswer {
+  // An error answer can come with a 2xx status: it fails the request before anything is read.
   const error = errorTextOf(body);
   if (error !== undefined) throw answerFailure(error);
 
+  // The first choice carries the text; id, provider and usage come along for the result.
   const choices = readField(body, "choices");
   const choice: unknown = Array.isArray(choices) ? choices[0] : undefined;
   const content = readField(readField(choice, "message"), "content");
@@ -485,6 +490,7 @@ export function readAnswer(body: unknown): ChatAnswer {
     usage: readField(body, "usage")
   };
 
+  // Text wins; an answer cut by length before any content is empty; anything else is incomplete.
   if (typeof content === "string") return { ...answer, text: content };
   const isCutEmpty = finishReason === CUT_BY_LENGTH && (content === null || content === undefined);
   if (isCutEmpty) return { ...answer, text: "" };
@@ -535,7 +541,7 @@ function unavailableError(ctx: FalContext, error: unknown): PromptGenUnavailable
  */
 function isRetried(error: unknown): error is RetryableProviderError {
   if (!(error instanceof RetryableProviderError)) return false;
-  return (error.status ?? 0) >= 500 || error.kind === "timeout";
+  return (error.status ?? 0) >= MIN_SERVER_ERROR || error.kind === "timeout";
 }
 
 /**

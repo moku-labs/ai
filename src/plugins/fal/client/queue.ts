@@ -19,6 +19,11 @@ import {
 
 /**
  * A submitted fal queue job: everything `poll` needs, journaled as JSON.
+ *
+ * @example
+ * ```ts
+ * const job: FalJob = { endpoint: "fal-ai/stable-audio-25/text-to-audio", requestId: "019a-req", statusUrl: "https://queue.fal.run/fal-ai/stable-audio-25/requests/019a-req/status", responseUrl: "https://queue.fal.run/fal-ai/stable-audio-25/requests/019a-req" };
+ * ```
  */
 export type FalJob = {
   /** fal endpoint id the job was submitted to. */
@@ -362,18 +367,18 @@ async function checkTolerant(ctx: FalContext, job: FalJob, call: FalCall): Promi
 
 /**
  * Waits in-process until the job completes: one status read every
- * `config.pollMs`, at most `config.jobTimeoutMs`. The job keeps running on
+ * `config.pollIntervalMs`, at most `config.jobTimeoutMs`. The job keeps running on
  * fal after a timeout (and stays adoptable through `poll`); only this wait
  * gives up.
  *
- * @param ctx - Plugin context (`config.pollMs`, `config.jobTimeoutMs`, log).
+ * @param ctx - Plugin context (`config.pollIntervalMs`, `config.jobTimeoutMs`, log).
  * @param job - The job.
  * @param call - Transport options.
  * @returns Resolves once the job is `COMPLETED` without an error.
  * @throws {Error} The job's classified error, a retryable `timeout`, a non-retryable status error, or the abort reason.
  */
 export async function waitForJob(ctx: FalContext, job: FalJob, call: FalCall): Promise<void> {
-  const { pollMs, jobTimeoutMs } = ctx.config;
+  const { pollIntervalMs, jobTimeoutMs } = ctx.config;
   const deadline = Date.now() + jobTimeoutMs;
 
   for (;;) {
@@ -392,7 +397,7 @@ export async function waitForJob(ctx: FalContext, job: FalJob, call: FalCall): P
         { kind: "timeout" }
       );
     }
-    await sleep(pollMs, call.signal);
+    await sleep(pollIntervalMs, call.signal);
   }
 }
 

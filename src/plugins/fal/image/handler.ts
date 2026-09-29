@@ -181,6 +181,12 @@ function resolvedFiles(references: readonly unknown[]): LocalFile[] {
  * @param request - The image request.
  * @param imageUrls - Uploaded ref URLs.
  * @returns The body.
+ * @example
+ * ```ts
+ * const plan: ImagePlan = { model: resolveImageModel("nano-banana-pro"), aspect: "9:16", resolution: "1K", refCount: 0, costUsd: 0.15 };
+ * imageBody(plan, { prompt: "hero", params: { num_images: 4, seed: 7 } }, []).num_images; // => 1
+ * imageBody(plan, { prompt: "hero", params: { num_images: 4, seed: 7 } }, []).seed; // => 7
+ * ```
  */
 function imageBody(
   plan: ImagePlan,
@@ -221,9 +227,11 @@ async function submitImage(
   const files = resolvedFiles(request.refs ?? []);
   const apiKey = resolveApiKey(ctx);
 
-  // Upload the refs; once the POST is sent fal may bill it, so it runs to the end.
+  // Upload the refs; an abort here stops before anything is billed.
   const imageUrls = await uploadFiles(ctx, files, { apiKey, signal });
   signal?.throwIfAborted();
+
+  // Choose the endpoint (edit when there are refs), then build the body and its log entry.
   const { model } = plan;
   const endpoint = plan.refCount > 0 ? model.editEndpoint : model.textEndpoint;
   const body = imageBody(plan, request, imageUrls);
@@ -235,13 +243,14 @@ async function submitImage(
     body,
     files
   };
+
+  // Queue the job: once the POST is sent fal may bill it, so it runs to the end without the signal.
   const job = await withRequestLog(
     requestLog,
     entry,
     () => submitJob(ctx, endpoint, body, { apiKey, timeoutMs: ctx.config.timeoutMs }),
     submitted => submitted.requestId
   );
-
   ctx.log.info("fal:image:submitted", { model: model.alias, endpoint, requestId: job.requestId });
   return { jobId: encodeJobId(job) };
 }
@@ -266,6 +275,7 @@ async function collectImage(
   apiKey: string,
   signal: AbortSignal | undefined
 ): Promise<ImageResult> {
+  // The result body names the image; without images[0].url there is nothing to download.
   const { timeoutMs } = ctx.config;
   const body = await fetchJobResult(job, { apiKey, timeoutMs, signal });
   const images = readField(body, "images");
@@ -286,8 +296,10 @@ async function collectImage(
     DEFAULT_MIME;
   ctx.log.info("fal:image:done", { requestId: job.requestId, bytes: bytes.length });
 
-  // Width and height only when fal reports them as numbers.
+  // Model and cost come from the plan of the request the job was submitted with.
   const plan = planImage(ctx, request);
+
+  // Width and height only when fal reports them as numbers.
   const width = readNumber(first, "width");
   const height = readNumber(first, "height");
   const meta = {
@@ -304,7 +316,7 @@ async function collectImage(
  * Creates the fal image handler registered under `("image", "fal")`.
  * `estimate` touches no network and needs no key. `submit` + `poll` is the
  * job form the runner journals; `execute` (the `app.image` facade) submits and
- * waits in process, every `config.pollMs`, at most `config.jobTimeoutMs`.
+ * waits in process, every `config.pollIntervalMs`, at most `config.jobTimeoutMs`.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, execute, submit and poll.

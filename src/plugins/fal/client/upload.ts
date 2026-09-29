@@ -202,6 +202,7 @@ function uploadKey(mimeType: string, bytes: Uint8Array): string {
  * @param ctx - Plugin context (log).
  * @param session - The session's upload mode.
  * @param error - What the upload threw.
+ * @returns {void} Nothing; the session is switched to data URIs.
  */
 function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void {
   if (session.mode === "storage") ctx.log.warn("fal:upload:fallback", { status: statusOf(error) });
@@ -227,6 +228,7 @@ async function uploadToStorage(
   bytes: Uint8Array,
   options: UploadOptions
 ): Promise<string | undefined> {
+  // Ask fal storage where to PUT the file; a failure (not an abort) drops the session to data URIs.
   let target: StorageTarget;
   try {
     target = await initiate(ctx, file, options);
@@ -236,6 +238,7 @@ async function uploadToStorage(
     return undefined;
   }
 
+  // PUT the bytes to the presigned URL; a failure (not an abort) falls back the same way.
   try {
     await falFetch({
       url: target.uploadUrl,

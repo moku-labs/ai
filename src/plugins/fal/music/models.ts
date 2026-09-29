@@ -246,6 +246,7 @@ function invalidRequest(detail: string): TerminalProviderError {
  *
  * @param chunks - The request chunks.
  * @param lengthMs - The track length.
+ * @returns {void} Nothing; a plan that breaks no rule passes.
  * @throws {TerminalProviderError} A 400 naming the broken rule.
  * @example
  * ```ts
@@ -287,6 +288,7 @@ export function checkMusicRequest(request: MusicRequest): {
   model: ResolvedMusicModel;
   request: MusicRequest;
 } {
+  // The shape, by zod: the first issue's path names the bad field.
   const parsed = requestSchema.safeParse(request);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -294,6 +296,7 @@ export function checkMusicRequest(request: MusicRequest): {
     throw invalidRequest(`${where} ${issue?.message ?? "is invalid"}`);
   }
 
+  // The alias must be in the catalog: there is no fallback to another model.
   const alias = request.model;
   if (!isMusicAlias(alias)) {
     throw new TerminalProviderError(
@@ -302,11 +305,14 @@ export function checkMusicRequest(request: MusicRequest): {
     );
   }
 
+  // The length must fit the model's range.
   const model = { ...musicModels[alias], alias };
   const isInRange = request.lengthMs >= model.minMs && request.lengthMs <= model.maxMs;
   if (!isInRange) {
     throw invalidRequest(`lengthMs must be from ${model.minMs} to ${model.maxMs} for ${alias}`);
   }
+
+  // The composition plan, for every model: also the ones that ignore chunks.
   checkChunks(request.chunks ?? [], request.lengthMs);
   return { model, request };
 }

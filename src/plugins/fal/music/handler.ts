@@ -135,6 +135,7 @@ async function collectMusic(
   apiKey: string,
   signal: AbortSignal | undefined
 ): Promise<MusicResult> {
+  // The result body names the audio file; without audio.url there is nothing to download.
   const { timeoutMs } = ctx.config;
   const body = await fetchJobResult(job, { apiKey, timeoutMs, signal });
   const audio = readField(body, "audio");
@@ -167,7 +168,7 @@ async function collectMusic(
  * Creates the fal music handler registered under `("music", "fal")`.
  * `estimate` touches no network and needs no key. `submit` + `poll` is the
  * job form the runner journals; `execute` (the `app.music` facade) submits
- * and waits in process, every `config.pollMs`, at most `config.jobTimeoutMs`.
+ * and waits in process, every `config.pollIntervalMs`, at most `config.jobTimeoutMs`.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, execute, submit and poll.

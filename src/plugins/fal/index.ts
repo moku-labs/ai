@@ -25,9 +25,9 @@ const defaultConfig: Config = {
   runUrl: "https://fal.run",
   imageDefaultModel: "gpt-image-2.5",
   llmDefaultModel: "anthropic/claude-opus-5.5",
-  pollMs: 2000,
+  pollIntervalMs: 2000,
   jobTimeoutMs: 900_000,
-  requestLog: undefined
+  requestLog: ""
 };
 
 /**
@@ -47,6 +47,7 @@ export const falPlugin = createPlugin("fal", {
    * Registers the fal handlers (video, image, prompt-gen, music) with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
+   * @returns {void} Nothing; the four handlers are registered.
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);

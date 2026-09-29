@@ -12,12 +12,22 @@ import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } f
 
 /**
  * HTTP method used against fal.
+ *
+ * @example
+ * ```ts
+ * const method: FalMethod = "PUT"; // the presigned storage upload
+ * ```
  */
 export type FalMethod = "GET" | "POST" | "PUT";
 
 /**
  * One fal HTTP request. `apiKey` adds `Authorization: Key <key>`; `json`
  * sends a JSON body; `bytes` + `contentType` send a raw body.
+ *
+ * @example
+ * ```ts
+ * const request: FalRequest = { url: "https://queue.fal.run/fal-ai/nano-banana-pro", method: "POST", apiKey: "fal-key", json: { prompt: "hero" }, timeoutMs: 60_000 };
+ * ```
  */
 export type FalRequest = {
   /** Absolute URL, used verbatim. */
@@ -40,6 +50,11 @@ export type FalRequest = {
 
 /**
  * A successful (2xx) fal response with its body fully read.
+ *
+ * @example
+ * ```ts
+ * const response: FalResponse = { status: 200, headers: new Headers({ "content-type": "application/json" }), body: new TextEncoder().encode("{}") };
+ * ```
  */
 export type FalResponse = {
   /** HTTP status. */
@@ -53,6 +68,11 @@ export type FalResponse = {
 /**
  * What fal said about a failure, narrowed from its JSON body: the error
  * types it named and its human-readable text.
+ *
+ * @example
+ * ```ts
+ * const info: FalErrorInfo = { types: ["content_policy_violation"], text: "NSFW content detected" };
+ * ```
  */
 export type FalErrorInfo = {
   /** `error_type` and `detail[].type` values, in that order. */
@@ -63,6 +83,15 @@ export type FalErrorInfo = {
 
 /** Longest slice of fal's error text copied into an error message. */
 const MAX_ERROR_TEXT = 300;
+
+/** HTTP status of a rate-limited request: retryable, with an optional `Retry-After`. */
+const TOO_MANY_REQUESTS = 429;
+
+/** Lowest HTTP status of a server error (5xx): retryable. */
+const MIN_SERVER_ERROR = 500;
+
+/** Milliseconds per second, for a `Retry-After` given in seconds. */
+const MS_PER_SECOND = 1000;
 
 /** Marker fal uses in error types and texts for a content-policy rejection. */
 const CONTENT_POLICY = "content_policy";
@@ -253,7 +282,7 @@ function suffixOf(text: string | undefined): string {
 function retryAfterMsOf(value: string | null): number | undefined {
   if (value === null) return undefined;
   const seconds = Number(value);
-  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * 1000));
+  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * MS_PER_SECOND));
   const dateMs = Date.parse(value);
   return Number.isNaN(dateMs) ? undefined : Math.max(0, dateMs - Date.now());
 }
@@ -296,13 +325,13 @@ function classifyHttpFailure(response: FalResponse): Error {
       `[ai] fal flagged the request (content policy)${suffixOf(info.text)}`
     );
   }
-  if (status === 429) {
+  if (status === TOO_MANY_REQUESTS) {
     return new RetryableProviderError("[ai] fal rate-limited the request (HTTP 429).", {
       status,
       retryAfterMs: retryAfterMsOf(response.headers.get("retry-after"))
     });
   }
-  if (status >= 500) {
+  if (status >= MIN_SERVER_ERROR) {
     return new RetryableProviderError(`[ai] fal returned HTTP ${status}.`, { status });
   }
   return new TerminalProviderError(

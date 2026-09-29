@@ -1,6 +1,6 @@
 /**
  * Standard tier — owns the music capability contract (execute, or async
- * submit + poll) + typed one-off facade app.music.*.
+ * submit + poll) + typed one-off facade app.music.*. Emits no events.
  *
  * @see README.md
  */

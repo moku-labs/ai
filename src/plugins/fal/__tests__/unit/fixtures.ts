@@ -24,9 +24,9 @@ export const DEFAULT_CONFIG: Config = {
   runUrl: "https://fal.run",
   imageDefaultModel: "gpt-image-2.5",
   llmDefaultModel: "anthropic/claude-opus-5.5",
-  pollMs: 0,
+  pollIntervalMs: 0,
   jobTimeoutMs: 900_000,
-  requestLog: undefined
+  requestLog: ""
 };
 
 /** The fake key every test context resolves (never a real key). */
@@ -96,8 +96,13 @@ export type TestCtxOverrides = {
 /** Builds a fake `FalContext`: default config, uncomputed prices, an empty upload cache, fake registry/env/log. */
 export function createTestCtx(overrides: TestCtxOverrides = {}): FalContext {
   const config: Config = { ...DEFAULT_CONFIG, ...overrides.config };
-  // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`; mirrors createFalState's sentinel
-  const state: State = { prices: null, uploads: new Map(), ...overrides.state };
+  const state: State = {
+    // eslint-disable-next-line unicorn/no-null -- State.prices is `X | null`; mirrors createFalState's sentinel
+    prices: null,
+    uploads: new Map(),
+    requestLogWarned: false,
+    ...overrides.state
+  };
   const registry = overrides.registry ?? createFakeRegistry();
   const env = overrides.env ?? createFakeEnv();
   const log = overrides.log ?? createFakeLog();

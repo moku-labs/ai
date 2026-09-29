@@ -392,6 +392,7 @@ export function imageResolution(model: ImageModel, asked: unknown): string | und
  * @param model - The resolved row.
  * @param aspect - The requested aspect.
  * @param resolution - The planned resolution.
+ * @returns {void} Nothing; an aspect the model takes passes.
  * @throws {TerminalProviderError} A 400 listing the aspects the model takes.
  * @example
  * ```ts

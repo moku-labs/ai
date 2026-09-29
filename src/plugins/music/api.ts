@@ -53,7 +53,7 @@ type ResolvedMusicHandler = ExecuteHandler | JobHandler;
  * ```
  */
 function hasFunction(candidate: object, key: string): boolean {
-  return typeof (candidate as Record<string, unknown>)[key] === "function";
+  return typeof Reflect.get(candidate, key) === "function";
 }
 
 /**

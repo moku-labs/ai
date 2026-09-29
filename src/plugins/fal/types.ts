@@ -87,10 +87,10 @@ export type Config = {
    *
    * @example
    * ```ts
-   * createApp({ pluginConfigs: { fal: { pollMs: 5000 } } });
+   * createApp({ pluginConfigs: { fal: { pollIntervalMs: 5000 } } });
    * ```
    */
-  pollMs: number;
+  pollIntervalMs: number;
   /**
    * The in-process wait gives up after this many ms (retryable `timeout`); the fal job keeps
    * running and stays adoptable through `poll`. Default: 900_000.
@@ -103,20 +103,21 @@ export type Config = {
   jobTimeoutMs: number;
   /**
    * JSONL request log path, relative to the working directory: one line per billable request of
-   * every task. Off when undefined. Default: undefined.
+   * every task. "" = off. Default: "".
    *
    * @example
    * ```ts
    * createApp({ pluginConfigs: { fal: { requestLog: ".moku/log/fal.jsonl" } } });
    * ```
    */
-  requestLog: string | undefined;
+  requestLog: string;
 };
 
 /**
  * fal plugin state: the effective price table of every task, computed once at
- * first use (bundled prices merged with `config.priceOverrides`), and the URLs
- * of the files this process already put in fal storage.
+ * first use (bundled prices merged with `config.priceOverrides`), the URLs
+ * of the files this process already put in fal storage, and whether the
+ * request log already warned about a failed write.
  */
 export type State = {
   /** Effective price table of every task (bundled prices merged with config.priceOverrides), computed once at first use. */
@@ -127,6 +128,11 @@ export type State = {
    * the process: `app.stop()` does not clear it.
    */
   uploads: Map<string, string>;
+  /**
+   * Whether the request log already warned `fal:request-log:failed`. Set by the first failed
+   * write, shared by every task's log, so a broken path warns once per plugin instance.
+   */
+  requestLogWarned: boolean;
 };
 
 /**

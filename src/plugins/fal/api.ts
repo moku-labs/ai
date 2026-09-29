@@ -15,7 +15,9 @@ import { falAliases, modelResolution, resolveFalModel } from "./video/models";
 import { lookupPrice } from "./video/prices";
 
 /**
- * Lists one task's models at the effective prices.
+ * Lists one task's models, in catalog order, each with its price read from the
+ * merged price table (bundled prices plus `priceOverrides`). `MODEL_LISTERS`
+ * holds one lister per task; no network, no key.
  */
 type ModelLister = (prices: Readonly<Record<string, number>>) => FalModelInfo[];
 

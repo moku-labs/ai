@@ -9,7 +9,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readField, redacted } from "./client/http";
-import type { FalContext, FalTask, LocalFile, State } from "./types";
+import type { FalContext, FalTask, LocalFile } from "./types";
 
 /**
  * What a handler knows about one billable request.
@@ -77,9 +77,6 @@ const PROMPT_FIELDS: ReadonlySet<string> = new Set(["prompt", "messages"]);
 /** Body field holding the ref URLs of an image request. */
 const IMAGE_URLS = "image_urls";
 
-/** Plugin instances whose log already warned about a failed write. */
-const warnedStates = new WeakSet<State>();
-
 /**
  * Cuts one string: an http(s) URL to host and last path segment (no query),
  * a data URI to MIME type and length; anything else is kept.
@@ -93,13 +90,16 @@ const warnedStates = new WeakSet<State>();
  * ```
  */
 export function cutString(text: string): string {
+  // A data URI: its MIME type and length, never the base64 bytes.
   if (text.startsWith("data:")) {
     const mime = text.slice("data:".length).split(/[;,]/)[0] ?? "";
     return `data:${mime};${text.length}`;
   }
+  // Anything that is not a web URL is kept as is.
   const isWebUrl = /^https?:\/\//i.test(text) && URL.canParse(text);
   if (!isWebUrl) return text;
 
+  // A web URL: host and last path segment; the query (it may carry a signature) is dropped.
   const url = new URL(text);
   const segments = url.pathname.split("/").filter(segment => segment !== "");
   const last = segments.at(-1);
@@ -196,10 +196,8 @@ function loggedBody(
   for (const [key, value] of Object.entries(body)) {
     if (PROMPT_FIELDS.has(key)) continue;
 
-    const item =
-      key === IMAGE_URLS && Array.isArray(value)
-        ? refNames(value.length, files)
-        : loggedValue(value);
+    const isReferenceUrlList = key === IMAGE_URLS && Array.isArray(value);
+    const item = isReferenceUrlList ? refNames(value.length, files) : loggedValue(value);
     if (item !== undefined) logged[key] = item;
   }
 
@@ -253,15 +251,16 @@ function requestLine(
 }
 
 /**
- * Opens the request log, or undefined when `config.requestLog` is undefined.
+ * Opens the request log, or undefined when `config.requestLog` is `""` (off).
  * The path is relative to the working directory; its folders are created.
+ * A failed write warns once per plugin instance (`state.requestLogWarned`).
  *
- * @param ctx - Plugin context (`config.requestLog`, `state`, log).
+ * @param ctx - Plugin context (`config.requestLog`, `state.requestLogWarned`, log).
  * @returns The sink, or undefined when the log is off.
  */
 export function createRequestLog(ctx: FalContext): RequestLog | undefined {
   const file = ctx.config.requestLog;
-  if (file === undefined) return undefined;
+  if (file === "") return undefined;
 
   return {
     write: async (entry, outcome) => {
@@ -270,8 +269,8 @@ export function createRequestLog(ctx: FalContext): RequestLog | undefined {
         await appendFile(file, `${JSON.stringify(requestLine(entry, outcome, new Date()))}\n`);
       } catch (error) {
         // One warning per plugin instance: a broken path would repeat on every request.
-        if (warnedStates.has(ctx.state)) return;
-        warnedStates.add(ctx.state);
+        if (ctx.state.requestLogWarned) return;
+        ctx.state.requestLogWarned = true;
         const reason = error instanceof Error ? error.message : "unknown error";
         ctx.log.warn(WRITE_FAILED_EVENT, { path: file, reason });
       }
