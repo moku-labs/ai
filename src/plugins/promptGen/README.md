@@ -11,7 +11,8 @@ and the **typed facade** `app.promptGen.*` that consumers call for one-off, non-
 generation. The plugin itself talks to no AI service — it is a stateless facade over the
 registry: it resolves the configured (or explicitly requested) provider's handler, runtime
 shape-guards it, performs this task's ONE audited cast to `PromptGenHandler` at its own
-`resolve()` call site, and delegates.
+`resolve()` call site (`resolve.ts`), and delegates. The fallback walk behind `generate`
+lives in `fallback.ts`; `api.ts` is the facade factory only.
 
 The scope is deliberately minimal (a ratified M0 decision): contract + facade only — no prompt
 packs, no streaming, no advanced sampling controls. It exists in M0 primarily to back the
@@ -25,6 +26,7 @@ build files and `registry.register()` calls is kebab-case `"prompt-gen"`.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `defaultProvider` | `string` | `"openai"` | Provider used when a request doesn't name one (i.e. when `opts.provider` is omitted from `generate`/`estimate`). |
+| `fallback` | `string[]` | `[]` | Providers `generate` tries in order when the chosen one is unavailable. See [Fallback](#fallback). |
 
 Override per app via `createApp`:
 
@@ -32,7 +34,7 @@ Override per app via `createApp`:
 import { createApp } from "@moku-labs/ai";
 
 const app = createApp({
-  pluginConfigs: { promptGen: { defaultProvider: "openai" } }
+  pluginConfigs: { promptGen: { defaultProvider: "claude", fallback: ["codex", "openai"] } }
 });
 ```
 
@@ -62,7 +64,22 @@ type PromptGenHandler = {
   estimate(request: PromptGenRequest): { usd: number };
   execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<PromptGenResult>;
 };
+
+/** Thrown by a provider that cannot serve right now. */
+class PromptGenUnavailableError extends Error {
+  readonly unavailable = true;
+  readonly reason: "missing" | "auth" | "limit";
+  constructor(message: string, reason: "missing" | "auth" | "limit"); // name "PromptGenUnavailableError"
+}
+
+/** True for `unavailable === true`, or a numeric `status` of 401, 402, 403 or 429. */
+function isPromptGenUnavailable(error: unknown): boolean;
 ```
+
+A provider throws `PromptGenUnavailableError` only when it cannot serve at all: binary missing
+(`"missing"`), not logged in (`"auth"`), or a plan or rate limit (`"limit"`). Everything else
+(a bad answer, invalid JSON, a timeout, a 5xx) keeps its own error class. `contract.ts` imports
+no plugin, so providers value-import the class without a `depends` edge.
 
 Provider plugins `import type { PromptGenHandler }` from this plugin's `contract.ts` to
 implement it, then register the implementation with `registry` in their own `onInit`:
@@ -80,9 +97,11 @@ before the single `as PromptGenHandler` cast. A registered value that fails the 
 
 ### `generate(request, opts?): Promise<PromptGenResult>`
 
-One-off text generation. Resolves the provider (explicit `opts.provider`, else
-`config.defaultProvider`), shape-guards and casts the registered handler, and calls its
-`execute()` immediately, forwarding `opts.signal`.
+One-off text generation. Builds the chain `[opts.provider ?? config.defaultProvider,
+...config.fallback]`, then for each provider: shape-guards and casts the registered handler,
+waits for the provider's lane `prompt-gen/<provider>/default`, and calls `execute()`,
+forwarding `opts.signal`. The first answer wins; `meta.provider` names the provider that
+answered. See [Fallback](#fallback) and [Lanes](#lanes).
 
 **NOT journaled.** This is the direct facade path — no journal entry, no resume, no progress
 tracking. For durable, resumable execution put a `task: prompt-gen` item in a build file and
@@ -92,17 +111,19 @@ run it via `app.runner.run()`.
   `temperature`, `params`.
 - **`opts.signal`**: `AbortSignal` (optional) — cancels the request; forwarded to the
   handler's `execute()`.
-- **`opts.provider`**: `string` (optional) — provider override; defaults to
+- **`opts.provider`**: `string` (optional) — head of the chain; defaults to
   `config.defaultProvider`.
-- **Returns**: `Promise<PromptGenResult>` — generated `text`, `costUsd`, optional `meta`.
-- **Throws**: the pinned two-line error when the provider is unregistered:
+- **Returns**: `Promise<PromptGenResult>` — generated `text`, `costUsd`, and `meta` with
+  `provider` set to the answering provider (merged over the handler's own `meta`).
+- **Throws**: the pinned two-line error when the head of the chain is unregistered:
 
   ```
   [ai] No prompt-gen provider named "<name>" is registered.
     Available: <comma list or "none">.
   ```
 
-  and a "malformed provider" error when the registered value fails the handler shape guard.
+  a "malformed provider" error when the registered value fails the handler shape guard, the
+  first error that is not "unavailable", or the last error when every provider is unavailable.
 
 ```ts
 const result = await app.promptGen.generate(
@@ -114,9 +135,10 @@ console.log(result.text, result.costUsd);
 
 ### `estimate(request, opts?): { usd: number }`
 
-Cost estimate without executing. Resolves the provider exactly as `generate()` does
+Cost estimate without executing. Resolves the head of the chain exactly as `generate()` does
 (same override/default logic, same unknown-provider and malformed-handler errors), then calls
-the handler's `estimate()` instead of `execute()`. Synchronous.
+that handler's `estimate()`. It runs nothing, so it has no fallback and takes no lane.
+Synchronous.
 
 - **`request`**: `PromptGenRequest` — the request to estimate.
 - **`opts.provider`**: `string` (optional) — provider override; defaults to
@@ -136,8 +158,52 @@ registered is the task default from the registry's perspective. Delegates to
 `registry.providers("prompt-gen")`. Never throws; returns `[]` when nothing is registered.
 
 ```ts
-app.promptGen.providers(); // ["openai"]
+app.promptGen.providers(); // ["openai", "codex", "claude"] in a default app
 ```
+
+## Fallback
+
+`generate` walks `[opts.provider ?? defaultProvider, ...fallback]`. A name listed twice is tried
+once.
+
+- It moves to the next provider only when the current one is **unavailable**:
+  `isPromptGenUnavailable(error)` is true, or the provider's lane rejects with
+  `reason: "breaker-open"`.
+- Any other error is rethrown at once. A bad or invalid answer never switches provider.
+- An abort is rethrown at once, even if the error looks unavailable.
+- Every provider unavailable: the last error is rethrown.
+- The head of the chain unregistered: the pinned unknown-provider error. A later unregistered
+  name is skipped with `warn("prompt-gen:fallback-skip", { provider, reason: "unregistered" })`.
+- Each switch logs `warn("prompt-gen:fallback", { from, to, reason })`. `reason` is
+  `error.reason` (`missing`, `auth`, `limit`, `breaker-open`), else `http-<status>`.
+- `fallback: []` (the default) keeps the single-provider behaviour.
+- The runner path does not fall back: a `task: prompt-gen` build item uses one provider.
+
+```ts
+const app = createApp({
+  pluginConfigs: { promptGen: { defaultProvider: "claude", fallback: ["codex"] } }
+});
+await app.start();
+const result = await app.promptGen.generate({ prompt: "Name this shot in three words." });
+// claude not logged in: result.meta.provider === "codex", one prompt-gen:fallback warn
+```
+
+## Lanes
+
+Each attempt runs inside the provider's `limits` lane, the same key the runner uses:
+`prompt-gen/<provider>/default`. The lane is released when the attempt settles, on success
+and on error. `generate` never reports outcomes, so breaker state stays owned by the runner.
+`estimate` and `providers` take no lane.
+
+Direct calls therefore obey `limits.defaults` (rpm 60, concurrency 4) or a lane override.
+Local CLIs should not run many at once; `limits` is a core plugin, so its config goes to
+`createCore` (`pluginConfigs.limits`):
+
+```ts
+limits: { lanes: { "prompt-gen/claude": { concurrency: 2 }, "prompt-gen/codex": { concurrency: 2 } } }
+```
+
+The prefix key `"prompt-gen/claude"` matches the full lane `"prompt-gen/claude/default"`.
 
 ## Events
 
@@ -212,6 +278,8 @@ items:
 
 ## Integration
 
+- **`limits` and `log` (core APIs).** Injected on `ctx`, no `depends` entry. `generate`
+  acquires one lane per attempt and logs one warn per provider switch.
 - **`registry` (dependency).** The only plugin `promptGen` requires. Providers `register()`
   handlers under `"prompt-gen"`; `promptGen` calls `registry.resolve("prompt-gen", provider)`
   and `registry.providers("prompt-gen")` via `ctx.require(registryPlugin)`. Because `registry`
@@ -226,6 +294,9 @@ items:
   `registry.register("prompt-gen", "openai", handler)` — which is why the config default is
   `"openai"`. Any plugin registering a conforming handler under `"prompt-gen"` becomes
   selectable via `opts.provider` or `defaultProvider`.
+- **`codex` / `claude` (providers).** Register `"prompt-gen"` handlers over the local `codex`
+  and `claude` CLIs in their own `onInit`, after `openai`. A default app therefore lists
+  `["openai", "codex", "claude"]`.
 - **`runner` / `buildfile` (durable path).** Build-file items with `task: prompt-gen` are
   executed by `runner`, which resolves the same registered handlers through the registry with
   its own audited boundary — journaled and resumable. `app.promptGen.generate()` deliberately
@@ -237,6 +308,8 @@ From `@moku-labs/ai`:
 
 - `promptGenPlugin` — the plugin instance (already registered in the framework; reference it
   in `depends` when a Layer-3 plugin needs the facade via `ctx.require`).
+- `PromptGenUnavailableError`, `isPromptGenUnavailable` — the "provider unavailable" error and
+  its predicate, for provider plugins and for callers with their own retry loop.
 - `PromptGen` — namespace with all public types: `Config`, `PromptGenApi`,
   `PromptGenContext`, `PromptGenRequest`, `PromptGenResult`, `PromptGenHandler`,
   `RegistryApi`.

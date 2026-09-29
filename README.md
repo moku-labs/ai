@@ -36,7 +36,7 @@ the three-layer Moku model).
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
   (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `asset`); provider plugins
-  (`elevenlabs`, `openai`, `codex`, `fal`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
+  (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
   provider, input, params, and the keys of everything it references). A done artifact
@@ -160,14 +160,15 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`runner`](./src/plugins/runner/README.md) | Complex | regular (`app.runner`) | The durable orchestrator — `run`/`resume`/`estimate`/`status`/`events()`; owns all bus events. |
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
-| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`). |
+| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. |
 | [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`; price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
 | [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
-| [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
+| [`codex`](./src/plugins/codex/README.md) | Complex | regular (`app.codex`) | Image and prompt-gen provider over the local Codex CLI (`codex exec`), plan-billed. |
+| [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
 | [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5 and 2.0 (Mini), MiniMax H3 and H3 Max, Kling 3, Wan 3.0, Veo 3.1 Fast, Vidu Q3; image and audio refs; per-second and reference-token prices. |
 | [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0 and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video and asset providers, `asset://` portraits, per-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
@@ -349,6 +350,7 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `defaultFormat` | `"mp3" \| "wav" \| "ogg"` | `"mp3"` |
 | `translate` | `defaultProvider` | `string` | `"openai"` |
 | `promptGen` | `defaultProvider` | `string` | `"openai"` |
+| | `fallback` | `string[]` | `[]` |
 | `elevenlabs` | `apiKeyEnv` | `string` | `"ELEVENLABS_API_KEY"` |
 | | `baseUrl` | `string` | `"https://api.elevenlabs.io"` |
 | | `defaultModel` | `string` | `"eleven_multilingual_v2"` |
@@ -368,8 +370,15 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `model` | `string` | `"gpt-6-astra"` |
 | | `reasoningEffort` | `string` | `"low"` |
 | | `timeoutMs` | `number` | `600_000` |
-| | `workDir` | `string` | `".moku/tmp"` |
+| | `workDir` | `string` | `".moku/tmp"` (`""` = OS temp dir) |
 | | `priceOverrides` | `Record<string, number>` | `{}` |
+| | `textModel` | `string` | `""` (codex default) |
+| | `modelMap` | `Record<string, string>` | `{}` |
+| `claude` | `bin` | `string` | `"claude"` |
+| | `textModel` | `string` | `""` (CLI default) |
+| | `modelMap` | `Record<string, string>` | `{}` |
+| | `timeoutMs` | `number` | `600_000` |
+| | `workDir` | `string` | `""` (OS temp dir) |
 | `fal` | `apiKeyEnv` | `string` | `"FAL_KEY"` |
 | | `queueUrl` | `string` | `"https://queue.fal.run"` |
 | | `upload` | `"storage" \| "data-uri"` | `"storage"` |

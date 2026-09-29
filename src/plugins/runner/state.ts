@@ -37,7 +37,6 @@ export function addActiveRun(
   const active: ActiveRun = {
     runId,
     signal,
-    inFlight: 0,
     stop: new AbortController(),
     settled: promise,
     settle: resolve

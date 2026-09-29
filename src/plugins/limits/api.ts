@@ -25,10 +25,6 @@ import type { Config, LaneConfig, LaneSnapshot, LimitsApi, State } from "./types
  * @param lane - Lane key (`"{task}/{provider}/{account}"`).
  * @param config - Resolved limits configuration.
  * @returns The effective settings for `lane`.
- * @example
- * ```ts
- * resolveLaneConfig("voiceover/elevenlabs/default", config);
- * ```
  */
 function resolveLaneConfig(lane: string, config: Readonly<Config>): LaneConfig {
   const [task, provider] = lane.split("/");
@@ -48,7 +44,7 @@ function resolveLaneConfig(lane: string, config: Readonly<Config>): LaneConfig {
  * @returns A two-line-formatted error tagged with `reason: "breaker-open"`.
  * @example
  * ```ts
- * throw breakerOpenError("voiceover/elevenlabs/default");
+ * breakerOpenError("voiceover/elevenlabs/default").reason; // "breaker-open"
  * ```
  */
 function breakerOpenError(lane: string): Error & { reason: "breaker-open" } {
@@ -64,10 +60,6 @@ function breakerOpenError(lane: string): Error & { reason: "breaker-open" } {
  *
  * @param signal - The `AbortSignal` that fired.
  * @returns The value to reject the pending wait with.
- * @example
- * ```ts
- * reject(abortReason(signal));
- * ```
  */
 function abortReason(signal: AbortSignal): unknown {
   return (
@@ -85,10 +77,6 @@ function abortReason(signal: AbortSignal): unknown {
  * @param ms - Delay in milliseconds; resolves immediately if `<= 0`.
  * @param signal - Optional abort signal for a clean-cancel path.
  * @returns A promise settled after the delay or on abort.
- * @example
- * ```ts
- * await waitFor(1_000, opts?.signal);
- * ```
  */
 function waitFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
   if (ms <= 0) return Promise.resolve();
@@ -104,26 +92,12 @@ function waitFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
       resolve();
     }, ms);
 
-    /**
-     * Clears the pending timeout and detaches the abort listener.
-     *
-     * @example
-     * ```ts
-     * cleanup();
-     * ```
-     */
+    /** Clears the pending timeout and detaches the abort listener. */
     function cleanup(): void {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
     }
-    /**
-     * Cancels the wait and rejects with the abort reason.
-     *
-     * @example
-     * ```ts
-     * signal.addEventListener("abort", onAbort);
-     * ```
-     */
+    /** Cancels the wait and rejects with the abort reason. */
     function onAbort(): void {
       cleanup();
       reject(abortReason(signal as AbortSignal));
@@ -141,10 +115,6 @@ function waitFor(ms: number, signal: AbortSignal | undefined): Promise<void> {
  * @param waiters - The lane's waiter queue (mutated in place).
  * @param signal - Optional abort signal for a clean-cancel path.
  * @returns A promise settled once a slot is granted or the wait aborts.
- * @example
- * ```ts
- * await waitForSlot(laneState.waiters, opts?.signal);
- * ```
  */
 function waitForSlot(waiters: Array<() => void>, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -153,40 +123,19 @@ function waitForSlot(waiters: Array<() => void>, signal: AbortSignal | undefined
       return;
     }
 
-    /**
-     * Resolves this waiter once a concurrency slot is handed to it.
-     *
-     * @example
-     * ```ts
-     * waiters.shift()?.();
-     * ```
-     */
+    /** Resolves this waiter once a concurrency slot is handed to it. */
     const waiter = (): void => {
       cleanup();
       resolve();
     };
 
-    /**
-     * Detaches the abort listener and removes this waiter from the queue.
-     *
-     * @example
-     * ```ts
-     * cleanup();
-     * ```
-     */
+    /** Detaches the abort listener and removes this waiter from the queue. */
     function cleanup(): void {
       signal?.removeEventListener("abort", onAbort);
       const index = waiters.indexOf(waiter);
       if (index !== -1) waiters.splice(index, 1);
     }
-    /**
-     * Cancels the wait and rejects with the abort reason.
-     *
-     * @example
-     * ```ts
-     * signal.addEventListener("abort", onAbort);
-     * ```
-     */
+    /** Cancels the wait and rejects with the abort reason. */
     function onAbort(): void {
       cleanup();
       reject(abortReason(signal as AbortSignal));
@@ -206,12 +155,6 @@ function waitForSlot(waiters: Array<() => void>, signal: AbortSignal | undefined
  * @param ctx.config - Resolved limits configuration.
  * @param ctx.state - Limits state (per-lane buckets).
  * @returns The `ctx.limits` API.
- * @example
- * ```ts
- * const api = createLimitsApi({ config, state });
- * const { release } = await api.acquire("voiceover/elevenlabs/default");
- * release();
- * ```
  */
 export function createLimitsApi(ctx: {
   readonly config: Readonly<Config>;
@@ -223,26 +166,18 @@ export function createLimitsApi(ctx: {
    *
    * @param lane - Lane key.
    * @returns The lane's effective settings.
-   * @example
-   * ```ts
-   * laneConfig("voiceover/elevenlabs/default");
-   * ```
    */
   const laneConfig = (lane: string): LaneConfig => resolveLaneConfig(lane, ctx.config);
 
   /**
    * Waits for lane capacity (breaker closed/half-open, a token, and a
-   * concurrency slot) then grants it.
+   * concurrency slot) then grants it. A half-open probe owns a claim id,
+   * so a late `release()` never frees a newer probe's claim.
    *
    * @param lane - Lane key to acquire capacity on.
    * @param opts - Optional acquire options.
    * @param opts.signal - Abort signal for a clean-cancel wait.
    * @returns A handle whose `release()` must be called exactly once.
-   * @example
-   * ```ts
-   * const { release } = await acquire("voiceover/elevenlabs/default");
-   * release();
-   * ```
    */
   async function acquire(
     lane: string,
@@ -251,61 +186,43 @@ export function createLimitsApi(ctx: {
     const config = laneConfig(lane);
     const laneState = getOrCreateLane(ctx.state, lane, config, Date.now());
 
-    // Breaker gate: open rejects everyone; half-open admits exactly ONE
-    // trial probe (claimed synchronously here, settled by reportOutcome).
+    // Breaker gate: open rejects everyone; half-open admits one probe, which owns a claim id
     const phase = breakerPhase(laneState, Date.now());
-    if (phase === "open" || (phase === "half-open" && laneState.probing)) {
-      throw breakerOpenError(lane);
-    }
-    const isProbe = phase === "half-open";
-    if (isProbe) laneState.probing = true;
+    const isBlocked = phase === "open" || (phase === "half-open" && laneState.probe !== 0);
+    if (isBlocked) throw breakerOpenError(lane);
 
-    /**
-     * Releases the half-open probe claim on an abandoned (aborted) wait so
-     * the lane is not locked out of probing forever.
-     *
-     * @example
-     * ```ts
-     * releaseProbeClaim();
-     * ```
-     */
+    const claim = phase === "half-open" ? ++laneState.nextProbe : 0;
+    if (claim !== 0) laneState.probe = claim;
+
+    /** Hands back this acquisition's probe claim, only while it still owns it. */
     const releaseProbeClaim = (): void => {
-      if (isProbe) laneState.probing = false;
+      if (claim !== 0 && laneState.probe === claim) laneState.probe = 0;
     };
 
     const waitMs = reserveToken(laneState, config, Date.now());
     try {
+      // Wait for a token
       await waitFor(waitMs, opts?.signal);
+
+      // Wait for a concurrency slot
+      const isFull = laneState.inFlight >= config.concurrency;
+      if (isFull) await waitForSlot(laneState.waiters, opts?.signal);
     } catch (error) {
+      // An abandoned wait gives back its token and its probe claim
       refundToken(laneState);
       releaseProbeClaim();
       throw error;
     }
 
-    if (laneState.inFlight >= config.concurrency) {
-      try {
-        await waitForSlot(laneState.waiters, opts?.signal);
-      } catch (error) {
-        refundToken(laneState);
-        releaseProbeClaim();
-        throw error;
-      }
-    }
-
+    // Grant the slot
     laneState.inFlight += 1;
     let released = false;
     return {
-      /**
-       * Releases the held concurrency slot; a no-op after the first call.
-       *
-       * @example
-       * ```ts
-       * release();
-       * ```
-       */
+      /** Releases the held concurrency slot and this acquisition's probe claim; a no-op after the first call. */
       release: () => {
         if (released) return;
         released = true;
+        releaseProbeClaim();
         laneState.inFlight -= 1;
         const next = laneState.waiters.shift();
         next?.();
@@ -318,10 +235,6 @@ export function createLimitsApi(ctx: {
    *
    * @param lane - Lane key the outcome applies to.
    * @param outcome - `"ok"` closes/resets the breaker; `"retryable-error"` advances it toward open.
-   * @example
-   * ```ts
-   * reportOutcome("voiceover/elevenlabs/default", "ok");
-   * ```
    */
   function reportOutcome(lane: string, outcome: "ok" | "retryable-error"): void {
     const config = laneConfig(lane);
@@ -334,10 +247,6 @@ export function createLimitsApi(ctx: {
    *
    * @param lane - Lane key to inspect.
    * @returns The lane's current tokens, in-flight count, waiting count, and breaker phase.
-   * @example
-   * ```ts
-   * snapshot("voiceover/elevenlabs/default");
-   * ```
    */
   function snapshot(lane: string): LaneSnapshot {
     const config = laneConfig(lane);
@@ -360,10 +269,6 @@ export function createLimitsApi(ctx: {
    * All lane keys currently tracked.
    *
    * @returns The tracked lane keys.
-   * @example
-   * ```ts
-   * lanes(); // => ["voiceover/elevenlabs/default"]
-   * ```
    */
   function lanes(): string[] {
     return [...ctx.state.lanes.keys()];

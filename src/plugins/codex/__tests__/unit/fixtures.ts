@@ -16,7 +16,9 @@ const DEFAULT_CONFIG: Config = {
   reasoningEffort: "low",
   timeoutMs: 600_000,
   workDir: ".moku/tmp",
-  priceOverrides: {}
+  priceOverrides: {},
+  textModel: "",
+  modelMap: {}
 };
 
 /**
@@ -163,4 +165,46 @@ export function writeFakeCodex(root: string, body: string): string {
   writeFileSync(bin, script);
   chmodSync(bin, 0o755);
   return bin;
+}
+
+/**
+ * Captured codex-cli 0.155.0 stderr when not logged in (2026-09-29): five
+ * reconnect lines, then the 401 error line.
+ */
+export const CODEX_401_STDERR = [
+  "Reconnecting... 1/5",
+  "Reconnecting... 2/5",
+  "Reconnecting... 3/5",
+  "Reconnecting... 4/5",
+  "Reconnecting... 5/5",
+  "ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses"
+].join("\n");
+
+/**
+ * Shell snippet that prints `text` to stderr through a quoted heredoc.
+ *
+ * @param text - The stderr text, possibly multi-line.
+ * @returns The shell lines, without an exit.
+ * @example
+ * ```ts
+ * writeFakeCodex(root, `${printStderr("rate limit reached")}\nexit 1`);
+ * ```
+ */
+export function printStderr(text: string): string {
+  return `cat >&2 <<'EOF'\n${text}\nEOF`;
+}
+
+/**
+ * Shell snippet writing `text` to `$dir/last-message.txt`, the file codex
+ * writes its final answer to with `-o`.
+ *
+ * @param text - The answer; must not contain a single quote.
+ * @returns The shell line.
+ * @example
+ * ```ts
+ * writeFakeCodex(root, writeAnswer("ok"));
+ * ```
+ */
+export function writeAnswer(text: string): string {
+  return `printf '%s' '${text}' > "$dir/last-message.txt"`;
 }

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CompiledBuild } from "../../../buildfile/types";
 import { createRunnerApi, shouldEmitProgress } from "../../api";
 import { addActiveRun, stopActiveRuns } from "../../state";
 import type { RunEvent } from "../../types";
-import { type CallLog, createFakeRunnerContext, ZERO_TOTALS } from "./fixtures";
+import { type CallLog, createFakeRunnerContext, fakeHandler, ZERO_TOTALS } from "./fixtures";
 
 /**
  * Drains a stream into an array.
@@ -18,6 +19,19 @@ async function collect(stream: AsyncIterable<RunEvent>): Promise<RunEvent[]> {
   const records: RunEvent[] = [];
   for await (const event of stream) records.push(event);
   return records;
+}
+
+/**
+ * Lets pending promise callbacks and timers run.
+ *
+ * @returns Resolves on the next macrotask.
+ * @example
+ * ```ts
+ * await flush(); // a run that could settle now has settled
+ * ```
+ */
+function flush(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -350,5 +364,62 @@ describe("createRunnerApi — status() and events(opts) with several runs", () =
     }
 
     expect(ctx.state.subscribers.size).toBe(0);
+  });
+});
+
+describe("createRunnerApi — an item that throws", () => {
+  const BUG_LANE = "bugTask/fakeProvider/default";
+  const BUG = "[ai] limits: lane state is broken.";
+
+  it("stops the run's other items, and the run settles failed only after they settled", async () => {
+    const siblingCalled = Promise.withResolvers<void>();
+    const finishSibling = Promise.withResolvers<void>();
+    let siblingSignal: AbortSignal | undefined;
+    const handler = fakeHandler([], {
+      execute: async (_request, opts) => {
+        siblingSignal = opts.signal;
+        siblingCalled.resolve();
+        await finishSibling.promise;
+        throw new Error("[ai] fake: the provider call ended after the drain.");
+      }
+    });
+    // The bug lands on the second item while the first one is inside its provider call.
+    const acquire = async (lane: string): Promise<{ release: () => void }> => {
+      if (lane !== BUG_LANE) return { release: vi.fn() };
+      await siblingCalled.promise;
+      throw new Error(BUG);
+    };
+    const build: CompiledBuild = {
+      file: "build.moku.yaml",
+      spec: {
+        version: 1,
+        name: "fixture",
+        items: [
+          { task: "fakeTask", provider: "fakeProvider", input: { text: "sibling" } },
+          { task: "bugTask", provider: "fakeProvider", input: { text: "bug" } }
+        ]
+      }
+    };
+    const ctx = createFakeRunnerContext([], {
+      registry: { resolve: (): unknown => handler },
+      buildfile: { loadGlob: async () => [build] },
+      limits: { acquire }
+    });
+    const api = createRunnerApi(ctx);
+    let runSettled = false;
+
+    const running = api.run({}).finally(() => {
+      runSettled = true;
+    });
+    await vi.waitFor(() => expect(siblingSignal?.aborted).toBe(true));
+    await flush();
+    expect(runSettled).toBe(false);
+
+    finishSibling.resolve();
+    const result = await running;
+
+    expect(result.status).toBe("failed");
+    expect(ctx.emit).toHaveBeenCalledWith("run:failed", { runId: "run-1", error: BUG });
+    expect(ctx.state.active.size).toBe(0);
   });
 });

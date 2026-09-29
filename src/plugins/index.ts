@@ -8,6 +8,7 @@
 export { arkPlugin } from "./ark";
 export { assetPlugin } from "./asset";
 export { buildfilePlugin } from "./buildfile";
+export { claudePlugin } from "./claude";
 export { cliPlugin } from "./cli";
 export { codexPlugin } from "./codex";
 export { composePlugin } from "./compose";
@@ -30,6 +31,7 @@ export { voiceoverPlugin } from "./voiceover";
 export * as Ark from "./ark/types";
 export * as Asset from "./asset/types";
 export * as Buildfile from "./buildfile/types";
+export * as Claude from "./claude/types";
 export * as Cli from "./cli/types";
 export * as Codex from "./codex/types";
 export * as Compose from "./compose/types";

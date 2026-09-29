@@ -29,21 +29,28 @@ type Config = {
 
 Merge precedence (resolved per lane by `laneConfig`): **exact lane override → `"task/provider"` prefix override → `defaults`**.
 
-Limits is a Core plugin, so its config lives at Layer 1 — it is set where `createCore` is called, not by consumer apps. `createApp`'s `pluginConfigs` is typed to **regular plugins only**; the framework calls `createCore` with `pluginConfigs: {}`, so at M0 the defaults above (60 rpm / 4 concurrent per lane) are fixed for Layer-3 apps. The config shape, for Layer-2 callers of `createCore(coreConfig, { pluginConfigs })`:
+Apps override it like any plugin, through `createApp`'s `pluginConfigs`. Config merges shallowly, so a `lanes` object replaces the default `{}` and a `defaults` object must be complete:
 
 ```ts
-{
-  limits: {
-    defaults: { rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 },
-    lanes: {
-      // Prefix override: applies to every account on this task/provider pair.
-      "voiceover/elevenlabs": { rpm: 20, concurrency: 2 },
-      // Exact override: wins over the prefix for this specific lane.
-      "voiceover/elevenlabs/default": { breakerCooldownMs: 60_000 }
+import { createApp } from "@moku-labs/ai";
+
+const app = createApp({
+  pluginConfigs: {
+    limits: {
+      lanes: {
+        // Prefix override: every account on this task/provider pair runs one call at a time.
+        "prompt-gen/claude": { concurrency: 1 },
+        // Exact override: wins over any prefix override for this specific lane.
+        "voiceover/elevenlabs/default": { rpm: 20, breakerCooldownMs: 60_000 }
+      }
     }
   }
-}
+});
+
+app.limits.laneConfig("prompt-gen/claude/default").concurrency; // 1
 ```
+
+The `pluginConfigs` type lists regular plugins only. TypeScript flags the `limits` key today (TS2353), but the value reaches `laneConfig` at runtime.
 
 ## API reference (`ctx.limits.*`)
 
@@ -55,13 +62,13 @@ The full surface is the `LimitsApi` type. Lane state is created lazily — a lan
 acquire(lane: string, opts?: { signal?: AbortSignal }): Promise<{ release: () => void }>;
 ```
 
-Waits for lane capacity in three stages: breaker closed (or the single half-open probe slot), a token available, and a concurrency slot (FIFO-fair). Resolves with a handle whose `release()` **must be called exactly once** when the request settles (it is a no-op after the first call). Releasing hands the freed concurrency slot to the next queued waiter.
+Waits for lane capacity in three stages: breaker closed (or the single half-open probe slot), a token available, and a concurrency slot (FIFO-fair). Resolves with a handle whose `release()` **must be called exactly once** when the request settles (it is a no-op after the first call). Releasing hands the freed concurrency slot to the next queued waiter and gives back a half-open probe slot, so a caller that never calls `reportOutcome` does not lock the lane. The probe slot is held until the owner's `release()`. `reportOutcome` never frees it, so a slow call admitted before the trip cannot let a second probe in when it reports. Each probe owns a claim id: a `release()` frees only its own claim.
 
 - **Params:** `lane` — lane key; `opts.signal` — optional `AbortSignal` for a clean-cancel wait.
 - **Returns:** `Promise<{ release: () => void }>`.
 - **Throws:**
   - Rejects **immediately** with an `Error` tagged `reason: "breaker-open"` when the lane's breaker is open (or when it is half-open and the probe slot is already claimed). Branch on the tag, not the message.
-  - Rejects with `signal.reason` (or a default two-line error) if the signal aborts during the wait. An aborted wait leaks nothing: the reserved token is refunded, the waiter is removed from the queue, and a claimed probe slot is released.
+  - Rejects with `signal.reason` (or a default two-line error) if the signal aborts during the wait. An aborted wait leaks nothing: the reserved token is refunded, the waiter is removed from the queue, and the probe slot this wait claimed is released.
 
 ```ts
 const { release } = await ctx.limits.acquire("voiceover/elevenlabs/default", {
@@ -80,7 +87,7 @@ try {
 reportOutcome(lane: string, outcome: "ok" | "retryable-error"): void;
 ```
 
-Feeds the circuit breaker with a request outcome. `"ok"` resets the failure count and closes the breaker; `"retryable-error"` (429s, 5xx, timeouts) advances the failure count and (re)opens the breaker once `breakerThreshold` consecutive failures are reached. Either outcome settles a pending half-open probe. **Terminal 4xx responses should NOT be reported** — they are deterministic, not a lane-health signal.
+Feeds the circuit breaker with a request outcome. `"ok"` resets the failure count and closes the breaker; `"retryable-error"` (429s, 5xx, timeouts) advances the failure count and (re)opens the breaker once `breakerThreshold` consecutive failures are reached. Neither outcome frees the half-open probe slot: only the probe's own `release()` does. **Terminal 4xx responses should NOT be reported** — they are deterministic, not a lane-health signal.
 
 - **Params:** `lane` — lane key; `outcome` — `"ok" | "retryable-error"`.
 - **Returns:** `void`. Never throws.
@@ -199,6 +206,7 @@ const snapshots = app.limits.lanes().map(lane => app.limits.snapshot(lane));
 
 - **Registration** — wired as a core plugin in `src/config.ts` (`createCoreConfig("ai", { plugins: [logPlugin, envPlugin, journalPlugin, storePlugin, limitsPlugin] })`), so every regular plugin's `ctx` carries `limits` and the app exposes `app.limits`.
 - **`runner` (primary consumer)** — the runner pipeline's admission stage computes the lane as `"{item.task}/{item.provider}/default"` and calls `acquire(lane, { signal })` with its drain signal, treating a breaker-open rejection or abort as "skip this item for now". After each provider call it feeds the breaker: `reportOutcome(lane, "ok")` on success, `reportOutcome(lane, "retryable-error")` on retryable failure. Its domain context (`RunnerContext` in `src/plugins/runner/types.ts`) types `limits: LimitsApi` directly.
+- **`promptGen`** — `generate` acquires `prompt-gen/<provider>/default` per attempt and releases it in `finally`. It never reports outcomes, so the breaker on these lanes stays closed unless another caller feeds it.
 - **Provider plugins (`elevenlabs`, `openai`)** — do not call `ctx.limits` themselves; their handlers run inside the runner's admit → dispatch pipeline, so their traffic is already lane-gated.
 - **`cli` / `moku status`** — `snapshot(lane)` and `lanes()` exist for status-style introspection of live throughput state.
 - **`journal`** — no direct coupling, but the timer-free/no-lifecycle design leans on it: waiters killed mid-wait are safe because their items remain journal-`queued`/`dispatching` and resume on the next run.

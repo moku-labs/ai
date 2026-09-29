@@ -1,6 +1,8 @@
 /**
  * Standard tier — owns the prompt-gen capability contract + typed facade
- * app.promptGen.* (minimal M0 scope). Registry/task key: "prompt-gen".
+ * app.promptGen.*. Registry/task key: "prompt-gen".
+ * `generate` walks a `fallback` chain and waits for `ctx.limits` lanes.
+ * No events.
  *
  * @see README.md
  */
@@ -9,7 +11,7 @@ import { registryPlugin } from "../registry";
 import { createPromptGenApi } from "./api";
 import type { Config } from "./types";
 
-const defaultConfig: Config = { defaultProvider: "openai" };
+const defaultConfig: Config = { defaultProvider: "openai", fallback: [] };
 
 /**
  * promptGen — Standard tier plugin. Task contract owner + facade. Depends on registry.

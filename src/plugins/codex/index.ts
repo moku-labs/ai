@@ -1,7 +1,7 @@
 /**
- * Standard tier — Codex provider: image generation over the local Codex CLI
- * (`codex exec`), plan-billed at an explicit $0. Registers `image/codex` in
- * onInit. No events.
+ * Complex tier — Codex provider: image generation and prompt-gen over the
+ * local Codex CLI (`codex exec`), plan-billed at an explicit $0. Registers
+ * `image/codex` then `prompt-gen/codex` in onInit. No events.
  *
  * @see README.md
  */
@@ -9,6 +9,7 @@ import { createPlugin } from "../../config";
 import { registryPlugin } from "../registry";
 import { createCodexApi } from "./api";
 import { createImageHandler } from "./image/handler";
+import { createPromptGenHandler } from "./prompt/handler";
 import { createCodexState } from "./state";
 import type { Config } from "./types";
 
@@ -18,13 +19,14 @@ const defaultConfig: Config = {
   reasoningEffort: "low",
   timeoutMs: 600_000,
   workDir: ".moku/tmp",
-  priceOverrides: {}
+  priceOverrides: {},
+  textModel: "",
+  modelMap: {}
 };
 
 /**
- * codex — Standard tier image provider. Depends on registry (onInit
- * registration), like the elevenlabs/openai providers; the `image` contract is
- * a type-only import.
+ * codex — Complex tier image and prompt-gen provider. Depends on registry
+ * (onInit registration); the task contracts are plain imports, no depends edge.
  *
  * @see README.md
  */
@@ -34,15 +36,13 @@ export const codexPlugin = createPlugin("codex", {
   createState: createCodexState,
   api: createCodexApi,
   /**
-   * Registers the codex image handler with the registry.
+   * Registers the image handler, then the prompt-gen handler.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.image.providers(); // ["codex", ...]
-   * ```
    */
   onInit: ctx => {
-    ctx.require(registryPlugin).register("image", "codex", createImageHandler(ctx));
+    const registry = ctx.require(registryPlugin);
+    registry.register("image", "codex", createImageHandler(ctx));
+    registry.register("prompt-gen", "codex", createPromptGenHandler(ctx));
   }
 });

@@ -6,7 +6,7 @@
  * Plugins, in registration (dependency) order, and their options. Every
  * option has a default; override any of them per app with
  * `createApp({ pluginConfigs: { <plugin>: { ... } } })`. Core plugins
- * (`journal`, `store`, `limits`) are set at `createCore` and injected as
+ * (`journal`, `store`, `limits`) are registered in `createCoreConfig` and injected as
  * `ctx.journal` / `ctx.store` / `ctx.limits`.
  *
  * | Plugin | Option | Default |
@@ -16,16 +16,17 @@
  * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{}` |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
- * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` | `3` · `1000` · `10_000` · `5000` · `1_800_000` |
+ * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
  * | voiceover | `defaultProvider` · `defaultFormat` | `"elevenlabs"` · `"mp3"` |
  * | translate | `defaultProvider` | `"openai"` |
- * | promptGen | `defaultProvider` | `"openai"` |
+ * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
- * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` |
+ * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
+ * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
  * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
@@ -51,6 +52,7 @@ import {
   arkPlugin,
   assetPlugin,
   buildfilePlugin,
+  claudePlugin,
   cliPlugin,
   codexPlugin,
   composePlugin,
@@ -81,6 +83,7 @@ const framework = createCore(coreConfig, {
     elevenlabsPlugin,
     openaiPlugin,
     codexPlugin,
+    claudePlugin,
     falPlugin,
     arkPlugin,
     composePlugin,
@@ -122,6 +125,7 @@ export {
   arkPlugin,
   assetPlugin,
   buildfilePlugin,
+  claudePlugin,
   cliPlugin,
   codexPlugin,
   composePlugin,
@@ -143,12 +147,14 @@ export {
 // ─── Helpers ──────────────────────────────────────────────────
 export { defineBuild } from "./plugins/buildfile";
 export { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "./plugins/asset/contract";
+export { isPromptGenUnavailable, PromptGenUnavailableError } from "./plugins/promptGen/contract";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
   Ark,
   Asset,
   Buildfile,
+  Claude,
   Cli,
   Codex,
   Compose,
