@@ -19,21 +19,11 @@ import type {
 
 /**
  * A handler that can generate in one call.
- *
- * @example
- * ```ts
- * const sync: ExecuteHandler = { estimate: () => ({ usd: 0 }), execute: async () => result };
- * ```
  */
 type ExecuteHandler = VideoHandler & { execute: NonNullable<VideoHandler["execute"]> };
 
 /**
  * A handler with no `execute` that generates through the async job pair.
- *
- * @example
- * ```ts
- * const job: JobHandler = { estimate, submit, poll };
- * ```
  */
 type JobHandler = Omit<VideoHandler, "execute"> & {
   execute?: undefined;
@@ -43,11 +33,6 @@ type JobHandler = Omit<VideoHandler, "execute"> & {
 
 /**
  * A resolved, shape-checked video handler: either form of the contract.
- *
- * @example
- * ```ts
- * const handler: ResolvedVideoHandler = resolveHandler(ctx, "fal");
- * ```
  */
 type ResolvedVideoHandler = ExecuteHandler | JobHandler;
 
@@ -59,7 +44,7 @@ type ResolvedVideoHandler = ExecuteHandler | JobHandler;
  * @returns True when `candidate[key]` is a function.
  * @example
  * ```ts
- * hasFunction(handler, "estimate"); // => true
+ * hasFunction({ estimate: () => ({ usd: 0 }) }, "estimate"); // => true
  * ```
  */
 function hasFunction(candidate: object, key: string): boolean {
@@ -75,7 +60,7 @@ function hasFunction(candidate: object, key: string): boolean {
  * @returns True when `candidate` structurally satisfies `VideoHandler`.
  * @example
  * ```ts
- * if (isVideoHandler(raw)) await raw.estimate(request);
+ * isVideoHandler({ estimate: () => ({ usd: 0 }) }); // => false: no execute, no submit + poll
  * ```
  */
 export function isVideoHandler(candidate: unknown): candidate is ResolvedVideoHandler {
@@ -94,7 +79,7 @@ export function isVideoHandler(candidate: unknown): candidate is ResolvedVideoHa
  * @returns A two-line `Error` listing the available providers, or "none".
  * @example
  * ```ts
- * throw unknownProviderError("acme", ["fal"]);
+ * unknownProviderError("acme", ["fal"]).message; // => '[ai] No video provider named "acme" is registered.\n  Available: fal.'
  * ```
  */
 function unknownProviderError(name: string, available: readonly string[]): Error {
@@ -110,10 +95,6 @@ function unknownProviderError(name: string, available: readonly string[]): Error
  * @param provider - The provider name to resolve.
  * @returns The resolved, shape-checked handler.
  * @throws {Error} The pinned two-line "unknown provider" error.
- * @example
- * ```ts
- * const handler = resolveHandler(ctx, "fal");
- * ```
  */
 function resolveHandler(ctx: VideoContext, provider: string): ResolvedVideoHandler {
   const registry = ctx.require(registryPlugin);
@@ -132,7 +113,7 @@ function resolveHandler(ctx: VideoContext, provider: string): ResolvedVideoHandl
  * @returns The options object passed to handler methods.
  * @example
  * ```ts
- * handler.submit(request, signalOptions(opts?.signal));
+ * signalOptions(undefined); // => {}
  * ```
  */
 function signalOptions(signal: AbortSignal | undefined): { signal?: AbortSignal } {
@@ -148,7 +129,7 @@ function signalOptions(signal: AbortSignal | undefined): { signal?: AbortSignal 
  * @returns A promise that resolves after the delay.
  * @example
  * ```ts
- * await wait(5000, controller.signal);
+ * await wait(5000, AbortSignal.abort("stop")); // rejects with "stop" at once
  * ```
  */
 function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
@@ -157,14 +138,7 @@ function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
       reject(signal.reason);
       return;
     }
-    /**
-     * Cancels the pending timer and rejects with the abort reason.
-     *
-     * @example
-     * ```ts
-     * signal.addEventListener("abort", onAbort, { once: true });
-     * ```
-     */
+    /** Cancels the pending timer and rejects with the abort reason. */
     const onAbort = (): void => {
       clearTimeout(timer);
       reject(signal?.reason);
@@ -184,7 +158,7 @@ function wait(ms: number, signal: AbortSignal | undefined): Promise<void> {
  * @returns The plain video result.
  * @example
  * ```ts
- * toResult({ state: "done", video, mimeType: "video/mp4", costUsd: 0.25 });
+ * toResult({ state: "done", video: new Uint8Array(), mimeType: "video/mp4", costUsd: 0.3 }); // => { video: Uint8Array [], mimeType: "video/mp4", costUsd: 0.3 }
  * ```
  */
 function toResult(status: Extract<VideoJobPoll, { state: "done" }>): VideoResult {
@@ -202,10 +176,6 @@ function toResult(status: Extract<VideoJobPoll, { state: "done" }>): VideoResult
  * @param signal - Optional abort signal; cancels calls and waits.
  * @returns The finished video result.
  * @throws {unknown} The failed poll's `error` as-is, or the signal's reason on abort.
- * @example
- * ```ts
- * const clip = await runJob(handler, request, 5000, controller.signal);
- * ```
  */
 async function runJob(
   handler: JobHandler,
@@ -230,27 +200,10 @@ async function runJob(
  *
  * @param ctx - The video plugin context.
  * @returns The `app.video` API.
- * @example
- * ```ts
- * const api = createVideoApi(ctx);
- * const clip = await api.generate({ model: "minimax-h3", prompt: "push-in" });
- * ```
  */
 export function createVideoApi(ctx: VideoContext): VideoApi {
   return {
-    /**
-     * One-off direct generation — `execute` when the provider has it,
-     * otherwise an in-memory submit/poll loop. NOT journaled.
-     *
-     * @param request - The video request.
-     * @param opts - Optional provider override and abort signal.
-     * @returns The generated video result.
-     * @example
-     * ```ts
-     * await api.generate({ model: "minimax-h3", prompt: "push-in" });
-     * ```
-     */
-    async generate(request, opts) {
+    generate: async (request, opts) => {
       const handler = resolveHandler(ctx, opts?.provider ?? ctx.config.defaultProvider);
       const signal = opts?.signal;
       if (handler.execute !== undefined) {
@@ -258,33 +211,10 @@ export function createVideoApi(ctx: VideoContext): VideoApi {
       }
       return runJob(handler, request, ctx.config.pollIntervalMs, signal);
     },
-    /**
-     * Cost estimate without executing — delegates to the provider's own
-     * `estimate()`.
-     *
-     * @param request - The video request to estimate.
-     * @param opts - Optional provider override.
-     * @returns The estimated cost in USD.
-     * @example
-     * ```ts
-     * api.estimate({ model: "minimax-h3", prompt: "push-in" }); // => { usd: 0.25 }
-     * ```
-     */
-    estimate(request, opts) {
+    estimate: (request, opts) => {
       const handler = resolveHandler(ctx, opts?.provider ?? ctx.config.defaultProvider);
       return handler.estimate(request);
     },
-    /**
-     * Registered video providers, in registration order.
-     *
-     * @returns Registered provider names for the "video" task.
-     * @example
-     * ```ts
-     * api.providers(); // => ["fal"]
-     * ```
-     */
-    providers() {
-      return ctx.require(registryPlugin).providers("video");
-    }
+    providers: () => ctx.require(registryPlugin).providers("video")
   };
 }

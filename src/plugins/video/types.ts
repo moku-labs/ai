@@ -71,7 +71,7 @@ export type VideoApi = {
    * @returns The estimated cost in USD.
    * @example
    * ```ts
-   * app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => { usd: 0.25 }
+   * app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => { usd: 0.3 }
    * ```
    */
   estimate(request: VideoRequest, opts?: { provider?: string }): { usd: number };
@@ -94,11 +94,6 @@ export type { RegistryApi } from "../registry";
  * Domain context for the video API factory. `video` is a stateless facade
  * over `registry` (no `createState`), so `state` is the empty-object shape;
  * `require` is narrowed to the one dependency this plugin calls.
- *
- * @example
- * ```ts
- * export const createVideoApi = (ctx: VideoContext): VideoApi => ({ ... });
- * ```
  */
 export type VideoContext = PluginCtx<Config, Record<string, never>> & {
   /** Resolves a dependency plugin's API by instance reference. */

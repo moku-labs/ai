@@ -6,11 +6,6 @@
 
 /**
  * Pixel dimensions of an image.
- *
- * @example
- * ```ts
- * const size: ImageSize = { width: 1024, height: 576 };
- * ```
  */
 export type ImageSize = {
   /** Width in pixels. */
@@ -39,7 +34,7 @@ const NON_SOF_MARKERS: ReadonlySet<number> = new Set([0xc4, 0xc8, 0xcc]);
  * @returns The text.
  * @example
  * ```ts
- * ascii(bytes, 8, 4); // => "WEBP"
+ * ascii(new Uint8Array([0x57, 0x45, 0x42, 0x50]), 0, 4); // => "WEBP"
  * ```
  */
 function ascii(bytes: Uint8Array, offset: number, length: number): string {
@@ -54,7 +49,7 @@ function ascii(bytes: Uint8Array, offset: number, length: number): string {
  * @returns The byte value.
  * @example
  * ```ts
- * byteAt(bytes, 0); // => 0x89
+ * byteAt(new Uint8Array([0x89]), 1); // => 0
  * ```
  */
 function byteAt(bytes: Uint8Array, offset: number): number {
@@ -69,7 +64,7 @@ function byteAt(bytes: Uint8Array, offset: number): number {
  * @returns The value.
  * @example
  * ```ts
- * uint16BE(bytes, 2); // => 16
+ * uint16BE(new Uint8Array([0x04, 0x00]), 0); // => 1024
  * ```
  */
 function uint16BE(bytes: Uint8Array, offset: number): number {
@@ -84,7 +79,7 @@ function uint16BE(bytes: Uint8Array, offset: number): number {
  * @returns The value.
  * @example
  * ```ts
- * uint16LE(bytes, 26); // => 1024
+ * uint16LE(new Uint8Array([0x00, 0x04]), 0); // => 1024
  * ```
  */
 function uint16LE(bytes: Uint8Array, offset: number): number {
@@ -99,7 +94,7 @@ function uint16LE(bytes: Uint8Array, offset: number): number {
  * @returns The value.
  * @example
  * ```ts
- * uint24LE(bytes, 24); // => 1023
+ * uint24LE(new Uint8Array([0xff, 0x03, 0x00]), 0); // => 1023
  * ```
  */
 function uint24LE(bytes: Uint8Array, offset: number): number {
@@ -114,7 +109,7 @@ function uint24LE(bytes: Uint8Array, offset: number): number {
  * @returns The value.
  * @example
  * ```ts
- * uint32BE(bytes, 16); // => 1024
+ * uint32BE(new Uint8Array([0x00, 0x00, 0x04, 0x00]), 0); // => 1024
  * ```
  */
 function uint32BE(bytes: Uint8Array, offset: number): number {
@@ -141,10 +136,6 @@ function positiveSize(width: number, height: number): ImageSize | undefined {
  *
  * @param bytes - File bytes.
  * @returns The size, or undefined when this is not a PNG.
- * @example
- * ```ts
- * pngSize(bytes); // => { width: 1024, height: 1024 }
- * ```
  */
 function pngSize(bytes: Uint8Array): ImageSize | undefined {
   const isPng = PNG_SIGNATURE.every((value, index) => bytes[index] === value);
@@ -158,10 +149,6 @@ function pngSize(bytes: Uint8Array): ImageSize | undefined {
  *
  * @param bytes - File bytes.
  * @returns The size, or undefined when this is not a JPEG or has no SOF.
- * @example
- * ```ts
- * jpegSize(bytes); // => { width: 1920, height: 1080 }
- * ```
  */
 function jpegSize(bytes: Uint8Array): ImageSize | undefined {
   if (byteAt(bytes, 0) !== 0xff || byteAt(bytes, 1) !== 0xd8) return undefined;
@@ -194,10 +181,6 @@ function jpegSize(bytes: Uint8Array): ImageSize | undefined {
  *
  * @param bytes - File bytes.
  * @returns The size, or undefined when this is not a WebP.
- * @example
- * ```ts
- * webpSize(bytes); // => { width: 1024, height: 576 }
- * ```
  */
 function webpSize(bytes: Uint8Array): ImageSize | undefined {
   if (ascii(bytes, 0, 4) !== "RIFF" || ascii(bytes, 8, 4) !== "WEBP") return undefined;
