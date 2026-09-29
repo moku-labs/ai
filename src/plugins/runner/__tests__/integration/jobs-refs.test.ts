@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { coreConfig, createCore, createPlugin } from "../../../../config";
 import { buildfilePlugin } from "../../../buildfile";
 import type { LaneConfig } from "../../../limits/types";
@@ -510,13 +510,34 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
       expect(breaker).toBe("closed");
     });
 
-    it("unlike a plain 503, which opens the breaker so the retry never reaches the provider", async () => {
+    it("unlike a plain 503, which opens the breaker so the retry waits instead of reaching the provider", async () => {
       const busy = Object.assign(new Error("busy"), { status: 503 });
-      const { result, video, breaker } = await runOnTightBreaker(busy);
+      const video = jobHandler({
+        polls: jobId => (jobId === "job-1" ? { state: "failed", error: busy } : done("clip"))
+      });
+      const app = await startApp(
+        tempDir,
+        [
+          ["image", "fake", imageHandler().handler],
+          ["video", "fake", video.handler]
+        ],
+        {},
+        { "video/fake": { breakerThreshold: 1, breakerCooldownMs: 60_000 } }
+      );
+      stops.push(() => app.stop());
+      await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
 
-      expect(result.totals).toMatchObject({ done: 1, queued: 1 });
+      // The run waits out the open breaker, so pause it once the breaker has tripped.
+      const pause = new AbortController();
+      const running = app.runner.run({ files }, { signal: pause.signal });
+      await vi.waitFor(() => {
+        expect(app.probe.limits.snapshot("video/fake/default").breaker).toBe("open");
+      });
+      pause.abort();
+      const result = await running;
+
+      expect(result.status).toBe("paused");
       expect(video.submits).toHaveLength(1);
-      expect(breaker).toBe("open");
     });
   });
 

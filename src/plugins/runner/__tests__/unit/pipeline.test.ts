@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DoneArtifact, GateResult } from "../../../journal/types";
+import type { LaneSnapshot, LimitsApi } from "../../../limits/types";
 import {
   artifactKeyOf,
   createDrainController,
@@ -9,7 +10,6 @@ import {
 } from "../../pipeline";
 import { openClaim } from "../../state";
 import type {
-  ActiveRun,
   ClaimVerdict,
   ExecutableHandler,
   JobPoll,
@@ -25,29 +25,6 @@ import {
 } from "./fixtures";
 
 /**
- * Builds a fake `ActiveRun`, for `executeItem` tests (only `inFlight`/`signal`
- * are exercised; the stop controller and settle promise are inert).
- *
- * @param signal - Optional abort signal to attach.
- * @returns A fake active-run record.
- * @example
- * ```ts
- * const active = fakeActiveRun();
- * ```
- */
-function fakeActiveRun(signal?: AbortSignal): ActiveRun {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  return {
-    runId: "run-1",
-    signal,
-    inFlight: 0,
-    stop: new AbortController(),
-    settled: promise,
-    settle: resolve
-  };
-}
-
-/**
  * Collects every `RunEvent` reported during a test into an array, usable
  * directly as the `report` callback `executeItem` expects.
  *
@@ -55,7 +32,7 @@ function fakeActiveRun(signal?: AbortSignal): ActiveRun {
  * @example
  * ```ts
  * const { report, events } = collectReports();
- * await executeItem(ctx, item, request, 3, drain, active, report);
+ * await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
  * ```
  */
 function collectReports(): {
@@ -82,6 +59,99 @@ function collectReports(): {
  */
 function flush(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
+ * Builds a fake lane with one concurrency slot: `acquire` waits until the
+ * slot is free, `release` hands it to the next waiter.
+ *
+ * @returns The fake `acquire`, plus a probe telling whether the slot is held.
+ * @example
+ * ```ts
+ * const slot = oneSlotLane();
+ * const ctx = createFakeRunnerContext(log, { limits: { acquire: slot.acquire } });
+ * ```
+ */
+function oneSlotLane(): {
+  acquire: () => Promise<{ release: () => void }>;
+  busy: () => boolean;
+} {
+  let held = false;
+  const waiters: Array<() => void> = [];
+
+  const release = (): void => {
+    held = false;
+    waiters.shift()?.();
+  };
+  const acquire = async (): Promise<{ release: () => void }> => {
+    while (held) await new Promise<void>(resolve => waiters.push(resolve));
+    held = true;
+    return { release };
+  };
+
+  return { acquire, busy: () => held };
+}
+
+/**
+ * Builds a fake `limits.acquire` that rejects the way an open breaker does
+ * (`reason: "breaker-open"`) for its first `refusals` calls, then grants a
+ * slot. Every call and release goes to the call log.
+ *
+ * @param log - Shared call-order log.
+ * @param refusals - How many leading calls reject with an open breaker.
+ * @returns The fake `acquire`.
+ * @example
+ * ```ts
+ * const acquire = openBreakerLane(log, 1); // first call rejects, the second one gets a slot
+ * ```
+ */
+function openBreakerLane(log: CallLog, refusals: number): () => Promise<{ release: () => void }> {
+  let calls = 0;
+  return async (): Promise<{ release: () => void }> => {
+    calls += 1;
+    log.push("limits.acquire");
+    if (calls <= refusals) {
+      throw Object.assign(new Error("[ai] limits: breaker open."), { reason: "breaker-open" });
+    }
+    return {
+      release: (): void => {
+        log.push("limits.release");
+      }
+    };
+  };
+}
+
+/**
+ * Builds fake `limits.laneConfig` and `limits.snapshot` for a lane whose
+ * breaker is in `phase`, with a `cooldownMs` breaker cooldown.
+ *
+ * @param phase - The breaker phase `snapshot` reports.
+ * @param cooldownMs - The lane's `breakerCooldownMs`.
+ * @returns The two fakes, to spread into the `limits` override.
+ * @example
+ * ```ts
+ * breakerLane("half-open", 0).snapshot("fakeTask/fakeProvider/default").breaker; // "half-open"
+ * ```
+ */
+function breakerLane(
+  phase: LaneSnapshot["breaker"],
+  cooldownMs: number
+): Pick<LimitsApi, "laneConfig" | "snapshot"> {
+  return {
+    laneConfig: vi.fn(() => ({
+      rpm: 60,
+      concurrency: 4,
+      breakerThreshold: 5,
+      breakerCooldownMs: cooldownMs
+    })),
+    snapshot: vi.fn((lane: string) => ({
+      lane,
+      tokens: 60,
+      inFlight: 0,
+      waiting: 0,
+      breaker: phase
+    }))
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -181,10 +251,9 @@ describe("executeItem", () => {
     const ctx = createFakeRunnerContext(log);
     const item = fakeItemRow();
     const drain = createDrainController(undefined);
-    const active = fakeActiveRun();
     const { report, events } = collectReports();
 
-    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+    await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
     expect(log).toEqual([
       "limits.acquire",
@@ -213,10 +282,9 @@ describe("executeItem", () => {
     const ctx = createFakeRunnerContext(log, { journal: { gateToDispatching } });
     const item = fakeItemRow();
     const drain = createDrainController(undefined);
-    const active = fakeActiveRun();
     const { report, events } = collectReports();
 
-    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+    await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
     expect(log).toEqual([
       "limits.acquire",
@@ -236,10 +304,9 @@ describe("executeItem", () => {
     const ctx = createFakeRunnerContext(log, { journal: { gateToDispatching } });
     const item = fakeItemRow();
     const drain = createDrainController(undefined);
-    const active = fakeActiveRun();
     const { report } = collectReports();
 
-    await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+    await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
     expect(drain.budgetStopped).toBe(true);
     expect(drain.signal.aborted).toBe(true);
@@ -265,10 +332,9 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -307,15 +373,15 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
       const startedAt = Date.now();
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
       const elapsedMs = Date.now() - startedAt;
 
       expect(events.at(-1)?.type).toBe("item:done");
-      expect(elapsedMs).toBeGreaterThanOrEqual(RETRY_AFTER_MS);
+      // A Node timer can fire about 1 ms early against Date.now(): 5 ms slack.
+      expect(elapsedMs).toBeGreaterThanOrEqual(RETRY_AFTER_MS - 5);
     });
 
     it("retries a timeout failure", async () => {
@@ -336,10 +402,9 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.at(-1)?.type).toBe("item:done");
     });
@@ -362,10 +427,9 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.at(-1)?.type).toBe("item:done");
     });
@@ -380,10 +444,9 @@ describe("executeItem", () => {
       const ctx = createFakeRunnerContext(log, { registry: { resolve: (): unknown => handler } });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -404,10 +467,9 @@ describe("executeItem", () => {
       const ctx = createFakeRunnerContext(log, { registry: { resolve: (): unknown => handler } });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -431,10 +493,9 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(undefined);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(2), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(2), drain, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -448,6 +509,249 @@ describe("executeItem", () => {
     });
   });
 
+  describe("lane slot during retry backoff", () => {
+    it("releases the lane slot before sleeping the backoff, so another item on the lane runs meanwhile", async () => {
+      const log: CallLog = [];
+      const slot = oneSlotLane();
+      let executeCalls = 0;
+      const handler = fakeHandler(log, {
+        execute: async () => {
+          executeCalls += 1;
+          if (executeCalls === 1) {
+            throw Object.assign(new Error("rate limited"), { status: 429, retryAfterMs: 60_000 });
+          }
+          return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
+        }
+      });
+      const ctx = createFakeRunnerContext(log, {
+        config: { retryBaseMs: 1 },
+        registry: { resolve: (): unknown => handler },
+        limits: { acquire: slot.acquire }
+      });
+      const controller = new AbortController();
+      const drain = createDrainController(controller.signal);
+      const first = collectReports();
+      const second = collectReports();
+
+      const firstRun = executeItem(
+        ctx,
+        fakeItemRow({ id: "item-a" }),
+        fakePlan(3),
+        drain,
+        first.report,
+        Promise.resolve()
+      );
+      await flush();
+      expect(first.events.at(-1)?.type).toBe("item:retry");
+
+      const secondRun = executeItem(
+        ctx,
+        fakeItemRow({ id: "item-b" }),
+        fakePlan(3),
+        drain,
+        second.report,
+        Promise.resolve()
+      );
+      await Promise.race([secondRun, flush().then(flush)]);
+
+      expect(second.events.at(-1)?.type).toBe("item:done");
+
+      controller.abort();
+      await Promise.all([firstRun, secondRun]);
+      expect(slot.busy()).toBe(false);
+    });
+
+    it("removes the abort listener of every backoff wait from the drain signal", async () => {
+      const log: CallLog = [];
+      let executeCalls = 0;
+      const handler = fakeHandler(log, {
+        execute: async () => {
+          executeCalls += 1;
+          if (executeCalls <= 2) throw Object.assign(new Error("server error"), { status: 500 });
+          return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
+        }
+      });
+      const ctx = createFakeRunnerContext(log, {
+        config: { retryBaseMs: 4 },
+        registry: { resolve: (): unknown => handler }
+      });
+      const drain = createDrainController(undefined);
+      const added = vi.spyOn(drain.signal, "addEventListener");
+      const removed = vi.spyOn(drain.signal, "removeEventListener");
+      const { report, events } = collectReports();
+
+      await executeItem(ctx, fakeItemRow(), fakePlan(3), drain, report, Promise.resolve());
+
+      // Two retries, two backoff waits: each wait takes its listener off the run-long signal.
+      const abortAdds = added.mock.calls.filter(([type]) => type === "abort");
+      const abortRemoves = removed.mock.calls.filter(([type]) => type === "abort");
+      expect(events.at(-1)?.type).toBe("item:done");
+      expect(abortAdds).toHaveLength(2);
+      expect(abortRemoves.map(([, listener]) => listener)).toEqual(
+        abortAdds.map(([, listener]) => listener)
+      );
+    });
+  });
+
+  describe("open lane breaker", () => {
+    const LANE = "fakeTask/fakeProvider/default";
+    /** The runner's floor between two asks of a refusing lane (LANE_OPEN_MIN_WAIT_MS). */
+    const MIN_WAIT_MS = 250;
+
+    it.each<[LaneSnapshot["breaker"], number, number]>([
+      ["open", 1000, 1000],
+      ["open", 25, MIN_WAIT_MS],
+      ["half-open", 30_000, MIN_WAIT_MS],
+      ["half-open", 0, MIN_WAIT_MS],
+      ["closed", 30_000, MIN_WAIT_MS]
+    ])("an %s lane with a %i ms cooldown logs runner:lane-open and is asked again after %i ms", async (phase, cooldownMs, waitMs) => {
+      vi.useFakeTimers();
+      try {
+        const log: CallLog = [];
+        const ctx = createFakeRunnerContext(log, {
+          limits: { acquire: openBreakerLane(log, 1), ...breakerLane(phase, cooldownMs) }
+        });
+        const item = fakeItemRow();
+        const { report, events } = collectReports();
+
+        const running = executeItem(
+          ctx,
+          item,
+          fakePlan(3),
+          createDrainController(undefined),
+          report,
+          Promise.resolve()
+        );
+        await vi.advanceTimersByTimeAsync(waitMs - 1);
+        expect(log).toEqual(["limits.acquire"]);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(log.slice(0, 3)).toEqual([
+          "limits.acquire",
+          "limits.acquire",
+          `journal.gateToDispatching(${item.id})`
+        ]);
+        expect(events.map(event => event.type)).toEqual([
+          "item:queued",
+          "item:dispatching",
+          "item:done"
+        ]);
+        await expect(running).resolves.toBe("settled");
+        expect(ctx.log.warn).toHaveBeenCalledWith("runner:lane-open", {
+          itemId: item.id,
+          lane: LANE
+        });
+        expect(ctx.limits.snapshot).toHaveBeenCalledWith(LANE);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never asks faster than the floor with a zero cooldown: three refusals are three waits, then the item runs", async () => {
+      vi.useFakeTimers();
+      try {
+        const log: CallLog = [];
+        const refuseThrice = openBreakerLane(log, 3);
+        const askedAt: number[] = [];
+        const acquire = (): Promise<{ release: () => void }> => {
+          askedAt.push(Date.now());
+          return refuseThrice();
+        };
+        const ctx = createFakeRunnerContext(log, {
+          limits: { acquire, ...breakerLane("half-open", 0) }
+        });
+        const { report, events } = collectReports();
+        const startedAt = Date.now();
+
+        const running = executeItem(
+          ctx,
+          fakeItemRow(),
+          fakePlan(3),
+          createDrainController(undefined),
+          report,
+          Promise.resolve()
+        );
+        await vi.advanceTimersByTimeAsync(3 * MIN_WAIT_MS);
+
+        expect(askedAt.map(at => at - startedAt)).toEqual([
+          0,
+          MIN_WAIT_MS,
+          2 * MIN_WAIT_MS,
+          3 * MIN_WAIT_MS
+        ]);
+        // One wait, one warning: the three refusals do not flood the log.
+        expect(ctx.log.warn).toHaveBeenCalledTimes(1);
+        expect(events.at(-1)?.type).toBe("item:done");
+        await expect(running).resolves.toBe("settled");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops waiting out the cooldown when the run is paused, and leaves the item queued", async () => {
+      vi.useFakeTimers();
+      try {
+        const log: CallLog = [];
+        const ctx = createFakeRunnerContext(log, {
+          limits: {
+            acquire: openBreakerLane(log, Number.POSITIVE_INFINITY),
+            ...breakerLane("open", 30_000)
+          }
+        });
+        const controller = new AbortController();
+        const { report, events } = collectReports();
+        let settlement: string | undefined;
+
+        const running = executeItem(
+          ctx,
+          fakeItemRow(),
+          fakePlan(3),
+          createDrainController(controller.signal),
+          report,
+          Promise.resolve()
+        ).then(value => {
+          settlement = value;
+        });
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(settlement).toBeUndefined();
+
+        // No fake time passes: only the abort can end the 30 s wait.
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(settlement).toBe("settled");
+        expect(log).toEqual(["limits.acquire"]);
+        expect(events.map(event => event.type)).toEqual(["item:queued"]);
+        await running;
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rethrows an acquire rejection that is neither an abort nor an open breaker", async () => {
+      const log: CallLog = [];
+      const ctx = createFakeRunnerContext(log, {
+        limits: {
+          acquire: async (): Promise<{ release: () => void }> => {
+            throw new Error("[ai] limits: lane state is broken.");
+          }
+        }
+      });
+
+      await expect(
+        executeItem(
+          ctx,
+          fakeItemRow(),
+          fakePlan(3),
+          createDrainController(undefined),
+          collectReports().report,
+          Promise.resolve()
+        )
+      ).rejects.toThrow("[ai] limits: lane state is broken.");
+      expect(log).toEqual([]);
+    });
+  });
+
   describe("abort drain", () => {
     it("admits no items when the drain signal is already aborted", async () => {
       const log: CallLog = [];
@@ -456,14 +760,42 @@ describe("executeItem", () => {
       const controller = new AbortController();
       controller.abort();
       const drain = createDrainController(controller.signal);
-      const active = fakeActiveRun();
       const { report, events } = collectReports();
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(log).toEqual([]);
       expect(events.map(event => event.type)).toEqual(["item:queued"]);
-      expect(active.inFlight).toBe(0);
+    });
+
+    it("gives back a lane slot granted after the run stopped, and makes no provider call", async () => {
+      const log: CallLog = [];
+      const controller = new AbortController();
+      const acquire = async (): Promise<{ release: () => void }> => {
+        log.push("limits.acquire");
+        // The pause lands while the slot is granted: limits hands it over anyway.
+        controller.abort();
+        return {
+          release: (): void => {
+            log.push("limits.release");
+          }
+        };
+      };
+      const ctx = createFakeRunnerContext(log, { limits: { acquire } });
+      const { report, events } = collectReports();
+
+      const settlement = await executeItem(
+        ctx,
+        fakeItemRow(),
+        fakePlan(3),
+        createDrainController(controller.signal),
+        report,
+        Promise.resolve()
+      );
+
+      expect(settlement).toBe("settled");
+      expect(log).toEqual(["limits.acquire", "limits.release"]);
+      expect(events.map(event => event.type)).toEqual(["item:queued"]);
     });
 
     it("lets an in-flight retry attempt finish, then stops admitting new attempts once aborted", async () => {
@@ -482,7 +814,6 @@ describe("executeItem", () => {
       });
       const item = fakeItemRow();
       const drain = createDrainController(controller.signal);
-      const active = fakeActiveRun();
       const events: UnstampedRunEvent[] = [];
       // Aborts as soon as the retry is reported — synchronously before the
       // pending `delay()` wait starts, so the wait resolves immediately and
@@ -493,7 +824,7 @@ describe("executeItem", () => {
         if (event.type === "item:retry") controller.abort();
       };
 
-      await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+      await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
 
       expect(events.map(event => event.type)).toEqual([
         "item:queued",
@@ -503,7 +834,6 @@ describe("executeItem", () => {
       // Exactly the one in-flight attempt ran to completion; the abort only
       // stopped the NEXT admission, never a second execute() call.
       expect(executeCalls).toBe(1);
-      expect(active.inFlight).toBe(0);
     });
   });
 });
@@ -544,7 +874,6 @@ async function leaderVerdict(
     fakeItemRow({ artifactKey: "ak-1" }),
     fakePlan(options.maxAttempts ?? 3),
     createDrainController(undefined),
-    fakeActiveRun(),
     collectReports().report,
     Promise.resolve()
   );
@@ -576,7 +905,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       item,
       fakePlan(3),
       createDrainController(undefined),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -618,7 +946,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       item,
       fakePlan(3),
       createDrainController(undefined),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -649,15 +976,7 @@ describe("executeItem — cross-run dedupe claim", () => {
     const drain = createDrainController(undefined);
     const { report, events } = collectReports();
 
-    const following = executeItem(
-      ctx,
-      item,
-      fakePlan(3),
-      drain,
-      fakeActiveRun(),
-      report,
-      Promise.resolve()
-    );
+    const following = executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
     await flush();
     settleLeader({ kind: "flagged" });
     await following;
@@ -686,7 +1005,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       item,
       fakePlan(3),
       createDrainController(undefined),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -715,7 +1033,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       item,
       fakePlan(3),
       createDrainController(undefined),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -741,7 +1058,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       item,
       fakePlan(3),
       createDrainController(controller.signal),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -765,7 +1081,6 @@ describe("executeItem — cross-run dedupe claim", () => {
       fakeItemRow(),
       fakePlan(3),
       createDrainController(undefined),
-      fakeActiveRun(),
       report,
       Promise.resolve()
     );
@@ -808,7 +1123,6 @@ describe("executeItem — cross-run dedupe claim", () => {
           fakeItemRow({ artifactKey: "ak-1" }),
           fakePlan(3),
           createDrainController(undefined),
-          fakeActiveRun(),
           collectReports().report,
           Promise.resolve()
         )
@@ -880,7 +1194,6 @@ async function runFailFirstJob(
     item,
     fakePlan(3),
     createDrainController(undefined),
-    fakeActiveRun(),
     report,
     Promise.resolve()
   );

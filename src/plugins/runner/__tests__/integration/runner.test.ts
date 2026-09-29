@@ -380,6 +380,41 @@ describe("runner plugin integration", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Runtime: an open lane breaker is waited out, never dropped
+  // -------------------------------------------------------------------------
+
+  it("waits out an open lane breaker, then finishes the item done", async () => {
+    const handler = createFakeHandler({ costUsd: 0.1, failuresBeforeSuccess: 1 });
+    const fixture = createFakeProviderPlugin("fixtureI", "fakeTask", "fakeProvider", handler);
+    // One 5xx opens the breaker for 1 s; the 1 ms backoff asks for the lane well inside it.
+    const { createApp } = buildFramework(tempDir, {
+      limits: {
+        defaults: { rpm: 6000, concurrency: 4, breakerThreshold: 1, breakerCooldownMs: 1000 }
+      }
+    });
+    const app = createApp({
+      plugins: [fixture],
+      pluginConfigs: { runner: { retryBaseMs: 1 } }
+    });
+    await app.start();
+
+    await writeFile(path.join(tempDir, "a.moku.yaml"), buildFileYaml("build-a", { text: "a" }));
+
+    const result = await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+
+    // The retry found the breaker open and waited it out: the lane-open warning proves it did.
+    const laneOpen = app.log.trace().find(entry => entry.event === "runner:lane-open");
+    expect(laneOpen).toMatchObject({
+      level: "warn",
+      data: { lane: "fakeTask/fakeProvider/default" }
+    });
+    expect(result.status).toBe("done");
+    expect(result.totals).toMatchObject({ total: 1, done: 1, queued: 0, failed: 0 });
+
+    await app.stop();
+  });
+
+  // -------------------------------------------------------------------------
   // Runtime: content-policy is terminal flagged
   // -------------------------------------------------------------------------
 

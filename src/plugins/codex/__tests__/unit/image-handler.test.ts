@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +131,19 @@ describe("createImageHandler", () => {
       const result = await createImageHandler(ctx).execute({ prompt: "p" }, {});
 
       expect(result.mimeType).toBe("image/jpeg");
+    });
+
+    it('runs in a call dir under os.tmpdir() when workDir is ""', async () => {
+      const bin = writeFakeCodex(root, WRITE_OUTPUT_PNG);
+      const ctx = createTestCtx({ config: { bin, workDir: "" } });
+
+      await createImageHandler(ctx).execute({ prompt: "p" }, {});
+
+      const args = readFileSync(path.join(root, "args.txt"), "utf8").trimEnd().split("\n");
+      const callDir = args[args.indexOf("-C") + 1] ?? "";
+      expect(path.dirname(callDir)).toBe(tmpdir());
+      expect(path.basename(callDir)).toMatch(/^codex-/);
+      expect(existsSync(callDir)).toBe(false);
     });
 
     it("removes its temp dir afterwards", async () => {
