@@ -35,8 +35,8 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`); provider plugins
-  (`elevenlabs`, `openai`, `codex`, `fal`) register handlers with a dumb registry. Neither imports the other — consumer apps
+  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `asset`); provider plugins
+  (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `apimodels`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
   provider, input, params, and the keys of everything it references). A done artifact
@@ -59,7 +59,8 @@ bun add @moku-labs/ai
 > `@moku-labs/common`, `better-sqlite3`, `openai`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY`, or put them in a `.env.local`
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `ARK_API_KEY` (plus
+> `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a `.env.local`
 > file in the working directory (the shell wins over the file), before executing (estimates and
 > validation never need a key).
 
@@ -146,7 +147,7 @@ one twice.
 ## Plugins
 
 Three core plugins are injected on every plugin's `ctx` (plus `ctx.log` / `ctx.env`
-inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); ten regular
+inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); nineteen regular
 plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 
 | Plugin | Tier | Kind | Responsibility |
@@ -159,14 +160,19 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`runner`](./src/plugins/runner/README.md) | Complex | regular (`app.runner`) | The durable orchestrator — `run`/`resume`/`estimate`/`status`/`events()`; owns all bus events. |
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
-| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`). |
+| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. |
 | [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`; price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
-| [`codex`](./src/plugins/codex/README.md) | Standard | regular (`app.codex`) | Image provider over the local Codex CLI (`codex exec`), plan-billed. |
-| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5 and 2.0 (Mini), MiniMax H3 and H3 Max, Kling 3, Wan 3.0, Veo 3.1 Fast, Vidu Q3; image and audio refs; per-second and reference-token prices. |
+| [`music`](./src/plugins/music/README.md) | Standard | regular (`app.music`) | Owns the `"music"` task contract (`execute` or `submit` + `poll`) + one-off facade. `MusicRequest.model` is required. |
+| [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
+| [`codex`](./src/plugins/codex/README.md) | Complex | regular (`app.codex`) | Image and prompt-gen provider over the local Codex CLI (`codex exec`), plan-billed. |
+| [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Four tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. `app.fal.models(task)` lists each task's models with prices. |
+| [`apimodels`](./src/plugins/apimodels/README.md) | Complex | regular (`app.apimodels`) | Video provider over apimodels.app: Seedance 2.5 and 2.0 official, which accept real faces; optional `asset://` registration via item `params.assets`, cached in the journal. |
+| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0 and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video and asset providers, `asset://` portraits, per-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
@@ -288,12 +294,51 @@ items:
     task: video
     provider: fal
     input: { model: minimax-h3, prompt: "slow push-in", image: { $ref: s01.key }, seconds: 5 }
+  - id: s01.score
+    task: music
+    provider: fal
+    input: { model: elevenlabs-music-v2.5, prompt: "tense synth pulse", lengthMs: 30000 }
 ```
 
 `moku run ep01.moku.yaml --max-cost 10` renders the keyframe, then the clip, and
-writes `out/ep01/s01.key.png` and `out/ep01/s01.h3.mp4`. The fal models and their
-per-second prices are listed in the [fal README](./src/plugins/fal/README.md); a
-model with no price fails the estimate instead of counting as $0.
+writes `out/ep01/s01.key.png`, `out/ep01/s01.h3.mp4` and `out/ep01/s01.score.mp3`.
+The fal models and their prices are listed in the [fal README](./src/plugins/fal/README.md);
+a model with no price fails the estimate instead of counting as $0.
+
+`music` items need `model`: the runner hashes the input as written, so there is no
+provider default. The same request works one-off:
+
+```ts
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, ...]
+const track = await app.music.generate({
+  prompt: "tense synth pulse", model: "elevenlabs-music-v2.5", lengthMs: 60_000
+});
+await Bun.write("teaser.mp3", track.audio);
+```
+
+### Faces: register first, then `$ref`
+
+Seedance on Ark refuses a plain photo of a real face, but takes the same face as a
+registered asset. An `asset` item registers the portrait once, in your own Ark account;
+the video items `$ref` it and Ark gets `asset://<id>` instead of the photo:
+
+```yaml
+items:
+  - id: face-mira
+    task: asset
+    provider: ark
+    input: { image: { $file: faces/mira.png }, url: "https://cdn.example/faces/mira.png" }
+  - id: clip-01
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, prompt: "image 1 walks into the rain",
+             refs: [{ $ref: face-mira }], seconds: 10 }
+```
+
+The asset is an artifact like any other: registered once, reused by every later run.
+A refused portrait flags the asset item, and the clips that use it are never
+dispatched. There is no fallback to the raw photo. Setup (entitlement, authorization
+letter, group id) and the model table are in the [ark README](./src/plugins/ark/README.md).
 
 ## Configuration
 
@@ -322,6 +367,7 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `defaultFormat` | `"mp3" \| "wav" \| "ogg"` | `"mp3"` |
 | `translate` | `defaultProvider` | `string` | `"openai"` |
 | `promptGen` | `defaultProvider` | `string` | `"openai"` |
+| | `fallback` | `string[]` | `[]` |
 | `elevenlabs` | `apiKeyEnv` | `string` | `"ELEVENLABS_API_KEY"` |
 | | `baseUrl` | `string` | `"https://api.elevenlabs.io"` |
 | | `defaultModel` | `string` | `"eleven_multilingual_v2"` |
@@ -335,17 +381,43 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | `image` | `defaultProvider` | `string` | `"codex"` |
 | `video` | `defaultProvider` | `string` | `"fal"` |
 | | `pollIntervalMs` | `number` | `5000` |
+| `music` | `defaultProvider` | `string` | `"fal"` |
+| | `pollIntervalMs` | `number` | `5000` |
+| `asset` | `defaultProvider` | `string` | `"ark"` |
+| | `pollIntervalMs` | `number` | `3000` |
 | `codex` | `bin` | `string` | `"codex"` |
 | | `model` | `string` | `"gpt-6-astra"` |
 | | `reasoningEffort` | `string` | `"low"` |
 | | `timeoutMs` | `number` | `600_000` |
-| | `workDir` | `string` | `".moku/tmp"` |
+| | `workDir` | `string` | `".moku/tmp"` (`""` = OS temp dir) |
 | | `priceOverrides` | `Record<string, number>` | `{}` |
+| | `textModel` | `string` | `""` (codex default) |
+| | `modelMap` | `Record<string, string>` | `{}` |
+| `claude` | `bin` | `string` | `"claude"` |
+| | `textModel` | `string` | `""` (CLI default) |
+| | `modelMap` | `Record<string, string>` | `{}` |
+| | `timeoutMs` | `number` | `600_000` |
+| | `workDir` | `string` | `""` (OS temp dir) |
 | `fal` | `apiKeyEnv` | `string` | `"FAL_KEY"` |
 | | `queueUrl` | `string` | `"https://queue.fal.run"` |
+| | `uploadUrl` | `string` | fal storage initiate URL |
 | | `upload` | `"storage" \| "data-uri"` | `"storage"` |
 | | `timeoutMs` | `number` | `60_000` |
-| | `priceOverrides` | `Record<string, number>` | `{}` |
+| | `priceOverrides` | `Record<string, number>` | `{}` (video `<alias>`; `image:<alias>`, `music:<alias>`, `llm:<id>#in` / `#out`) |
+| | `runUrl` | `string` | `"https://fal.run"` |
+| | `imageDefaultModel` | `string` | `"gpt-image-2.5"` |
+| | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` |
+| | `pollIntervalMs` | `number` | `2000` |
+| | `jobTimeoutMs` | `number` | `900_000` |
+| | `requestLog` | `string` | `""` (off) |
+| `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
+| | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
+| | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |
+| | `groupId` | `string \| null` | `null` (create one per process, log its id) |
+| | `groupName` | `string` | `"moku-ai"` |
+| | `timeoutMs` | `number` | `60_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` (USD per 1M output tokens) |
+| | `cnyPerUsd` | `number` | `7.1` |
 | `compose` | `provider` | `string` | `"openai"` |
 | | `maxRepairAttempts` | `number` | `2` |
 | `cli` | `plain` | `boolean` | `false` (auto-true when !TTY or `NO_COLOR`) |
@@ -491,8 +563,14 @@ bun run test:coverage      # unit + integration with coverage
   [voiceover](./src/plugins/voiceover/README.md) ·
   [translate](./src/plugins/translate/README.md) ·
   [promptGen](./src/plugins/promptGen/README.md) ·
+  [image](./src/plugins/image/README.md) ·
+  [video](./src/plugins/video/README.md) ·
+  [music](./src/plugins/music/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·
   [openai](./src/plugins/openai/README.md) ·
+  [fal](./src/plugins/fal/README.md) ·
+  [asset](./src/plugins/asset/README.md) ·
+  [ark](./src/plugins/ark/README.md) ·
   [compose](./src/plugins/compose/README.md) ·
   [cli](./src/plugins/cli/README.md)
 - LLM-oriented docs: [`llms.txt`](./llms.txt) (concise) and [`llms-full.txt`](./llms-full.txt) (complete type-level reference).

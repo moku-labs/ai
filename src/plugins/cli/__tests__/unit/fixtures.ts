@@ -167,13 +167,16 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
       totals: ZERO_TOTALS,
       recentItems: []
     }),
-    checkpoint: vi.fn(),
     findDoneArtifact: vi.fn(),
     reuseDone: vi.fn(),
     setAttemptJob: vi.fn(),
     findLiveJob: vi.fn(),
     latestRun: vi.fn(),
     getItem: vi.fn(),
+    isOpen: vi.fn(),
+    findProviderRecord: vi.fn(),
+    putProviderRecords: vi.fn(),
+    deleteProviderRecord: vi.fn(),
     ...overrides.journal
   };
 

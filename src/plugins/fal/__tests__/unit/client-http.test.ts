@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FalRequest } from "../../client";
-import { falFetch, jobFailure, parseJson } from "../../client";
+import type { FalRequest } from "../../client/http";
+import { falFetch, jobFailure, parseJson } from "../../client/http";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { callsOf, jsonResponse, stubFetch, TEST_KEY } from "./fixtures";
 

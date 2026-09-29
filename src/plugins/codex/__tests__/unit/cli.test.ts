@@ -10,9 +10,15 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildCodexArguments, isBinResolvable, runCodex } from "../../cli";
+import { PromptGenUnavailableError } from "../../../promptGen/contract";
+import {
+  buildCodexArguments,
+  buildCodexPromptArguments,
+  isBinResolvable,
+  runCodex
+} from "../../cli";
 import { RetryableProviderError, TerminalProviderError } from "../../errors";
-import { writeFakeCodex } from "./fixtures";
+import { CODEX_401_STDERR, printStderr, writeFakeCodex } from "./fixtures";
 
 describe("buildCodexArguments", () => {
   it("builds the exec argv with model, effort, sandbox, dir and last-message file", () => {
@@ -68,6 +74,98 @@ describe("buildCodexArguments", () => {
       reasoningEffort: "low",
       dir: "/d",
       refPaths: ["/d/ref-1.png"],
+      prompt: "--image looks like a flag"
+    });
+
+    expect(args.at(-2)).toBe("--");
+    expect(args.at(-1)).toBe("--image looks like a flag");
+  });
+});
+
+describe("buildCodexPromptArguments", () => {
+  it("builds the read-only exec argv with model, effort, dir and last-message file", () => {
+    const args = buildCodexPromptArguments({
+      model: "gpt-6-sol",
+      reasoningEffort: "medium",
+      dir: "/work/codex-1",
+      imagePaths: [],
+      hasSchema: false,
+      prompt: "Say ok"
+    });
+
+    expect(args).toEqual([
+      "exec",
+      "-m",
+      "gpt-6-sol",
+      "-c",
+      'model_reasoning_effort="medium"',
+      "--sandbox",
+      "read-only",
+      "--skip-git-repo-check",
+      "-C",
+      "/work/codex-1",
+      "-o",
+      path.join("/work/codex-1", "last-message.txt"),
+      "--",
+      "Say ok"
+    ]);
+  });
+
+  it("omits -m when no model is given, so codex uses its own default", () => {
+    const args = buildCodexPromptArguments({
+      model: undefined,
+      reasoningEffort: "low",
+      dir: "/d",
+      imagePaths: [],
+      hasSchema: false,
+      prompt: "p"
+    });
+
+    expect(args).not.toContain("-m");
+    expect(args.slice(0, 3)).toEqual(["exec", "-c", 'model_reasoning_effort="low"']);
+  });
+
+  it("adds --output-schema <dir>/schema.json when a schema is set", () => {
+    const args = buildCodexPromptArguments({
+      model: undefined,
+      reasoningEffort: "low",
+      dir: "/d",
+      imagePaths: [],
+      hasSchema: true,
+      prompt: "p"
+    });
+
+    const flag = args.indexOf("--output-schema");
+    expect(args[flag + 1]).toBe(path.join("/d", "schema.json"));
+    expect(flag).toBeLessThan(args.indexOf("--"));
+  });
+
+  it("attaches each image with --image, right before the -- separator", () => {
+    const args = buildCodexPromptArguments({
+      model: "gpt-6-sol",
+      reasoningEffort: "low",
+      dir: "/d",
+      imagePaths: ["/d/ref-1.png", "/d/ref-2.jpg"],
+      hasSchema: true,
+      prompt: "describe"
+    });
+
+    const separator = args.indexOf("--");
+    expect(args.slice(separator - 4, separator)).toEqual([
+      "--image",
+      "/d/ref-1.png",
+      "--image",
+      "/d/ref-2.jpg"
+    ]);
+  });
+
+  it("always puts the prompt last, right after --", () => {
+    const args = buildCodexPromptArguments({
+      model: undefined,
+      reasoningEffort: "low",
+      dir: "/d",
+      imagePaths: ["/d/ref-1.png"],
+      hasSchema: false,
       prompt: "--image looks like a flag"
     });
 
@@ -153,14 +251,15 @@ describe("runCodex", () => {
     expect(error).not.toHaveProperty("status");
   });
 
-  it("rejects with a terminal 'not found' error when the bin does not exist", async () => {
+  it("rejects with an unavailable 'missing' error when the bin does not exist", async () => {
     const bin = path.join(root, "no-such-codex");
 
     const error = await runCodex({ bin, args: [], cwd: root, timeoutMs: 5000 }).catch(
       (error_: unknown) => error_
     );
 
-    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toBeInstanceOf(PromptGenUnavailableError);
+    expect((error as PromptGenUnavailableError).reason).toBe("missing");
     expect((error as Error).message).toBe(
       `[ai] Codex CLI not found: ${bin}.\n  Install codex or set codex.bin.`
     );
@@ -216,6 +315,22 @@ describe("runCodex", () => {
     expect(Date.now() - startedAt).toBeLessThan(3000);
   });
 
+  it("sends SIGKILL after the grace period when the process ignores SIGTERM", async () => {
+    const bin = writeFakeCodex(root, "trap '' TERM\nexec sleep 5");
+    const startedAt = Date.now();
+
+    const error = await runCodex({
+      bin,
+      args: ["-C", root],
+      cwd: root,
+      timeoutMs: 200,
+      killGraceMs: 100
+    }).catch((error_: unknown) => error_);
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect(Date.now() - startedAt).toBeLessThan(3000);
+  });
+
   it("kills the process and rethrows signal.reason unchanged on abort", async () => {
     const bin = writeFakeCodex(root, "exec sleep 5");
     const controller = new AbortController();
@@ -249,5 +364,78 @@ describe("runCodex", () => {
 
     expect(error).toBe(reason);
     expect(() => readFileSync(path.join(root, "args.txt"))).toThrow();
+  });
+});
+
+describe("runCodex — unavailable classification", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "moku-codex-unavailable-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /**
+   * Runs a fake codex that prints `stderr` and exits 1.
+   *
+   * @param stderr - The stderr text.
+   * @returns The rejection value.
+   */
+  async function failWith(stderr: string): Promise<unknown> {
+    const bin = writeFakeCodex(root, `${printStderr(stderr)}\nexit 1`);
+    return runCodex({ bin, args: ["-C", root], cwd: root, timeoutMs: 5000 }).catch(
+      (error_: unknown) => error_
+    );
+  }
+
+  it("throws unavailable 'auth' for the captured codex 401 stderr", async () => {
+    const error = await failWith(CODEX_401_STDERR);
+
+    expect(error).toBeInstanceOf(PromptGenUnavailableError);
+    expect((error as PromptGenUnavailableError).reason).toBe("auth");
+    expect((error as Error).message).toBe(
+      "[ai] Codex CLI is not logged in.\n  Run codex login, or use another provider."
+    );
+  });
+
+  it.each([
+    "Error: not logged in",
+    "Please run `codex login` first"
+  ])("throws unavailable 'auth' for %s", async stderr => {
+    const error = await failWith(stderr);
+
+    expect((error as PromptGenUnavailableError).reason).toBe("auth");
+  });
+
+  it.each([
+    "You've hit your usage limit. Try again in 3 hours.",
+    "stream error: Rate limit reached for requests",
+    "ERROR: unexpected status 429",
+    "Too Many Requests"
+  ])("throws unavailable 'limit' for %s", async stderr => {
+    const error = await failWith(stderr);
+
+    expect(error).toBeInstanceOf(PromptGenUnavailableError);
+    expect((error as PromptGenUnavailableError).reason).toBe("limit");
+    expect((error as Error).message).toBe(
+      "[ai] Codex CLI hit its plan or rate limit.\n  Wait for the reset, or use another provider."
+    );
+  });
+
+  it("keeps the terminal error when 429 is only part of an id", async () => {
+    const error = await failWith("model not available, request id req_4291ab");
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).not.toHaveProperty("unavailable");
+  });
+
+  it("keeps the terminal error for any other failure", async () => {
+    const error = await failWith("model not available");
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).not.toHaveProperty("unavailable");
   });
 });

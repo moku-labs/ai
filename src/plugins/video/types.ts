@@ -7,6 +7,8 @@ import type { RegistryApi, registryPlugin } from "../registry";
 import type { VideoRequest, VideoResult } from "./contract";
 
 export type {
+  EstimateInput,
+  EstimateRequest,
   VideoFile,
   VideoHandler,
   VideoJobPoll,
@@ -85,7 +87,7 @@ export type VideoApi = {
    * @returns Registered provider names for the "video" task.
    * @example
    * ```ts
-   * app.video.providers(); // => ["fal"]
+   * app.video.providers(); // => ["fal", "apimodels"]
    * ```
    */
   providers(): string[];

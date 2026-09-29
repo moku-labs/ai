@@ -10,6 +10,10 @@ describe("createFalState", () => {
     expect(createFalState().uploads).toEqual(new Map());
   });
 
+  it("starts with the request-log write warning not yet given", () => {
+    expect(createFalState().requestLogWarned).toBe(false);
+  });
+
   it("returns a fresh object each call", () => {
     expect(createFalState()).not.toBe(createFalState());
   });

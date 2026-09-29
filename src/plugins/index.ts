@@ -5,7 +5,11 @@
 // biome-ignore-all assist/source/organizeImports: two-section barrel layout (Instances → Types) is mandated by the skeleton spec
 
 // ─── Plugin Instances ────────────────────────────────────────
+export { apimodelsPlugin } from "./apimodels";
+export { arkPlugin } from "./ark";
+export { assetPlugin } from "./asset";
 export { buildfilePlugin } from "./buildfile";
+export { claudePlugin } from "./claude";
 export { cliPlugin } from "./cli";
 export { codexPlugin } from "./codex";
 export { composePlugin } from "./compose";
@@ -14,6 +18,7 @@ export { falPlugin } from "./fal";
 export { imagePlugin } from "./image";
 export { journalPlugin } from "./journal";
 export { limitsPlugin } from "./limits";
+export { musicPlugin } from "./music";
 export { openaiPlugin } from "./openai";
 export { promptGenPlugin } from "./promptGen";
 export { registryPlugin } from "./registry";
@@ -25,7 +30,11 @@ export { voiceoverPlugin } from "./voiceover";
 
 // ─── Plugin Types (namespace re-exports) ─────────────────────
 // Consumers access types as PluginName.Config, PluginName.Api, etc.
+export * as Apimodels from "./apimodels/types";
+export * as Ark from "./ark/types";
+export * as Asset from "./asset/types";
 export * as Buildfile from "./buildfile/types";
+export * as Claude from "./claude/types";
 export * as Cli from "./cli/types";
 export * as Codex from "./codex/types";
 export * as Compose from "./compose/types";
@@ -34,6 +43,7 @@ export * as Fal from "./fal/types";
 export * as Image from "./image/types";
 export * as Journal from "./journal/types";
 export * as Limits from "./limits/types";
+export * as Music from "./music/types";
 export * as Openai from "./openai/types";
 export * as PromptGen from "./promptGen/types";
 export * as Runner from "./runner/types";

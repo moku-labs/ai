@@ -23,7 +23,7 @@ The journal is a Core plugin, so its config lives at Layer 1 — it is set where
 - **`onStart`** — ensures the parent directory exists, opens the runtime-appropriate driver (`bun:sqlite` on Bun, `better-sqlite3` on Node, selected via `typeof Bun`), applies the durability pragma set (`journal_mode=WAL`, `synchronous=FULL`, `fullfsync=1`, `busy_timeout`), creates the schema idempotently, and starts the checkpoint timer.
 - **`onStop`** — stops the checkpoint timer, runs a final `wal_checkpoint(TRUNCATE)`, and closes the connection.
 
-Every API method throws if called before `onStart` has run:
+Every API method except `isOpen()` throws if called before `onStart` has run or after `onStop`:
 
 ```
 [ai] Journal is not open.
@@ -190,6 +190,50 @@ Records a provider job on an attempt: its id (`external_id`) and state (`submitt
 
 The newest adoptable job for any item with this artifact key, in any run: `{ externalId, jobState, attemptId }`. Adoptable means still `submitted`, or `expired` (a runner stopped waiting, the provider may still finish it), with no later row of the same job marked `failed` or `done`. A job that expired twice is stuck and is not returned. The runner adopts the job instead of submitting again, so a crash, a pause or a job timeout never pays twice.
 
+### Provider records
+
+A durable lookup of opaque provider-side ids, keyed by `(provider, account, kind, key)`. A provider
+plugin uses it to reuse an id an earlier run stored, such as an `asset://…` id keyed by the sha256 of
+the input bytes. `value` is an id only: never a body, a prompt or an API key. The journal defines its
+own `ProviderRecord` type (`{ provider, account, kind, key, value }`) and imports nothing from
+provider plugins.
+
+#### `isOpen(): boolean`
+
+True between `onStart` and `onStop`. The only method that never throws, so a provider called before
+`app.start()` can skip durable writes.
+
+```ts
+if (!ctx.journal.isOpen()) ctx.log.warn("apimodels:journal:closed");
+```
+
+#### `findProviderRecord(q: { provider: string; account: string; kind: string; key: string }): string | undefined`
+
+The stored value, or `undefined`.
+
+```ts
+ctx.journal.findProviderRecord({ provider: "apimodels", account, kind: "asset", key: file.hash });
+```
+
+#### `putProviderRecords(records: ProviderRecord[]): void`
+
+Upserts every record in one `BEGIN IMMEDIATE` transaction: one fsync per batch. The same identity
+replaces `value` and `created_at`. A failing row rolls back the whole batch. An empty array is a no-op.
+
+```ts
+ctx.journal.putProviderRecords([
+  { provider: "apimodels", account, kind: "asset", key: anna.hash, value: "asset://asset-1" }
+]);
+```
+
+#### `deleteProviderRecord(q: { provider: string; account: string; kind: string; key: string }): void`
+
+Deletes one record. A missing record is a no-op.
+
+```ts
+ctx.journal.deleteProviderRecord({ provider: "apimodels", account, kind: "asset", key: anna.hash });
+```
+
 ### Reads and aggregates
 
 #### `totals(runId: string): RunTotals`
@@ -214,14 +258,6 @@ Reads a point-in-time snapshot — `{ run, totals, recentItems }` (up to 20 most
 
 ```ts
 const snapshot = ctx.journal.readSnapshot(run.id);
-```
-
-#### `checkpoint(): void`
-
-Runs a manual `PRAGMA wal_checkpoint(TRUNCATE)` on the primary connection. The same checkpoint also runs automatically every `checkpointIntervalMs` and once on `onStop`.
-
-```ts
-ctx.journal.checkpoint();
 ```
 
 ## Events
@@ -302,11 +338,24 @@ if (run) {
 - **Registration** — `journalPlugin` is registered as a Core plugin in `src/config.ts` (`createCoreConfig("ai", …)`), alongside `logPlugin`, `envPlugin`, `storePlugin`, and `limitsPlugin`. Every regular plugin's `ctx` therefore carries a fully typed `ctx.journal`.
 - **`runner`** — the primary consumer. Owns run orchestration: `openRun`/`insertItems` at planning, `gateToDispatching` before every dispatch, `recordAttempt`/`finishAttempt` around every provider call, `commitDone`/`markFailed`/`markFlagged` on outcomes, `requeueDispatching` + `latestResumableRun` for resume, `totals`/`setRunStatus` for run completion and budget-stop decisions.
 - **`cli`** — reads run state for `status` output; `readSnapshot` backs `moku status --follow` from a second process against the shared journal file.
+- **Provider plugins** — `apimodels` keeps its `asset://` ids in `provider_records`, so a restart does not register the same face twice.
 - **`store`** — the CAS artifact store is the destination of the payloads the journal deliberately does not hold; `commitDone` links the two worlds via `artifactKey` and `contentHash`.
 
 ## Internals
 
-- **Schema** (`schema.ts`) — three tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)`, indexes on `(run_id, status)` and `(artifact_key, status)`, plus `label`, `build_name`, `mime_type`), and `attempts` (plus `external_id`, `job_state` for provider jobs). Metadata columns only. `migrateSchema` adds the newer columns to an older journal file in place (`PRAGMA table_info` → `ALTER TABLE … ADD COLUMN`), so existing `.moku/journal.db` files keep working.
+- **Schema** (`schema.ts`) — four tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)`, indexes on `(run_id, status)` and `(artifact_key, status)`, plus `label`, `build_name`, `mime_type`), `attempts` (plus `external_id`, `job_state` for provider jobs), and `provider_records`. Metadata columns only. `migrateSchema` adds the newer columns to an older journal file in place (`PRAGMA table_info` → `ALTER TABLE … ADD COLUMN`), and `CREATE TABLE IF NOT EXISTS` adds `provider_records` to it, so existing `.moku/journal.db` files keep working.
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS provider_records (
+    provider TEXT NOT NULL,     -- plugin name, e.g. "apimodels"
+    account TEXT NOT NULL,      -- non-reversible account fingerprint, never a key
+    kind TEXT NOT NULL,         -- provider-defined, e.g. "asset", "asset-group"
+    key TEXT NOT NULL,          -- e.g. sha256 of the input bytes
+    value TEXT NOT NULL,        -- opaque provider id, e.g. "asset://asset-1"
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, account, kind, key)
+  );
+  ```
 - **Driver seam** (`driver/`) — a structural `SqliteDriver` interface with two implementations: `better-sqlite3` on Node, `bun:sqlite` on Bun. Selection is `typeof Bun === "undefined"` in `driver/select.ts`, which also applies the durability pragma set to every opened connection.
 - **Durability pragmas** — `journal_mode=WAL`, `synchronous=FULL` (never `NORMAL` — last-commit durability is the product), `fullfsync=1` (macOS `F_FULLFSYNC`; harmless elsewhere), and `busy_timeout`. Every potentially-writing transaction opens with `BEGIN IMMEDIATE`, since `busy_timeout` does not cover read-to-write lock upgrades.
 - **Checkpointing** — the writer runs `wal_checkpoint(TRUNCATE)` on a timer to protect against checkpoint starvation from long-lived `--follow` readers.

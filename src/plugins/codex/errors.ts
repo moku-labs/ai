@@ -9,6 +9,7 @@
  * field the runner's `classifyError` reads to bucket it as retryable.
  */
 export class RetryableProviderError extends Error {
+  /** Retry classification read by the runner's classifyError. */
   readonly kind: "timeout" | "network";
 
   /**
@@ -29,7 +30,8 @@ export class RetryableProviderError extends Error {
 }
 
 /**
- * Terminal failure: CLI missing, non-zero exit, or no image written. Has no
+ * Terminal failure: CLI not startable, non-zero exit, no image written, or
+ * no (valid) prompt-gen answer. Has no
  * `kind` and no `status`, so the runner buckets it as "unknown" (terminal,
  * never retried).
  */

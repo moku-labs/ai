@@ -1,29 +1,51 @@
 /**
  * @file fal video handler — implements the task-owned contract
  * (`../../video/contract.ts`) over the fal queue API. `submit` uploads the
- * inputs and queues the job; `poll` reads the status once and, when the job
+ * inputs and queues the job, writing the opt-in request log line around the
+ * queue POST (`../log.ts`); `poll` reads the status once and, when the job
  * is done, fetches the result and downloads the clip. There is no `execute`:
  * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
- * (`../prices.ts`), so estimate and actual cost always agree.
+ * (`./prices.ts`), so estimate and actual cost always agree.
  */
-import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
-import { falFetch, jobFailure, parseJson, readString } from "../client";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
-import type { ResolvedFalModel, SplitReferences } from "../models";
-import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
-import { videoCostUsd } from "../prices";
-import type { EstimateRequest, FalContext, FalProviderError } from "../types";
-import { uploadInputs } from "../upload";
-import type { FalJob } from "./job";
+import { ASSET_MIME } from "../../asset/contract";
+import type {
+  EstimateRequest,
+  VideoFile,
+  VideoHandler,
+  VideoJobPoll,
+  VideoRequest
+} from "../../video/contract";
+import type { FalResponse } from "../client/http";
 import {
-  decodeJobId,
-  encodeJobId,
-  hasJobError,
-  parseSubmitResponse,
-  parseVideoResult
-} from "./job";
+  falFetch,
+  jobFailure,
+  parseJson,
+  readApiKey,
+  readString,
+  redacted,
+  resolveApiKey
+} from "../client/http";
+import { isKeyRejection, pollKeyError, submitJob } from "../client/queue";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
+import type { RequestLog, RequestLogEntry } from "../log";
+import { createRequestLog, withRequestLog } from "../log";
+import type { FalContext } from "../types";
+import type { FalJob } from "./job";
+import { decodeJobId, encodeJobId, hasJobError, parseVideoResult } from "./job";
+import type { ResolvedFalModel, SplitReferences, UploadedUrls } from "./models";
+import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "./models";
+import { videoCostUsd } from "./prices";
+import { uploadInputs } from "./upload";
 
-/** The fal video handler: the async form of the contract (no `execute`). */
+/**
+ * The fal video handler: the async form of the contract (no `execute`).
+ *
+ * @example
+ * ```ts
+ * const handler: FalVideoHandler = createVideoHandler(ctx);
+ * handler.estimate({ model: "minimax-h3", prompt: "p" }).usd; // => 0.3
+ * ```
+ */
 export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" | "poll">>;
 
 /** Status values while fal is still working on a job. */
@@ -57,24 +79,6 @@ const JOB_VERDICT_STATUSES: ReadonlySet<number> = new Set([BAD_REQUEST, UNPROCES
 const RETRY_STATUS = 503;
 
 /**
- * Reads the fal key through the injected env API (MC3).
- *
- * @param ctx - Plugin context.
- * @returns The key.
- * @throws {Error} A plain (terminal) two-line error when the key is not set.
- */
-function resolveApiKey(ctx: FalContext): string {
-  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  const isMissingKey = apiKey === undefined || apiKey === "";
-  if (isMissingKey) {
-    throw new Error(
-      `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
-    );
-  }
-  return apiKey;
-}
-
-/**
  * Returns the request's first frame; every current alias needs one.
  *
  * @param model - The resolved catalog row.
@@ -101,6 +105,7 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
  *
  * @param model - The resolved catalog row.
  * @param request - The video request; its end frame may still be an unresolved `$ref`.
+ * @returns {void} Nothing; a request without an end frame, or a model that takes one, passes.
  * @throws {Error} A plain (terminal) two-line error listing the models that take an end frame.
  * @example
  * ```ts
@@ -116,6 +121,31 @@ function requireEndFrameSupport(
 
   throw new Error(
     `[ai] fal model "${model.alias}" takes no end frame.\n  Remove input.endImage, or use a model that takes one: ${endFrameAliases().join(", ")}.`
+  );
+}
+
+/**
+ * Refuses a registered asset as the first frame, the end frame or a ref,
+ * before any upload. fal takes image URLs only; an asset's bytes are its
+ * record's JSON, which fal would reject late as a broken image.
+ *
+ * @param request - The video request, with its inputs resolved.
+ * @returns {void} Nothing; a request without an asset input passes.
+ * @throws {TerminalProviderError} A two-line HTTP 400 error naming an asset provider.
+ * @example
+ * ```ts
+ * rejectAssetReferences({ model: "minimax-h3", prompt: "p", image: { path: "mira.json", mimeType: ASSET_MIME, hash: "h" } });
+ * // throws: '[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.'
+ * ```
+ */
+function rejectAssetReferences(request: VideoRequest): void {
+  const inputs = [request.image, request.endImage, ...(request.refs ?? [])];
+  const hasAsset = inputs.some(file => file?.mimeType === ASSET_MIME);
+  if (!hasAsset) return;
+
+  throw new TerminalProviderError(
+    "[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.",
+    BAD_REQUEST
   );
 }
 
@@ -226,42 +256,55 @@ export function splitReferences(
 }
 
 /**
- * Loggable fields of a failure: class, status and kind only.
+ * The uploaded files behind the body's `image_urls`, in body order: the first
+ * frame and the image refs when the first frame leads the list (Seedance ref,
+ * Gemini Omni ref), else the image refs alone (Kling O3 ref). The request log
+ * names the URLs by these files only when the counts match.
  *
- * @param error - The classified error.
- * @returns Redacted log fields.
+ * @param body - The posted body.
+ * @param urls - The uploaded URLs.
+ * @param image - The first frame.
+ * @param references - The request's refs, split.
+ * @returns The files, in the order their URLs appear in `image_urls`.
  * @example
  * ```ts
- * redacted(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => { errorType: "terminal", status: 400 }
+ * const key = { path: "key.png", mimeType: "image/png", hash: "h" };
+ * const ref = { path: "ref.png", mimeType: "image/png", hash: "r" };
+ * imageUrlFiles({ image_urls: ["u0", "u1"] }, { image: "u0", refs: ["u1"], audioRefs: [], videoRefs: [] }, key, { images: [ref], audio: [], videos: [] });
+ * // => [key, ref]
  * ```
  */
-function redacted(error: FalProviderError): {
-  errorType: "retryable" | "terminal" | "flagged";
-  status?: number | undefined;
-  kind?: string;
-} {
-  if (error instanceof FlaggedProviderError) return { errorType: "flagged", kind: error.kind };
-  if (error instanceof TerminalProviderError)
-    return { errorType: "terminal", status: error.status };
-  return { errorType: "retryable", status: error.status };
+function imageUrlFiles(
+  body: Record<string, unknown>,
+  urls: UploadedUrls,
+  image: VideoFile,
+  references: SplitReferences
+): readonly VideoFile[] {
+  const imageUrls = body.image_urls;
+  const leadsWithFirstFrame = Array.isArray(imageUrls) && imageUrls[0] === urls.image;
+  return leadsWithFirstFrame ? [image, ...references.images] : references.images;
 }
 
 /**
- * Uploads the inputs, POSTs the mapped body to the model's endpoint, and
- * encodes fal's queue answer as the job id.
+ * Uploads the inputs, POSTs the mapped body to the model's endpoint, writing
+ * the request log line around the POST, and encodes fal's queue answer as the
+ * job id.
  *
  * @param ctx - Plugin context.
+ * @param requestLog - The request log, or undefined when off.
  * @param request - The video request.
- * @param signal - Caller abort signal.
+ * @param signal - Caller abort signal (uploads only).
  * @returns The opaque job id.
  */
-async function submitJob(
+async function submitVideo(
   ctx: FalContext,
+  requestLog: RequestLog | undefined,
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<{ jobId: string }> {
   // Refuse what the model cannot take and read the key, before any upload.
   const model = resolveFalModel(request.model);
+  rejectAssetReferences(request);
   const image = requireImage(model, request);
   requireEndFrameSupport(model, request);
   const apiKey = resolveApiKey(ctx);
@@ -269,19 +312,26 @@ async function submitJob(
   // Check the refs against the model's limits, then upload every input.
   const references = splitReferences(model, request.refs ?? []);
   const urls = await uploadInputs(ctx, image, references, { apiKey, signal }, request.endImage);
-
-  // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
   signal?.throwIfAborted();
-  const response = await falFetch({
-    url: `${ctx.config.queueUrl}/${model.endpoint}`,
-    method: "POST",
-    apiKey,
-    json: buildFalBody(model, request, urls),
-    timeoutMs: ctx.config.timeoutMs
-  });
 
-  // Keep fal's queue answer as the opaque job id.
-  const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
+  // Build the body and its log entry.
+  const body = buildFalBody(model, request, urls);
+  const entry: RequestLogEntry = {
+    task: "video",
+    model: model.alias,
+    endpoint: model.endpoint,
+    prompt: readString(body, "prompt") ?? request.prompt,
+    body,
+    files: imageUrlFiles(body, urls, image, references)
+  };
+
+  // Queue the job: once the POST is sent fal may bill it, so it runs to the end without the signal.
+  const job = await withRequestLog(
+    requestLog,
+    entry,
+    () => submitJob(ctx, model.endpoint, body, { apiKey, timeoutMs: ctx.config.timeoutMs }),
+    submitted => submitted.requestId
+  );
   ctx.log.info("fal:video:submitted", {
     model: model.alias,
     endpoint: job.endpoint,
@@ -375,7 +425,9 @@ function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
 
 /**
  * Polls a job once: pending, failed with fal's classified job error, or
- * done with the downloaded clip.
+ * done with the downloaded clip. A key missing or refused (401/403) on the
+ * status call is thrown as a plain error, so the runner marks the job
+ * expired and a later run adopts the same job.
  *
  * @param ctx - Plugin context.
  * @param jobId - The id `submit` returned.
@@ -389,16 +441,25 @@ async function pollJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<VideoJobPoll> {
-  // Read the job status once.
+  // Without a valid key the job stays adoptable: the poll must not read as failed.
   const job = decodeJobId(jobId);
-  const apiKey = resolveApiKey(ctx);
-  const response = await falFetch({
-    url: job.statusUrl,
-    method: "GET",
-    apiKey,
-    timeoutMs: ctx.config.timeoutMs,
-    signal
-  });
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) throw pollKeyError(ctx.config.apiKeyEnv);
+
+  // Read the job status once; a refused key keeps the job adoptable too.
+  let response: FalResponse;
+  try {
+    response = await falFetch({
+      url: job.statusUrl,
+      method: "GET",
+      apiKey,
+      timeoutMs: ctx.config.timeoutMs,
+      signal
+    });
+  } catch (error) {
+    if (isKeyRejection(error)) throw pollKeyError(ctx.config.apiKeyEnv);
+    throw error;
+  }
 
   // Still working, or a status we do not know: stay pending.
   const body = parseJson(response, "status response");
@@ -425,19 +486,20 @@ async function pollJob(
  * take, with the same error as `submit`, then prices the request. `submit`
  * uploads the inputs and queues the job; an abort stops the uploads, but once
  * the queue POST is sent it runs to the end, so a billed job always returns
- * its id.
+ * its id. With `config.requestLog` set, each queue POST writes one JSONL line.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, submit and poll.
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
+  const requestLog = createRequestLog(ctx);
   return {
-    estimate: (request: VideoRequest): { usd: number } => {
+    estimate: (request: EstimateRequest): { usd: number } => {
       requireEndFrameSupport(resolveFalModel(request.model), request);
       return { usd: videoCostUsd(ctx, request) };
     },
     submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
-      submitJob(ctx, request, opts.signal),
+      submitVideo(ctx, requestLog, request, opts.signal),
     poll: (
       jobId: string,
       request: VideoRequest,

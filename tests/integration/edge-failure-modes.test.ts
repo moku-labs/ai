@@ -140,7 +140,7 @@ describe("edge failure modes — flagging, missing keys, buildfile edge inputs",
     expect(result.totals).toMatchObject({ total: 2, done: 1, flagged: 1, failed: 0 });
 
     // Journal: the item landed in `flagged` (markFlagged). Plan deviation:
-    // the row's attemptCount stays 0 — journal/api.ts only increments
+    // the row's attemptCount stays 0 — journal/items.ts only increments
     // attempt_count on a retryable RE-QUEUE, never on a terminal first
     // attempt. The single attempt is proven by handler.attempts() above.
     const flaggedRows = app.probe.journal.listItems(result.runId, { status: "flagged" });

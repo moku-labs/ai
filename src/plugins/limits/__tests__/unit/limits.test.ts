@@ -45,7 +45,8 @@ describe("getOrCreateLane", () => {
       waiters: [],
       consecutiveFailures: 0,
       openUntil: 0,
-      probing: false
+      probe: 0,
+      nextProbe: 0
     });
   });
 
@@ -190,6 +191,16 @@ describe("recordOutcome", () => {
     recordOutcome(lane, cfg, "ok", 0);
     expect(lane.consecutiveFailures).toBe(0);
     expect(lane.openUntil).toBe(0);
+  });
+
+  it("leaves a held probe claim in place for either outcome", () => {
+    const state = createLimitsState();
+    const lane = getOrCreateLane(state, "lane", laneConfig, 0);
+    lane.probe = 3;
+    recordOutcome(lane, laneConfig, "retryable-error", 0);
+    expect(lane.probe).toBe(3);
+    recordOutcome(lane, laneConfig, "ok", 0);
+    expect(lane.probe).toBe(3);
   });
 });
 
@@ -370,8 +381,9 @@ describe("createLimitsApi", () => {
       await Promise.resolve();
       expect(api.snapshot("lane").waiting).toBe(1);
 
-      controller.abort();
-      await expect(waiting).rejects.toBeDefined();
+      const reason = new Error("drain");
+      controller.abort(reason);
+      await expect(waiting).rejects.toBe(reason);
       expect(api.snapshot("lane").waiting).toBe(0);
 
       release();
@@ -392,8 +404,9 @@ describe("createLimitsApi", () => {
 
         const controller = new AbortController();
         const waiting = api.acquire("lane", { signal: controller.signal });
-        controller.abort();
-        await expect(waiting).rejects.toBeDefined();
+        const reason = new Error("drain");
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
 
         // the abandoned reservation must be refunded: tokens return to 0 (not left at -1)
         expect(api.snapshot("lane").tokens).toBe(0);
@@ -453,7 +466,7 @@ describe("createLimitsApi", () => {
         expect(api.snapshot("lane").breaker).toBe("open");
         await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
 
-        // After the next cooldown a fresh probe is admitted (probing flag cleared).
+        // After the next cooldown a fresh probe is admitted (probe claim cleared).
         vi.advanceTimersByTime(30_000);
         const secondProbe = await api.acquire("lane");
         secondProbe.release();
@@ -489,6 +502,154 @@ describe("createLimitsApi", () => {
       holder.release();
       const nextProbe = await nextProbePromise;
       nextProbe.release();
+    });
+
+    it("releases the probe claim when the probe is released without reportOutcome", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createLimitsState();
+        const config = makeConfig({
+          lanes: { lane: { breakerThreshold: 1, breakerCooldownMs: 30_000 } }
+        });
+        const api = createLimitsApi({ config, state });
+
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+        expect(api.snapshot("lane").breaker).toBe("half-open");
+
+        // promptGen-style caller: acquire, then release, never report an outcome.
+        const probe = await api.acquire("lane");
+        probe.release();
+
+        // The lane is still half-open, so the next caller becomes the new probe.
+        const nextProbe = await api.acquire("lane");
+        await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
+        nextProbe.release();
+        expect(api.snapshot("lane").inFlight).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the breaker closed when the probe reports ok before release", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createLimitsState();
+        const config = makeConfig({
+          lanes: { lane: { breakerThreshold: 1, breakerCooldownMs: 30_000 } }
+        });
+        const api = createLimitsApi({ config, state });
+
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+        const probe = await api.acquire("lane");
+        api.reportOutcome("lane", "ok");
+        probe.release();
+        probe.release();
+
+        expect(api.snapshot("lane")).toMatchObject({ breaker: "closed", inFlight: 0 });
+        const first = await api.acquire("lane");
+        const second = await api.acquire("lane");
+        expect(api.snapshot("lane").inFlight).toBe(2);
+        first.release();
+        second.release();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+    it("holds a failed probe's claim until its owner releases", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createLimitsState();
+        const config = makeConfig({
+          lanes: { lane: { breakerThreshold: 1, breakerCooldownMs: 30_000 } }
+        });
+        const api = createLimitsApi({ config, state });
+
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+
+        // A probes and fails: the breaker re-opens, A keeps its slot and its claim.
+        const probeA = await api.acquire("lane");
+        api.reportOutcome("lane", "retryable-error");
+        expect(api.snapshot("lane").breaker).toBe("open");
+
+        // The cooldown passes while A still holds its claim: no second probe.
+        vi.advanceTimersByTime(30_000);
+        await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
+
+        // A releases: B becomes the new probe, and A's repeat release keeps B's claim.
+        probeA.release();
+        const probeB = await api.acquire("lane");
+        probeA.release();
+        await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
+
+        probeB.release();
+        expect(api.snapshot("lane").inFlight).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the probe claim when an acquisition from before the trip reports", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createLimitsState();
+        const config = makeConfig({
+          lanes: { lane: { breakerThreshold: 1, breakerCooldownMs: 30_000 } }
+        });
+        const api = createLimitsApi({ config, state });
+
+        // B is admitted while the breaker is closed, so it holds no probe claim.
+        const early = await api.acquire("lane");
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+
+        // A is the half-open probe. B's slow call now fails and re-opens the breaker.
+        const probe = await api.acquire("lane");
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+
+        // A has not released, so no second probe is admitted.
+        await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
+
+        // B's release leaves A's claim; A's release frees it.
+        early.release();
+        await expect(api.acquire("lane")).rejects.toMatchObject({ reason: "breaker-open" });
+        probe.release();
+        const next = await api.acquire("lane");
+        next.release();
+        expect(api.snapshot("lane").inFlight).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("closes the lane for good when the probe reports ok and then releases", async () => {
+      vi.useFakeTimers();
+      try {
+        const state = createLimitsState();
+        const config = makeConfig({
+          lanes: { lane: { breakerThreshold: 1, breakerCooldownMs: 30_000 } }
+        });
+        const api = createLimitsApi({ config, state });
+
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+        const probe = await api.acquire("lane");
+        api.reportOutcome("lane", "ok");
+        probe.release();
+
+        // A later trip gets a fresh probe: the healed probe left no claim behind.
+        vi.advanceTimersByTime(60_000);
+        api.reportOutcome("lane", "retryable-error");
+        vi.advanceTimersByTime(30_000);
+        const nextProbe = await api.acquire("lane");
+        expect(api.snapshot("lane")).toMatchObject({ breaker: "half-open", inFlight: 1 });
+        nextProbe.release();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

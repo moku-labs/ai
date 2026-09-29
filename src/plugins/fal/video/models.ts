@@ -5,8 +5,7 @@
  * `request.params` is merged last, so a build file can pass any extra fal
  * field through.
  */
-import type { VideoFile, VideoRequest } from "../video/contract";
-import type { EstimateRequest } from "./types";
+import type { EstimateRequest, VideoFile, VideoRequest } from "../../video/contract";
 
 /**
  * A model alias this plugin accepts in `request.model`.

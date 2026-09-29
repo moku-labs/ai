@@ -98,7 +98,7 @@ export function fakeItemRow(overrides: Partial<ItemRow> = {}): ItemRow {
  * @returns A fake planned item.
  * @example
  * ```ts
- * await executeItem(ctx, item, fakePlan(3), drain, active, report, Promise.resolve());
+ * await executeItem(ctx, item, fakePlan(3), drain, report, Promise.resolve());
  * ```
  */
 export function fakePlan(maxAttempts: number): PlannedItem {
@@ -282,9 +282,6 @@ export function createFakeRunnerContext(
       totals: ZERO_TOTALS,
       recentItems: []
     }),
-    checkpoint: (): void => {
-      log.push("journal.checkpoint");
-    },
     findDoneArtifact: (): undefined => undefined,
     reuseDone: (itemId: string): void => {
       log.push(`journal.reuseDone(${itemId})`);
@@ -295,6 +292,10 @@ export function createFakeRunnerContext(
     findLiveJob: (): undefined => undefined,
     latestRun: (): RunRow | undefined => undefined,
     getItem: (): ItemRow | undefined => undefined,
+    isOpen: vi.fn(),
+    findProviderRecord: vi.fn(),
+    putProviderRecords: vi.fn(),
+    deleteProviderRecord: vi.fn(),
     ...overrides.journal
   };
 

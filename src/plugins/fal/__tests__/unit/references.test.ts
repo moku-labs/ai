@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { ASSET_MIME } from "../../../asset/contract";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { buildFalBody, resolveFalModel } from "../../models";
-import { uploadInputs } from "../../upload";
+import { TerminalProviderError } from "../../errors";
 import { createVideoHandler } from "../../video/handler";
+import { buildFalBody, resolveFalModel } from "../../video/models";
+import { uploadInputs } from "../../video/upload";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,
@@ -18,16 +20,21 @@ import {
 
 const SECOND_LINE = "\n  Remove refs from input.refs, or use a model that takes more.";
 
+const ASSET_ERROR =
+  "[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.";
+
 let temp: TempFiles;
 let image: VideoFile;
 let face: VideoFile;
 let voice: VideoFile;
+let asset: VideoFile;
 
 beforeAll(() => {
   temp = createTempFiles();
   image = temp.file("key.png", new Uint8Array([1]), "image/png", "1".repeat(64));
   face = temp.file("face.png", new Uint8Array([2]), "image/png", "2".repeat(64));
   voice = temp.file("voice.mp3", new Uint8Array([3]), "audio/mpeg", "3".repeat(64));
+  asset = temp.file("mira.json", new Uint8Array([4]), ASSET_MIME, "4".repeat(64));
 });
 
 afterAll(() => {
@@ -57,6 +64,17 @@ async function rejected(
     .submit(request, {})
     .catch((error_: unknown) => error_);
   return { message: (error as Error).message, fetchMock };
+}
+
+/** Submits `request` in storage mode and returns what it threw, with the fetch mock it ran against. */
+async function refused(
+  request: VideoRequest
+): Promise<{ error: unknown; fetchMock: ReturnType<typeof vi.fn> }> {
+  const fetchMock = stubStorageFetch();
+  const error = await createVideoHandler(createTestCtx())
+    .submit(request, {})
+    .catch((error_: unknown) => error_);
+  return { error, fetchMock };
 }
 
 describe("minimax-h3-max-ref body", () => {
@@ -198,5 +216,41 @@ describe("uploadInputs — audio refs", () => {
     });
     const initiates = callsOf(fetchMock).filter(call => call.method === "POST");
     expect(initiates.map(call => jsonBodyOf(call).content_type)).toContain("audio/mpeg");
+  });
+});
+
+describe("asset references", () => {
+  it("rejects an asset as the first frame before any upload", async () => {
+    const { error, fetchMock } = await refused({ model: "minimax-h3", prompt: "p", image: asset });
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ message: ASSET_ERROR, status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an asset as the end frame before any upload", async () => {
+    const { error, fetchMock } = await refused({
+      model: "minimax-h3",
+      prompt: "p",
+      image,
+      endImage: asset
+    });
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ message: ASSET_ERROR, status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an asset among the refs before any upload", async () => {
+    const { error, fetchMock } = await refused({
+      model: "seedance-2.5-ref",
+      prompt: "p",
+      image,
+      refs: [face, asset]
+    });
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ message: ASSET_ERROR, status: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

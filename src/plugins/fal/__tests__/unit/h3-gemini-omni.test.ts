@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { buildFalBody, resolveFalModel } from "../../models";
-import { videoCostUsd } from "../../prices";
 import type { EstimateInput } from "../../types";
 import { createVideoHandler } from "../../video/handler";
+import { buildFalBody, resolveFalModel } from "../../video/models";
+import { videoCostUsd } from "../../video/prices";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

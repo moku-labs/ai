@@ -1,5 +1,5 @@
 /**
- * @file journal schema — DDL for runs/items/attempts (metadata only, no payload columns).
+ * @file journal schema — DDL for runs/items/attempts/provider_records (metadata only, no payload columns).
  */
 import type { SqliteDriver } from "./driver/types";
 
@@ -46,6 +46,15 @@ const SCHEMA_SQL = `
     external_id TEXT,
     job_state TEXT
   );
+  CREATE TABLE IF NOT EXISTS provider_records (
+    provider TEXT NOT NULL,
+    account TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, account, kind, key)
+  );
 `;
 
 /** Index DDL that references migrated columns, so it runs after {@link migrateSchema}. */
@@ -72,10 +81,6 @@ const ADDED_COLUMNS: Readonly<Record<string, ReadonlyArray<readonly [string, str
  * missing. Reads `PRAGMA table_info` per table, so running it twice is a no-op.
  *
  * @param driver - Open SQLite driver.
- * @example
- * ```ts
- * migrateSchema(driver);
- * ```
  */
 export function migrateSchema(driver: SqliteDriver): void {
   for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
@@ -95,10 +100,6 @@ export function migrateSchema(driver: SqliteDriver): void {
  * Never a free-form payload column, by construction.
  *
  * @param driver - Open SQLite driver.
- * @example
- * ```ts
- * createSchema(driver);
- * ```
  */
 export function createSchema(driver: SqliteDriver): void {
   driver.exec(SCHEMA_SQL);

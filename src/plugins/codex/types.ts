@@ -1,6 +1,8 @@
 /**
- * @file codex provider plugin — types (Config/State/API) and the domain
- * context type shared by `api.ts`, `prices.ts` and `image/handler.ts`.
+ * @file codex provider plugin — types (Config/State/API), the
+ * runner-compatible provider error types (the classes live in `./errors`),
+ * and the domain context type shared by `api.ts`, `prices.ts`,
+ * `image/handler.ts` and `prompt/handler.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -11,45 +13,37 @@ import type {
 } from "./errors";
 
 /**
- * codex plugin configuration: which CLI to run, which model and reasoning
- * effort to ask for, the per-call timeout, where per-call temp dirs live,
- * and per-model price overrides.
+ * codex plugin configuration: which CLI to run, which image and text models
+ * and reasoning effort to ask for, the per-call timeout, where per-call temp
+ * dirs live, per-model image price overrides, and the prompt-gen model map.
  *
  * @example
  * ```ts
- * const config: Config = {
- *   bin: "codex",
- *   model: "gpt-6-astra",
- *   reasoningEffort: "low",
- *   timeoutMs: 600_000,
- *   workDir: ".moku/tmp",
- *   priceOverrides: {}
- * };
+ * createApp({ pluginConfigs: { codex: { textModel: "gpt-6-sol", timeoutMs: 600_000 } } });
  * ```
  */
 export type Config = {
   /** Codex executable: a bare name looked up on PATH, or a path. Default: "codex". */
   bin: string;
-  /** Codex model used when a request names none. Default: "gpt-6-astra". */
+  /** Image model used when an image request names none. Default: "gpt-6-astra". */
   model: string;
-  /** Value passed as `-c model_reasoning_effort="<effort>"`. Default: "low". */
+  /** Value passed as `-c model_reasoning_effort="<effort>"` for both tasks. Default: "low". */
   reasoningEffort: string;
   /** Kill the CLI after this long, ms. Default: 600_000. */
   timeoutMs: number;
-  /** Root directory for per-call temp dirs, resolved against the cwd. Default: ".moku/tmp". */
+  /** Root for per-call temp dirs, resolved against the cwd; "" = os.tmpdir(). Default: ".moku/tmp". */
   workDir: string;
   /** USD per image by model, merged over the bundled table. Default: {}. */
   priceOverrides: Record<string, number>;
+  /** Prompt-gen model when the request model maps to none; "" leaves `-m` out (codex's own default). Default: "". */
+  textModel: string;
+  /** Exact request-model id (OpenRouter style) to codex model, checked before every other mapping rule. Default: {}. */
+  modelMap: Record<string, string>;
 };
 
 /**
  * codex plugin state: the effective price table, computed once at first
  * use (bundled prices merged with `config.priceOverrides`).
- *
- * @example
- * ```ts
- * const state: State = { prices: null };
- * ```
  */
 export type State = {
   /** Effective price table, or null until first use. */
@@ -98,8 +92,6 @@ export type CodexApi = {
   info(): CodexInfo;
 };
 
-/** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
-export type { RegistryApi } from "../registry";
 // Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
 // class re-export back into `declare class`, so `Codex.X` would pass tsc as a value that is
 // `undefined` at runtime. The classes ship as values in `CodexErrors` from the package root.
@@ -108,15 +100,14 @@ export type RetryableProviderError = RetryableProviderErrorClass;
 /** Instance type of the terminal provider error; the class is `CodexErrors.TerminalProviderError`. */
 export type TerminalProviderError = TerminalProviderErrorClass;
 
+/** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
+export type { RegistryApi } from "../registry";
+
 /**
- * Domain context shared by `api.ts`, `prices.ts` and `image/handler.ts`:
+ * Domain context shared by `api.ts`, `prices.ts`, `image/handler.ts` and
+ * `prompt/handler.ts`:
  * `config`/`state`/`emit` from `PluginCtx`, `require` narrowed to the
  * registry, and the injected `env`/`log` core APIs.
- *
- * @example
- * ```ts
- * export const createCodexApi = (ctx: CodexContext): CodexApi => ({ ... });
- * ```
  */
 export type CodexContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

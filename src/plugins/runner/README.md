@@ -74,7 +74,11 @@ file, plans and inserts every item, then drives the pipeline to completion.
 - **Throws** when `maxActiveRuns` is not a whole number >= 1, or when `maxActiveRuns` runs are
   already active (`[ai] A run is already active: <ids>.`). Unrecoverable errors *inside* the run
   (plan failures, missing handlers) do not reject — the run is marked `failed` and the promise
-  resolves `{ status: "failed" }` after emitting `run:failed`.
+  resolves `{ status: "failed" }` after emitting `run:failed`. When one item hits such an error
+  mid-run, the run's other items are stopped like a pause, and the run resolves `failed` only
+  after all of them settled: no item keeps calling a provider for a failed run. Its remaining
+  items stay `queued` / `dispatching`. Continue them with `resume({ runId })` once the bug is
+  fixed; `resume()` without an id skips `failed` runs.
 
 ```ts
 const result = await app.runner.run({ files: "voice/*.moku.yaml", maxCostUsd: 25 });
@@ -212,8 +216,14 @@ const app = createApp({ plugins: [reporterPlugin] });
 4. **Claim** — one item per artifact key reaches the provider at a time, across every active
    run. When an item of another run holds the key, this item waits and copies its verdict (see
    [Several runs at once](#several-runs-at-once)).
-5. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort or open
-   breaker during the wait exits the item cleanly (it stays `queued`).
+5. **Admit** — `limits.acquire("{task}/{provider}/default", { signal })`. An abort during the
+   wait exits the item cleanly (it stays `queued`). A breaker that refuses the item is waited
+   out: the item logs `runner:lane-open` (`{ itemId, lane }`), sleeps, and asks again, so it
+   always ends with an `item:*` record. The sleep is the lane's `breakerCooldownMs` while the
+   breaker is open, but at least 250 ms, so a cooldown of 0 never spins. While the lane is
+   half-open (a probe is in flight and may close the breaker soon) the sleep is 250 ms. A pause
+   ends that sleep at once. A slot granted after the run was paused or budget-stopped is released
+   at once: a stopped run makes no provider call.
 6. **Gate (atomic)** — `journal.gateToDispatching(itemId)`: budget check + dedup + state
    transition in ONE transaction. `"budget"` triggers the graceful budget-stop drain;
    `"duplicate"` releases the lane slot without dispatching (never billed).
@@ -232,6 +242,10 @@ const app = createApp({ plugins: [reporterPlugin] });
 
 A retryable failure returns the item to `queued` (`markFailed` with `terminal: false`) and
 re-enters admit + gate after the backoff delay, until it settles or exhausts `maxAttempts`.
+The lane slot is released before the backoff, so a long `Retry-After` does not hold one of the
+lane's concurrency slots. Every wait (retry backoff, breaker cooldown, job poll interval) ends at
+once on a pause, and removes its abort listener when it ends, so long runs do not pile listeners
+onto the run's signal.
 
 ### Provider jobs (`submit` + `poll`)
 
@@ -258,6 +272,10 @@ A handler with both `submit` and `poll` always runs through the job path:
    `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never
    billed twice for one shot.
 
+A poll error with no hint marks the job `expired`, so the next run adopts it: a provider uses
+this for a lost or rejected key. `kind: "resubmit"` retries like its status says (503 is
+`http-5xx`) but never feeds the lane breaker: "submit again" is not a sick lane.
+
 ### Several runs at once
 
 One process drives up to `maxActiveRuns` runs at the same time (default 1). Each run keeps its
@@ -276,7 +294,7 @@ own runId, abort signal, `maxCostUsd`, totals and status.
   - `flagged` / `failed` — record the same verdict (and error class) through the gate, with no
     attempt row and no submit: the same request would get the same verdict and cost money.
     `failed` is shared only for a non-retryable class (4xx, unknown).
-  - `open` — the leader stopped without a final provider verdict (paused, budget stop, lane
+  - `open` — the leader stopped without a final provider verdict (paused, budget stop, gate
     refused, or its attempts ran out on a retryable 5xx / 429 / network / timeout error). The
     leader's item is still `failed`, but the next waiter claims the key and tries for itself: a
     retryable error can pass on a later try. It adopts the leader's live job (`findLiveJob`), so
@@ -318,7 +336,9 @@ const [ep1, ep2] = await Promise.all([
 
 Provider handlers steer classification by attaching an optional structural hint
 (`ProviderErrorHint`) to their thrown errors — `status?: number`,
-`kind?: "timeout" | "network" | "content-policy"` (overrides status), and `retryAfterMs?: number`.
+`kind?: "timeout" | "network" | "content-policy" | "resubmit"`, and `retryAfterMs?: number`.
+`timeout`, `network` and `content-policy` override the status. `resubmit` keeps the status class
+and stays off the lane breaker.
 
 ### The handler protocol
 
@@ -435,7 +455,7 @@ const report = app.runner.status();
 - `ctx.limits` — per-lane concurrency (`acquire`) and the circuit breaker (`reportOutcome`).
   Lanes are `"{task}/{provider}/default"` at M0 (no account pools yet).
 - `ctx.log` — structured diagnostics (e.g. `runner:stale-item` for journal rows with no
-  matching planned item).
+  matching planned item, `runner:lane-open` while an item waits out an open breaker).
 
 **Dependents:**
 
