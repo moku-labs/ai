@@ -1169,7 +1169,7 @@ Video keys are unprefixed (`<alias>`, `<alias>@<resolution>`, `<alias>+audio`,
 `image:<alias>@<resolution>` (USD per image), `music:<alias>` (USD per started minute
 or per generation), `llm:<id>#in` / `llm:<id>#out` (USD per M tokens). Bundled:
 image:nano-banana-pro@1K/@2K/@4K 0.15/0.15/0.30, image:seedream-4.5-edit 0.04,
-image:gpt-image-2.5 0.05, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20.
+image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20.
 
 Types (src/plugins/fal/types.ts; `Fal.*` namespace):
 

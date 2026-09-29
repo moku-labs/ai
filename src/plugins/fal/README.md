@@ -256,7 +256,7 @@ sent as is and needs a price. `app.fal.models("prompt-gen")` lists:
 | `openai/gpt-6-sol` | 2 | 10 |
 | `openai/gpt-6-astra` | 10 | 50 |
 | `google/gemini-3.8-flash` | 0.75 | 3.75 |
-| `x-ai/grok-4.7` | 1.6 | 4.8 |
+| `x-ai/grok-4.7` | 2 | 6 |
 
 Also priced, not listed: `anthropic/claude-haiku-4.5` (1 / 5) and `google/gemini-2.5-flash` (0.3 / 2.5).
 
@@ -314,7 +314,7 @@ failed, `COMPLETED` collected (result, then the CDN download without the key), a
 (`fal:poll:retry`), an abort ends the wait with the signal's reason.
 
 **Request log.** Off by default. With `requestLog` set, every billable request writes one JSONL line: each queue
-submit of image and music, and each prompt-gen POST attempt.
+submit of video, image and music, and each prompt-gen POST attempt.
 
 ```json
 {"at":"2026-09-29T10:00:00.000Z","task":"image","model":"gpt-image-2.5","endpoint":"openai/gpt-image-2.5/sunburst/edit","requestId":"019a…","prompt":"hero shot","body":{"image_size":"portrait_16_9","quality":"high","num_images":1,"output_format":"jpeg","image_urls":["face.png"]}}
@@ -324,7 +324,9 @@ submit of image and music, and each prompt-gen POST attempt.
 instead, never the error text. `body` is the posted body without its prompt field (`prompt`, or the chat `messages`),
 every string cut: http(s) URLs to `<host>/…/<last segment>`, data URIs to `data:<mime>;<length>`. Ref URLs
 (`image_urls`, the chat `image_url` parts) become the file names when there is one per uploaded file, else
-`{ count }`. Never the key or a header. A failed write warns `fal:request-log:failed` once and never fails the request.
+`{ count }`. Video matches `image_urls` to the first frame and the image refs, or to the image refs alone on
+`kling-o3-ref`; its other URL fields (`image_url`, `end_image_url`, `reference_image_urls`, …) are cut like any
+string. Never the key or a header. A failed write warns `fal:request-log:failed` once and never fails the request.
 
 ## Prices
 
@@ -336,6 +338,7 @@ other tasks' keys carry the task:
 | `image:nano-banana-pro@1K` / `@2K` / `@4K` | 0.15 / 0.15 / 0.30 | per image |
 | `image:seedream-4.5-edit` | 0.04 | per image |
 | `image:gpt-image-2.5` | 0.05 | per image |
+| `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |
 | `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
 | `music:stable-audio-2.5` | 0.20 | per generation |
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |

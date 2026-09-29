@@ -233,7 +233,7 @@ describe("merged table of every task", () => {
     const table = mergePrices({ "image:gpt-image-2.5": 0.07, "llm:x-ai/grok-4.7#in": 2 });
     expect(table["image:gpt-image-2.5"]).toBe(0.07);
     expect(table["llm:x-ai/grok-4.7#in"]).toBe(2);
-    expect(table["llm:x-ai/grok-4.7#out"]).toBe(4.8);
+    expect(table["llm:x-ai/grok-4.7#out"]).toBe(6);
   });
 
   it("prefixKeys copies a table under a prefix", () => {
@@ -257,7 +257,8 @@ describe("task price lookups", () => {
 
   it("imagePriceOf tries <alias>@<resolution>, then <alias>", () => {
     expect(imagePriceOf(merged, "nano-banana-pro", "4K")).toBe(0.3);
-    expect(imagePriceOf(merged, "gpt-image-2.5", "2K")).toBe(0.05);
+    expect(imagePriceOf(merged, "gpt-image-2.5", "2K")).toBe(0.06);
+    expect(imagePriceOf(merged, "gpt-image-2.5", "1080")).toBe(0.05);
     expect(imagePriceOf(merged, "seedream-4.5-edit", undefined)).toBe(0.04);
     expect(() => imagePriceOf(merged, "nano-banana-pro", undefined)).toThrow(
       '[ai] No price for fal image model "nano-banana-pro".'

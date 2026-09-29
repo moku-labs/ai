@@ -17,7 +17,7 @@ describe("createFalApi().models()", () => {
       { id: "openai/gpt-6-sol", price: { inputPerM: 2, outputPerM: 10 } },
       { id: "openai/gpt-6-astra", price: { inputPerM: 10, outputPerM: 50 } },
       { id: "google/gemini-3.8-flash", price: { inputPerM: 0.75, outputPerM: 3.75 } },
-      { id: "x-ai/grok-4.7", price: { inputPerM: 1.6, outputPerM: 4.8 } }
+      { id: "x-ai/grok-4.7", price: { inputPerM: 2, outputPerM: 6 } }
     ]);
   });
 
