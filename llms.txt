@@ -202,7 +202,7 @@ Runtime deps: @moku-labs/common, @moku-labs/core, better-sqlite3, openai, yaml, 
 ## Plugins
 
 Core (registered in createCoreConfig; no events, no depends; injected as ctx.*):
-- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot, checkpoint | events: none
+- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot | events: none
 - store: content-addressed artifact store (never lose a byte, never serve a wrong one) | Standard | put, has, pathOf, read, hashOf, gc | events: none
 - limits: per-lane token bucket + FIFO concurrency + circuit breaker (timer-free lazy math) | Standard | acquire, reportOutcome, laneConfig, snapshot, lanes | events: none
 

@@ -498,15 +498,4 @@ export type JournalApi = {
    * ```
    */
   readSnapshot(runId: string): RunSnapshot;
-  /**
-   * Runs `wal_checkpoint(TRUNCATE)` on the primary connection. The same checkpoint runs every
-   * `checkpointIntervalMs` and once on stop.
-   *
-   * @example
-   * ```ts
-   * // A backup plugin copies .moku/journal.db: fold the WAL into the main file first
-   * ctx.journal.checkpoint(); // journal.db holds every committed write; journal.db-wal stays, truncated
-   * ```
-   */
-  checkpoint(): void;
 };

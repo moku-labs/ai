@@ -4,8 +4,8 @@
  * Runs real build files through the REAL framework composition and verifies
  * the referential integrity between journal rows and CAS objects: every done
  * item's contentHash resolves to hash-stable bytes (S22), identical outputs
- * dedup to a single CAS object while billing stays per-item (S23), and a WAL
- * checkpoint + reopen preserves the run snapshot byte-for-byte (S24).
+ * dedup to a single CAS object while billing stays per-item (S23), and a
+ * framework reopen preserves the run snapshot byte-for-byte (S24).
  */
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
@@ -168,10 +168,10 @@ describe("cross-plugin store/journal artifact integrity", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // S24 — WAL checkpoint + reopen fidelity
+  // S24 — reopen fidelity
   // ---------------------------------------------------------------------------
 
-  it("S24: run snapshot survives a manual WAL checkpoint and a framework reopen", async () => {
+  it("S24: run snapshot survives a framework reopen", async () => {
     const first = buildFramework(tempDir).createApp();
     await first.start();
     const journal = first.probe.journal;
@@ -189,10 +189,7 @@ describe("cross-plugin store/journal artifact integrity", () => {
       contentHash: "content-hash-1"
     });
 
-    // WAL mode is active: the -wal file sits next to journal.db while the
-    // app lives, and survives a manual wal_checkpoint(TRUNCATE).
-    expect(existsSync(path.join(tempDir, "journal.db-wal"))).toBe(true);
-    journal.checkpoint();
+    // WAL mode is active: the -wal file sits next to journal.db while the app lives.
     expect(existsSync(path.join(tempDir, "journal.db-wal"))).toBe(true);
 
     const beforeReopen = journal.readSnapshot(run.id);

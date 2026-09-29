@@ -23,7 +23,7 @@ import {
   requeueDispatching
 } from "./items";
 import { getRun, latestResumableRun, latestRun, openRun, setRunStatus, totalsOf } from "./runs";
-import { checkpointNow, readRunSnapshot } from "./snapshot";
+import { readRunSnapshot } from "./snapshot";
 import type {
   AttemptEnd,
   AttemptStart,
@@ -119,11 +119,6 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
   // Reads a point-in-time run snapshot on its own short-lived connection.
   const boundReadSnapshot = (runId: string): RunSnapshot => readRunSnapshot(state, config, runId);
 
-  // Runs a manual checkpoint.
-  const boundCheckpoint = (): void => {
-    checkpointNow(state);
-  };
-
   return {
     openRun: boundOpenRun,
     getRun: boundGetRun,
@@ -155,7 +150,6 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
     setRunStatus: boundSetRunStatus,
     totals: boundTotals,
     listItems: boundListItems,
-    readSnapshot: boundReadSnapshot,
-    checkpoint: boundCheckpoint
+    readSnapshot: boundReadSnapshot
   };
 }

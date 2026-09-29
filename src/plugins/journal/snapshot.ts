@@ -1,6 +1,6 @@
 /**
  * @file journal core plugin — work outside the write path: the point-in-time run snapshot on a
- * short-lived connection, and the manual WAL checkpoint.
+ * short-lived connection.
  */
 import { requireDriver } from "./db";
 import { openSqliteDriver } from "./driver/select";
@@ -43,14 +43,4 @@ export function readRunSnapshot(state: State, config: Config, runId: string): Ru
   } finally {
     readOnlyDriver.close();
   }
-}
-
-/**
- * Runs a manual `wal_checkpoint(TRUNCATE)` on the primary connection.
- *
- * @param state - Journal plugin state.
- */
-export function checkpointNow(state: State): void {
-  const driver = requireDriver(state);
-  driver.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 }

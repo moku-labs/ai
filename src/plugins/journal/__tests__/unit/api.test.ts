@@ -491,10 +491,4 @@ describe("journal api", () => {
       expect(() => api.readSnapshot("missing-run")).toThrow();
     });
   });
-
-  describe("checkpoint", () => {
-    it("runs without throwing", () => {
-      expect(() => api.checkpoint()).not.toThrow();
-    });
-  });
 });

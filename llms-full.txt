@@ -214,7 +214,6 @@ export type JournalApi = {
   totals(runId: string): RunTotals;
   listItems(runId: string, filter?: ItemFilter): ItemRow[]; // oldest-updated first
   readSnapshot(runId: string): RunSnapshot;   // own short-lived connection — safe from a 2nd process
-  checkpoint(): void;                          // manual PRAGMA wal_checkpoint(TRUNCATE)
 };
 ```
 
