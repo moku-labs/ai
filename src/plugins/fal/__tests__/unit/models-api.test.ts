@@ -86,8 +86,10 @@ describe("createFalApi().models()", () => {
   });
 
   it("types the result as FalModelInfo[] and narrows on inputPerM", () => {
-    const [first] = createFalApi(createTestCtx()).models("prompt-gen");
-    expectTypeOf(createFalApi(createTestCtx()).models).returns.toEqualTypeOf<FalModelInfo[]>();
+    const api = createFalApi(createTestCtx());
+    const [first] = api.models("prompt-gen");
+    expectTypeOf(api.models).returns.toEqualTypeOf<FalModelInfo[]>();
+    expectTypeOf(api.models("prompt-gen")).toEqualTypeOf<FalModelInfo[]>();
     if (first === undefined) throw new Error("no model");
     if ("inputPerM" in first.price) {
       expectTypeOf(first.price).toEqualTypeOf<{ inputPerM: number; outputPerM: number }>();

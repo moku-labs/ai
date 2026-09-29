@@ -407,9 +407,9 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `runUrl` | `string` | `"https://fal.run"` |
 | | `imageDefaultModel` | `string` | `"gpt-image-2.5"` |
 | | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` |
-| | `pollMs` | `number` | `2000` |
+| | `pollIntervalMs` | `number` | `2000` |
 | | `jobTimeoutMs` | `number` | `900_000` |
-| | `requestLog` | `string \| undefined` | `undefined` (off) |
+| | `requestLog` | `string` | `""` (off) |
 | `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
 | | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
 | | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |

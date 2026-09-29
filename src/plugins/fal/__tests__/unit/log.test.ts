@@ -47,8 +47,8 @@ const IMAGE_ENTRY: RequestLogEntry = {
 };
 
 describe("createRequestLog", () => {
-  it("is off when config.requestLog is undefined", () => {
-    expect(createRequestLog(createTestCtx())).toBeUndefined();
+  it('is off when config.requestLog is "" (the default)', () => {
+    expect(createRequestLog(createTestCtx({ config: { requestLog: "" } }))).toBeUndefined();
   });
 
   it("appends one line per request: at, task, model, endpoint, requestId, prompt, body", async () => {
@@ -193,6 +193,30 @@ describe("createRequestLog", () => {
     await createRequestLog(ctx)?.write(IMAGE_ENTRY, { requestId: "req-2" });
 
     expect(ctx.log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the warn-once flag on the plugin state", async () => {
+    const blocker = path.join(dir, "blocker");
+    writeFileSync(blocker, "x");
+    const ctx = createTestCtx({ config: { requestLog: path.join(blocker, "fal.jsonl") } });
+    expect(ctx.state.requestLogWarned).toBe(false);
+
+    await createRequestLog(ctx)?.write(IMAGE_ENTRY, { requestId: "req-1" });
+
+    expect(ctx.state.requestLogWarned).toBe(true);
+  });
+
+  it("does not warn when the state already carries the warning", async () => {
+    const blocker = path.join(dir, "blocker");
+    writeFileSync(blocker, "x");
+    const ctx = createTestCtx({
+      config: { requestLog: path.join(blocker, "fal.jsonl") },
+      state: { requestLogWarned: true }
+    });
+
+    await createRequestLog(ctx)?.write(IMAGE_ENTRY, { requestId: "req-1" });
+
+    expect(ctx.log.warn).not.toHaveBeenCalled();
   });
 });
 

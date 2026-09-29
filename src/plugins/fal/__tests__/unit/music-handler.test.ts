@@ -199,4 +199,11 @@ describe("execute", () => {
   it("satisfies the music contract with every method", () => {
     expectTypeOf(createMusicHandler(createTestCtx())).toEqualTypeOf<Required<MusicHandler>>();
   });
+
+  it("rejects a request whose model is a number, at compile time and at run time", () => {
+    const handler = createMusicHandler(createTestCtx());
+    const request = { prompt: "rain", model: 7, lengthMs: 30_000 };
+    // @ts-expect-error — MusicRequest.model is a string alias, not a number
+    expect(() => handler.estimate(request)).toThrow(/Invalid music request: model /);
+  });
 });

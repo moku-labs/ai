@@ -110,7 +110,7 @@ function buildApp(tempDir: string, sink: Record<string, unknown[]> = {}) {
     store: { dir: path.join(tempDir, "store") },
     env: { providers: [fixtureEnvProvider({ FAL_KEY: "test-key" })] },
     runner: { pollIntervalMs: 1 },
-    fal: { pollMs: 0 }
+    fal: { pollIntervalMs: 0 }
   } as unknown as AppPluginConfigs;
 
   return createApp({ plugins: [createRunEventListenerPlugin(sink)], pluginConfigs });

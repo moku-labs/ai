@@ -12,7 +12,7 @@ request log.
   fal request id before it waits, so a crash, Ctrl-C or a timeout continues the same job and never pays twice.
 - **image** and **music**: `estimate` + `execute` + `submit` + `poll` over the generic queue. The runner drives
   `submit` + `poll`; the one-off facades (`app.image.generate`, `app.music.generate`) call `execute`, which
-  submits and waits in process every `pollMs`, at most `jobTimeoutMs`.
+  submits and waits in process every `pollIntervalMs`, at most `jobTimeoutMs`.
 - **prompt-gen**: `estimate` + `execute`, one sync POST to fal's OpenRouter router.
 
 Every handler validates and prices a request before it reads the key, uploads or POSTs: nothing is billed for a
@@ -34,9 +34,9 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallo
 | `runUrl` | `string` | `"https://fal.run"` | Sync endpoint base. prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. |
 | `imageDefaultModel` | `string` | `"gpt-image-2.5"` | Image model when `ImageRequest.model` is omitted. |
 | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` | prompt-gen model when `PromptGenRequest.model` is omitted or `"default"`. |
-| `pollMs` | `number` | `2000` | Status-check cadence of the in-process wait of image and music `execute`. |
+| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image and music `execute`. |
 | `jobTimeoutMs` | `number` | `900_000` | The in-process wait gives up after this (retryable `timeout`); the job keeps running on fal. |
-| `requestLog` | `string \| undefined` | `undefined` | JSONL request log path, relative to the working directory. Off when undefined. |
+| `requestLog` | `string` | `""` | JSONL request log path, relative to the working directory. `""` = off. |
 
 `MusicRequest.model` is required, so there is no music default: the runner hashes the input as written.
 

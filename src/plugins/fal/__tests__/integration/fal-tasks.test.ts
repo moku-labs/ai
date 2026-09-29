@@ -74,7 +74,7 @@ function buildFramework(dbPath: string, requestLog: string) {
       image: { defaultProvider: "fal" },
       promptGen: { defaultProvider: "fal" },
       music: { defaultProvider: "fal" },
-      fal: { pollMs: 0, requestLog }
+      fal: { pollIntervalMs: 0, requestLog }
     }
   });
 }

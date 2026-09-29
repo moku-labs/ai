@@ -128,14 +128,14 @@ describe("fetchJobResult and downloadFile", () => {
 });
 
 describe("waitForJob", () => {
-  it("checks every pollMs until the job completes", async () => {
+  it("checks every pollIntervalMs until the job completes", async () => {
     vi.useFakeTimers();
     const fetchMock = stubFetch(
       jsonResponse(200, { status: "IN_QUEUE" }),
       jsonResponse(200, { status: "IN_PROGRESS" }),
       jsonResponse(200, { status: "COMPLETED" })
     );
-    const ctx = createTestCtx({ config: { pollMs: 2000 } });
+    const ctx = createTestCtx({ config: { pollIntervalMs: 2000 } });
 
     const done = waitForJob(ctx, JOB, CALL);
     await vi.advanceTimersByTimeAsync(0);
@@ -154,7 +154,7 @@ describe("waitForJob", () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(async () => jsonResponse(200, { status: "IN_QUEUE" }));
     vi.stubGlobal("fetch", fetchMock);
-    const ctx = createTestCtx({ config: { pollMs: 2000, jobTimeoutMs: 5000 } });
+    const ctx = createTestCtx({ config: { pollIntervalMs: 2000, jobTimeoutMs: 5000 } });
 
     const done = waitForJob(ctx, JOB, CALL);
     const failure = expect(done).rejects.toMatchObject({
@@ -198,7 +198,7 @@ describe("waitForJob", () => {
     const fetchMock = vi.fn(async () => jsonResponse(200, { status: "IN_QUEUE" }));
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
-    const ctx = createTestCtx({ config: { pollMs: 60_000 } });
+    const ctx = createTestCtx({ config: { pollIntervalMs: 60_000 } });
 
     const done = waitForJob(ctx, JOB, { ...CALL, signal: controller.signal });
     const failure = expect(done).rejects.toBe("paused");

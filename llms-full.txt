@@ -1158,7 +1158,7 @@ owns its models and prices.
   1 000–190 000 ms, per generation). Chunks: 3 000–120 000 ms each, at most 30, adding
   up to lengthMs. `params` never reach the body.
 
-Image and music `execute` submit, then wait in process every `pollMs`, at most
+Image and music `execute` submit, then wait in process every `pollIntervalMs`, at most
 `jobTimeoutMs` (then a retryable `kind: "timeout"`; the job keeps running on fal and
 stays adoptable through `poll`). Every handler validates and prices a request before
 it reads the key, uploads or POSTs; a model without a price throws from `estimate`.
@@ -1201,11 +1201,11 @@ export type Config = {
   /** OpenRouter model id used when `PromptGenRequest.model` is omitted or `"default"`. Default: "anthropic/claude-opus-5.5". */
   llmDefaultModel: string;
   /** Status-check cadence, ms, of the in-process wait of image and music `execute`. Default: 2000. */
-  pollMs: number;
+  pollIntervalMs: number;
   /** The in-process wait gives up after this many ms (retryable `timeout`); the fal job keeps running and stays adoptable through `poll`. Default: 900_000. */
   jobTimeoutMs: number;
   /** JSONL request log path, relative to the working directory: one line per billable request of every task. Off when undefined. Default: undefined. */
-  requestLog: string | undefined;
+  requestLog: string;
 };
 
 export type State = {
@@ -1393,9 +1393,9 @@ fal:
   runUrl: string = "https://fal.run"           — sync base for prompt-gen
   imageDefaultModel: string = "gpt-image-2.5"
   llmDefaultModel: string = "anthropic/claude-opus-5.5"
-  pollMs: number = 2000                        — in-process wait of image and music execute
+  pollIntervalMs: number = 2000                 — in-process wait of image and music execute
   jobTimeoutMs: number = 900_000               — that wait gives up (retryable timeout); the job stays adoptable
-  requestLog: string | undefined = undefined   — JSONL path; off when undefined
+  requestLog: string = ""                      — JSONL path; off when ""
 
 asset:
   defaultProvider: string = "ark"
