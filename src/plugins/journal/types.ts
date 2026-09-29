@@ -208,6 +208,19 @@ export type ProviderRecord = {
 };
 
 /**
+ * Identity of one provider record: its primary key, without the value. Used to
+ * look up or delete a record.
+ *
+ * @example
+ * ```ts
+ * const query: ProviderRecordQuery = {
+ *   provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset", key: "9b74c9897bac770ffc029102a200c5de"
+ * };
+ * ```
+ */
+export type ProviderRecordQuery = Omit<ProviderRecord, "value">;
+
+/**
  * The journal's public API surface, injected as `ctx.journal` on every
  * regular plugin's context.
  */
@@ -551,12 +564,7 @@ export type JournalApi = {
    * ctx.journal.findProviderRecord({ provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset", key: file.hash }); // "asset://…" | undefined
    * ```
    */
-  findProviderRecord(q: {
-    provider: string;
-    account: string;
-    kind: string;
-    key: string;
-  }): string | undefined;
+  findProviderRecord(q: ProviderRecordQuery): string | undefined;
   /**
    * Upserts records in ONE BEGIN IMMEDIATE transaction (INSERT … ON CONFLICT DO UPDATE value, created_at).
    * Empty array is a no-op. A failing row rolls back the whole batch.
@@ -586,5 +594,5 @@ export type JournalApi = {
    * ctx.journal.deleteProviderRecord({ provider: "apimodels", account, kind: "asset", key: anna.hash });
    * ```
    */
-  deleteProviderRecord(q: { provider: string; account: string; kind: string; key: string }): void;
+  deleteProviderRecord(q: ProviderRecordQuery): void;
 };

@@ -23,12 +23,7 @@ import {
   markFlagged,
   requeueDispatching
 } from "./items";
-import {
-  deleteProviderRecord,
-  findProviderRecord,
-  type ProviderRecordQuery,
-  putProviderRecords
-} from "./provider-records";
+import { deleteProviderRecord, findProviderRecord, putProviderRecords } from "./provider-records";
 import { getRun, latestResumableRun, latestRun, openRun, setRunStatus, totalsOf } from "./runs";
 import { readRunSnapshot } from "./snapshot";
 import type {
@@ -42,6 +37,7 @@ import type {
   JobState,
   JournalApi,
   ProviderRecord,
+  ProviderRecordQuery,
   RunStatus,
   State
 } from "./types";

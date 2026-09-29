@@ -3,10 +3,7 @@
  * provider, account, kind and key (for example an uploaded asset id by content hash).
  */
 import { requireDriver } from "./db";
-import type { ProviderRecord, State } from "./types";
-
-/** Identity of one `provider_records` row: its primary key, without the value. */
-export type ProviderRecordQuery = Omit<ProviderRecord, "value">;
+import type { ProviderRecord, ProviderRecordQuery, State } from "./types";
 
 /** Upsert of one `provider_records` row: the same identity replaces value and created_at. */
 const UPSERT_PROVIDER_RECORD_SQL = `INSERT INTO provider_records (provider, account, kind, key, value, created_at)

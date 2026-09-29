@@ -1,9 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { mapItem, mapRun, NOT_OPEN_ERROR, requireDriver, SQL_NULL } from "../../db";
+import { isOpen, mapItem, mapRun, NOT_OPEN_ERROR, requireDriver, SQL_NULL } from "../../db";
 import type { ItemDatabaseRow, RunDatabaseRow, SqliteDriver } from "../../driver/types";
+import type { State } from "../../types";
 import { closedState } from "./fixtures";
 
 describe("journal db", () => {
+  describe("isOpen", () => {
+    it("is true while the driver is open", () => {
+      const state = { ...closedState(), driver: {} as SqliteDriver };
+
+      expect(isOpen(state)).toBe(true);
+    });
+
+    it("is false without a driver, and does not throw", () => {
+      const state = closedState();
+
+      expect(() => isOpen(state)).not.toThrow();
+      expect(isOpen(state)).toBe(false);
+    });
+
+    it("follows the state: false once the driver is cleared", () => {
+      const state: State = { ...closedState(), driver: {} as SqliteDriver };
+      expect(isOpen(state)).toBe(true);
+
+      // eslint-disable-next-line unicorn/no-null -- closeDriver sets State.driver back to null
+      state.driver = null;
+
+      expect(isOpen(state)).toBe(false);
+    });
+  });
+
   describe("requireDriver", () => {
     it("throws the documented not-open error when the driver is null", () => {
       expect(() => requireDriver(closedState())).toThrow(
