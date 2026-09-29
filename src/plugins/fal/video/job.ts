@@ -10,6 +10,11 @@ export { decodeJobId, encodeJobId, hasJobError, parseSubmitResponse } from "../c
 
 /**
  * Where the finished clip is, narrowed from fal's result body.
+ *
+ * @example
+ * ```ts
+ * const clip: FalVideoFile = { url: "https://v3.fal.media/files/clip.mp4", contentType: "video/mp4" };
+ * ```
  */
 export type FalVideoFile = {
   /** CDN URL of the clip. */
