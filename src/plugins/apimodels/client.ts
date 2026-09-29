@@ -7,6 +7,13 @@
  * `FlaggedProviderError` taxonomy. `apiData` reads the `{ code, msg, data }`
  * envelope, where a `code` other than 200 is read like the HTTP status.
  */
+import {
+  AUTH_STATUSES,
+  CONTENT_MODERATION,
+  MS_PER_SECOND,
+  PAYMENT_REQUIRED,
+  RATE_LIMITED
+} from "./http";
 import type { UpstreamFailure } from "./types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
 import type { SubmitBody } from "./video/models";
@@ -28,9 +35,9 @@ export type ApiRequest = {
   /** API key; omitted for the result download (a third-party host). Never logged. */
   apiKey?: string | undefined;
   /**
-   * JSON body: the video submit body (typed; open only through the
-   * pass-through `request.params`), or a flat text body (asset group, asset
-   * registration).
+   * JSON body: the video submit body (a closed `SeedanceBody`, open only
+   * through the `request.params` merged over it), or a flat text body (asset
+   * group, asset registration).
    */
   json?: SubmitBody | Readonly<Record<string, string>> | undefined;
   /** Multipart body (file upload). */
@@ -76,9 +83,6 @@ const MAX_ERROR_TEXT = 300;
 /** What replaces a redacted string in upstream text. */
 const REDACTED = "[redacted]";
 
-/** failCode apimodels uses for a content-moderation rejection. */
-const CONTENT_MODERATION = "CONTENT_MODERATION";
-
 /** Status apimodels answers when an asset registration fails moderation or fetching. */
 const UNPROCESSABLE = 422;
 
@@ -87,9 +91,6 @@ const UNREADABLE_STATUS = 502;
 
 /** Envelope `code` of a successful call. */
 const SUCCESS_CODE = 200;
-
-/** Statuses apimodels answers for a bad or missing key. */
-const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
 
 /** Default wait after a 429 without a readable `Retry-After`, ms. */
 const DEFAULT_RATE_LIMIT_WAIT_MS = 1000;
@@ -163,6 +164,36 @@ function shorten(text: string): string {
 }
 
 /**
+ * Whether a text is absent or holds only whitespace. False narrows it to a
+ * string.
+ *
+ * @param text - A text, if any.
+ * @returns True for undefined, null, `""` or whitespace only.
+ * @example
+ * ```ts
+ * isBlank(" \n"); // => true
+ * ```
+ */
+function isBlank(text: string | null | undefined): text is "" | null | undefined {
+  return (text ?? "").trim() === "";
+}
+
+/**
+ * Whether a string is absent or empty. Unlike a blank text, whitespace counts
+ * as content here: an API key or a task id is used as it came.
+ *
+ * @param value - A string, if any.
+ * @returns True for undefined or `""`.
+ * @example
+ * ```ts
+ * isEmpty(""); // => true
+ * ```
+ */
+export function isEmpty(value: string | undefined): value is "" | undefined {
+  return value === undefined || value === "";
+}
+
+/**
  * Cleans upstream text for an error message: redacted, then shortened.
  *
  * @param text - apimodels' text, if any.
@@ -177,7 +208,7 @@ export function cleanText(
   text: string | undefined,
   secrets: readonly string[]
 ): string | undefined {
-  if (text === undefined || text.trim() === "") return undefined;
+  if (isBlank(text)) return undefined;
   return shorten(redact(text, secrets));
 }
 
@@ -229,9 +260,9 @@ function describeFailure(body: unknown, secrets: readonly string[]): UpstreamFai
  * ```
  */
 function retryAfterMsOf(value: string | null): number | undefined {
-  if (value === null || value.trim() === "") return undefined;
+  if (isBlank(value)) return undefined;
   const seconds = Number(value);
-  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * 1000));
+  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * MS_PER_SECOND));
   const dateMs = Date.parse(value);
   return Number.isNaN(dateMs) ? undefined : Math.max(0, dateMs - Date.now());
 }
@@ -282,7 +313,7 @@ function rejectionError(failure: Failure, request: ApiRequest): Error {
       upstream
     );
   }
-  if (status === 402) {
+  if (status === PAYMENT_REQUIRED) {
     return new TerminalProviderError(
       "[ai] apimodels balance is too low (HTTP 402).\n  Top up the apimodels account, then run again.",
       status,
@@ -316,7 +347,7 @@ function classifyFailure(failure: Failure, request: ApiRequest): Error {
       `[ai] apimodels flagged the request (content moderation)${suffixOf(upstream.detail)}.\n  Change the prompt or the inputs.`
     );
   }
-  if (status === 429) {
+  if (status === RATE_LIMITED) {
     return new RetryableProviderError(
       "[ai] apimodels rate-limited the request (HTTP 429).\n  The runner retries after Retry-After.",
       { status, retryAfterMs: retryAfterMsOf(failure.headers.get("retry-after")) }
@@ -510,7 +541,7 @@ export async function apiData(request: ApiRequest, what: string): Promise<unknow
  * ```
  */
 function isRateLimited(error: unknown): error is RetryableProviderError {
-  return error instanceof RetryableProviderError && error.status === 429;
+  return error instanceof RetryableProviderError && error.status === RATE_LIMITED;
 }
 
 /**

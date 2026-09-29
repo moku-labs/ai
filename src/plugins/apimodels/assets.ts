@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import type { ProviderRecord } from "../journal/types";
 import type { EstimateRequest, VideoFile, VideoRequest } from "../video/contract";
 import { apiData, readField, withRateLimitWait } from "./client";
+import { BAD_REQUEST, RETRY_STATUS, refusal } from "./http";
 import { assetPriceUsd, roundUsd } from "./prices";
 import type { ApimodelsContext } from "./types";
 import { RetryableProviderError, TerminalProviderError } from "./types";
@@ -132,12 +133,6 @@ const NAMES_ASSET = /asset/i;
 /** How apimodels' text names the asset group. */
 const NAMES_GROUP = /group/i;
 
-/** Status of a validation refusal or a final stale answer. */
-const BAD_REQUEST = 400;
-
-/** Status of a first stale answer, so the runner classifies it retryable (5xx); sent with `kind: "resubmit"`. */
-const RETRY_STATUS = 503;
-
 /**
  * The account fingerprint: first 12 hex characters of
  * `sha256("moku-ai:" + apiKey)`. Non-reversible, so a key change never
@@ -155,20 +150,6 @@ export function accountOf(apiKey: string): string {
     .update(`${ACCOUNT_SALT}${apiKey}`)
     .digest("hex")
     .slice(0, ACCOUNT_LENGTH);
-}
-
-/**
- * A terminal 400 refusal of `params.assets`.
- *
- * @param message - The two-line message.
- * @returns The error to throw.
- * @example
- * ```ts
- * refusal("[ai] x.\n  y.").status; // => 400
- * ```
- */
-function refusal(message: string): TerminalProviderError {
-  return new TerminalProviderError(message, BAD_REQUEST);
 }
 
 /**
@@ -230,6 +211,20 @@ export function listInputs(request: VideoRequest): NamedInput[] {
 }
 
 /**
+ * Whether a `params.assets` entry is a valid selector.
+ *
+ * @param entry - One entry of the list, untrusted.
+ * @returns True for `"image"`, `"endImage"` or `"refs.<n>"` without leading zeros.
+ * @example
+ * ```ts
+ * isSelector("refs.01"); // => false
+ * ```
+ */
+function isSelector(entry: unknown): entry is string {
+  return typeof entry === "string" && SELECTOR.test(entry);
+}
+
+/**
  * Validates `params.assets` at estimate and submit: a list of valid
  * selectors, each naming an input the request has, each once. Works on
  * unresolved inputs; the `image/*` check is {@link selectAssetFiles}'s.
@@ -257,7 +252,7 @@ export function readAssetSelectors(request: EstimateRequest): string[] {
   const available = selectorsOf(request);
   const selectors = new Set<string>();
   for (const entry of entries) {
-    if (typeof entry !== "string" || !SELECTOR.test(entry)) {
+    if (!isSelector(entry)) {
       throw refusal(
         `[ai] apimodels params.assets has an unknown entry ${JSON.stringify(entry)}.\n  Use "image", "endImage" or "refs.<n>".`
       );

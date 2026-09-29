@@ -574,7 +574,7 @@ export type JournalApi = {
    * ctx.journal.putProviderRecords([
    *   { provider: "apimodels", account, kind: "asset", key: anna.hash, value: "asset://asset-1" },
    *   { provider: "apimodels", account, kind: "asset", key: ben.hash, value: "asset://asset-2" }
-   * ]);
+   * ]); // both ids readable via findProviderRecord
    * ```
    */
   putProviderRecords(records: ProviderRecord[]): void;

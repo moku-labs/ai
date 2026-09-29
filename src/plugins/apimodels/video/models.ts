@@ -7,7 +7,8 @@
  * raised before any upload or charge.
  */
 import type { EstimateInput, EstimateRequest, VideoFile, VideoRequest } from "../../video/contract";
-import { TerminalProviderError } from "../types";
+import { refusal } from "../http";
+import type { TerminalProviderError } from "../types";
 
 /**
  * A model alias this plugin serves. The names mirror fal's Seedance aliases,
@@ -137,18 +138,20 @@ export type SeedanceBody = {
 };
 
 /**
- * The body as POSTed: the typed {@link SeedanceBody} fields, then
- * `request.params` (without `assets`) merged last. Only the params are open:
- * they pass through by contract.
+ * The body as POSTed: a closed {@link SeedanceBody}, then `request.params`
+ * (without `assets`) merged last. Only the merged params are open, and only
+ * for reading: they pass through by contract. Build the fixed fields as a
+ * `SeedanceBody` const and spread the params over it, never as a `SubmitBody`
+ * literal: its open part would let a misspelled fixed field through.
  *
  * @example
  * ```ts
- * const body: SubmitBody = {
- *   model: "seedance-2.5", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: false, output_format: "mov"
- * };
+ * const fixed: SeedanceBody = { model: "seedance-2.5", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: false };
+ * const params: Record<string, unknown> = { output_format: "mov" }; // request.params without assets
+ * const body: SubmitBody = { ...fixed, ...params };
  * ```
  */
-export type SubmitBody = SeedanceBody & Record<string, unknown>;
+export type SubmitBody = SeedanceBody & Readonly<Record<string, unknown>>;
 
 /** The input fields of a frames alias. */
 type FrameFields = Pick<SeedanceBody, "first_frame_url" | "last_frame_url">;
@@ -195,9 +198,6 @@ const ASSETS_PARAM = "assets";
 
 /** Reference audio and reference video limit of the Seedance reference aliases. */
 const MEDIA_REFS = 10;
-
-/** Status of every validation refusal. */
-const BAD_REQUEST = 400;
 
 /**
  * A frames alias: `image` → `first_frame_url`, `endImage` → `last_frame_url`.
@@ -307,20 +307,6 @@ function aliasesOf(mode: ModelMode): string[] {
  */
 function isAlias(model: string): model is ApimodelsAlias {
   return Object.hasOwn(models, model);
-}
-
-/**
- * A terminal 400 refusal of the request.
- *
- * @param message - The two-line message.
- * @returns The error to throw.
- * @example
- * ```ts
- * refusal("[ai] x.\n  y.").status; // => 400
- * ```
- */
-function refusal(message: string): TerminalProviderError {
-  return new TerminalProviderError(message, BAD_REQUEST);
 }
 
 /**
@@ -626,7 +612,7 @@ function referenceFields(urls: InputUrls, aspect: string): ReferenceFields {
  * @param model - The resolved catalog row.
  * @param request - The validated request.
  * @param urls - URLs (https or `asset://`) of the inputs.
- * @returns The request body.
+ * @returns The request body: the closed fixed fields, then the params.
  * @example
  * ```ts
  * buildBody(resolveModel("seedance-2.0"), { model: "seedance-2.0", prompt: "push-in" }, { image: "asset://a1", imageRefs: [], audioRefs: [], videoRefs: [] });
@@ -638,6 +624,7 @@ export function buildBody(
   request: VideoRequest,
   urls: InputUrls
 ): SubmitBody {
+  // The model fields and the inputs of its mode.
   const inputs =
     model.mode === "frames"
       ? frameFields(urls)
@@ -651,5 +638,6 @@ export function buildBody(
     ...inputs
   };
 
+  // request.params pass through last.
   return { ...body, ...passThroughParameters(request.params) };
 }

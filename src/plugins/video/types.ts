@@ -87,7 +87,7 @@ export type VideoApi = {
    * @returns Registered provider names for the "video" task.
    * @example
    * ```ts
-   * app.video.providers(); // => ["fal"]
+   * app.video.providers(); // => ["fal", "apimodels"]
    * ```
    */
   providers(): string[];

@@ -5,6 +5,7 @@
  * paid job never runs at an unknown price.
  */
 import type { EstimateRequest } from "../video/contract";
+import { BAD_REQUEST } from "./http";
 import type { ApimodelsContext } from "./types";
 import { TerminalProviderError } from "./types";
 import { requestResolution, requestSeconds, resolveModel } from "./video/models";
@@ -38,9 +39,6 @@ const ASSET_PRICE_KEY = "asset";
 
 /** Cost precision: results are rounded to micro-dollars so 0.1 + 0.2 is 0.3. */
 const MICRO_DOLLARS = 1_000_000;
-
-/** Status of a missing price: terminal, a paid job never runs at an unknown price. */
-const BAD_REQUEST = 400;
 
 /**
  * Merges the bundled table with config overrides (an override replaces its key).

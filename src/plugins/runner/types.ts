@@ -152,7 +152,9 @@ export type ExecutableHandler = {
  *
  * A poll error with no hint marks the job expired, so the next run adopts
  * it (used for a lost or rejected key). `kind: "resubmit"` retries like its
- * status says but does not feed the lane breaker.
+ * status says but does not feed the lane breaker. A resubmit verdict must be
+ * returned from `poll` as `{ state: "failed", error }`; a thrown one is read
+ * as pending.
  *
  * @example
  * ```ts

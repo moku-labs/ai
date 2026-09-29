@@ -153,7 +153,7 @@ const { usd } = app.video.estimate({ model: "minimax-h3", prompt: "push-in", sec
 Registered video providers, in registration order. Delegates to `registry.providers("video")`.
 
 ```ts
-app.video.providers(); // => ["fal"]
+app.video.providers(); // => ["fal", "apimodels"]
 ```
 
 ### Module-level export (not on `app.video`)

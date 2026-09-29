@@ -6,7 +6,7 @@ import type {
   VideoRequest
 } from "../../../video/contract";
 import { TerminalProviderError } from "../../types";
-import type { InputUrls, SeedanceBody } from "../../video/models";
+import type { InputUrls, SeedanceBody, SubmitBody } from "../../video/models";
 import {
   apimodelsAliases,
   buildBody,
@@ -231,6 +231,32 @@ describe("SeedanceBody", () => {
       generate_audio: false
     };
     expect(body.duration).toBe("5");
+  });
+
+  it("refuses a misspelled fixed field: the fixed body is closed", () => {
+    const body: SeedanceBody = {
+      model: "seedance-2.5",
+      prompt: "p",
+      resolution: "720p",
+      duration: 5,
+      generate_audio: false,
+      // @ts-expect-error -- the field is first_frame_url; a closed body catches the typo
+      first_frame: "asset://a1"
+    };
+    expect(body).toHaveProperty("first_frame", "asset://a1");
+  });
+
+  it("opens only the merged params, and only for reading", () => {
+    const body = buildBody(
+      resolveModel("seedance-2.5"),
+      { model: "seedance-2.5", prompt: "p", params: { output_format: "mov" } },
+      URLS
+    );
+
+    expectTypeOf(buildBody).returns.toEqualTypeOf<SubmitBody>();
+    expect(body.output_format).toBe("mov");
+    // @ts-expect-error -- a pass-through param is read, never written after the merge
+    body.output_format = "mp4";
   });
 });
 

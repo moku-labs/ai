@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { VideoFile } from "../video/contract";
 import { apiData, readString, withRateLimitWait } from "./client";
+import { BAD_REQUEST } from "./http";
 import type { ApimodelsContext } from "./types";
 import { TerminalProviderError } from "./types";
 
@@ -62,9 +63,6 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
   "audio/mp4": "m4a",
   "audio/ogg": "ogg"
 };
-
-/** Status of an unreadable input or an incomplete response: terminal, retrying cannot help. */
-const BAD_REQUEST = 400;
 
 /** Hash characters kept in an uploaded file name. */
 const NAME_HASH_LENGTH = 16;

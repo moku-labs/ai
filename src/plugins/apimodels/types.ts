@@ -1,8 +1,8 @@
 /**
  * @file apimodels provider plugin — types (Config/State/API), the
  * runner-compatible provider error taxonomy, and the domain context type
- * shared by `api.ts`, `upload.ts`, `assets.ts`, `prices.ts` and
- * `video/handler.ts`.
+ * shared by `api.ts`, `upload.ts`, `assets.ts`, `prices.ts`,
+ * `video/handler.ts` and `video/poll.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -275,8 +275,8 @@ export type ApimodelsJournal = Pick<
 export type { RegistryApi } from "../registry";
 
 /**
- * Domain context shared by `api.ts`, `prices.ts`, `upload.ts`, `assets.ts`
- * and `video/handler.ts`: `PluginCtx` supplies `config`/`state`/`emit`;
+ * Domain context shared by `api.ts`, `prices.ts`, `upload.ts`, `assets.ts`,
+ * `video/handler.ts` and `video/poll.ts`: `PluginCtx` supplies `config`/`state`/`emit`;
  * `require` is narrowed to the registry; `env`, `log` and `journal` are the
  * injected core APIs this plugin reads the key, logs and keeps asset ids through.
  */
