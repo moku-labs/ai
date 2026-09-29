@@ -3,9 +3,9 @@
  */
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
 import { redactedFailureOf, requestChatCompletion } from "../client";
+import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import { estimateChatCostUsd, estimateTokenCount, getPrices } from "../prices";
 import type { OpenaiChatMessage, OpenaiChatRequestBody, OpenaiContext } from "../types";
-import { FlaggedProviderError, TerminalProviderError } from "../types";
 
 /**
  * Resolves the chat model to use: the request's override, else the

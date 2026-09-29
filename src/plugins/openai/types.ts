@@ -1,6 +1,6 @@
 /**
  * @file openai provider plugin — types (config, state, structural OpenaiClient,
- * request/response shapes, domain context) + provider error classes.
+ * request/response shapes, domain context).
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -196,6 +196,8 @@ export type OpenaiApi = {
 
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";
+/** The runtime error classes live in `./errors`; re-exported here as types only. */
+export type { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 
 /**
  * Domain context for the openai plugin's extracted files (api.ts, client.ts,
@@ -218,66 +220,3 @@ export type OpenaiContext = PluginCtx<Config, State> & {
   /** Structured logging API injected by the framework's log plugin. */
   log: LogApi;
 };
-
-/**
- * Retryable transport/provider failure: 5xx, 429, timeout, or network.
- * Carries exactly the structural fields the runner's `classifyError`
- * (`src/plugins/runner/types.ts` `ProviderErrorHint`) reads: `status`,
- * `kind`, and `retryAfterMs`.
- */
-export class RetryableProviderError extends Error {
-  readonly status: number | undefined;
-  readonly kind: "timeout" | "network" | undefined;
-  readonly retryAfterMs: number | undefined;
-
-  /**
-   * Creates a retryable provider error.
-   *
-   * @param message - Redacted human-readable message (never request/response text).
-   * @param hint - The runner's `ProviderErrorHint` fields for this failure.
-   * @param hint.status - HTTP status code, when the failure came from an HTTP response.
-   * @param hint.kind - Explicit classification hint overriding status-based inference.
-   * @param hint.retryAfterMs - Provider-supplied Retry-After delay, ms.
-   * @example
-   * ```ts
-   * throw new RetryableProviderError("[ai] OpenAI rate limited the request.", {
-   *   status: 429,
-   *   retryAfterMs: 1_000
-   * });
-   * ```
-   */
-  constructor(
-    message: string,
-    hint: { status?: number; kind?: "timeout" | "network"; retryAfterMs?: number } = {}
-  ) {
-    super(message);
-    this.status = hint.status;
-    this.kind = hint.kind;
-    this.retryAfterMs = hint.retryAfterMs;
-  }
-}
-
-/** Deterministic 4xx failure (excluding 429) — never retried. */
-export class TerminalProviderError extends Error {
-  readonly status: number | undefined;
-
-  /**
-   * Creates a terminal provider error.
-   *
-   * @param message - Redacted human-readable message (never request/response text).
-   * @param status - HTTP status code, when the failure came from an HTTP response.
-   * @example
-   * ```ts
-   * throw new TerminalProviderError("[ai] OpenAI rejected the request (400).", 400);
-   * ```
-   */
-  constructor(message: string, status?: number) {
-    super(message);
-    this.status = status;
-  }
-}
-
-/** Content-policy rejection/refusal — terminal `flagged` state, never re-queued. */
-export class FlaggedProviderError extends Error {
-  readonly kind = "content-policy" as const;
-}

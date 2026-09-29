@@ -7,9 +7,9 @@ import { coreConfig, createCore } from "../../../../config";
 import { registryPlugin } from "../../../registry";
 import { voiceoverPlugin } from "../../../voiceover";
 import type { VoiceoverHandler } from "../../../voiceover/types";
+import { RetryableProviderError } from "../../errors";
 import { elevenlabsPlugin } from "../../index";
 import type { ElevenlabsContext } from "../../types";
-import { RetryableProviderError } from "../../types";
 import { createVoiceoverHandler } from "../../voiceover/handler";
 
 // ---------------------------------------------------------------------------

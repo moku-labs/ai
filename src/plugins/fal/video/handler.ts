@@ -8,11 +8,11 @@
  */
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import type { ResolvedFalModel, SplitReferences } from "../models";
 import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
 import type { EstimateRequest, FalContext, FalProviderError } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
 import {

@@ -14,7 +14,7 @@ import {
   requestSpeech,
   toOpenaiCallOptions
 } from "../../client";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { createFakeOpenaiClient, createFakeOpenaiContext } from "./fixtures";
 
 describe("openai unit: client", () => {

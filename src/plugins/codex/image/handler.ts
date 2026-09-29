@@ -8,9 +8,9 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { ImageHandler, ImageRequest, ImageResult } from "../../image/contract";
 import { buildCodexArguments, runCodex } from "../cli";
+import { TerminalProviderError } from "../errors";
 import { priceOf } from "../prices";
 import type { CodexContext } from "../types";
-import { TerminalProviderError } from "../types";
 import { copyReferences, findResultImage, mimeForFile } from "./files";
 import { buildImagePrompt } from "./prompt";
 

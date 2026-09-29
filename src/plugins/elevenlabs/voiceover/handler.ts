@@ -10,9 +10,9 @@
 import type { VoiceoverHandler, VoiceoverRequest, VoiceoverResult } from "../../voiceover/contract";
 import type { ElevenlabsRequestOptions } from "../client";
 import { elevenlabsRequest } from "../client";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import { resolvePrices } from "../prices";
 import type { ElevenlabsContext } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 
 /** Output audio container format accepted by a voiceover request. */
 type OutputFormat = "mp3" | "wav" | "ogg";

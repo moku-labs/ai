@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { RetryableProviderError, TerminalProviderError } from "./types";
+import { RetryableProviderError, TerminalProviderError } from "./errors";
 
 /** Inputs for {@link buildCodexArguments}. */
 export type CodexArgumentsOptions = {

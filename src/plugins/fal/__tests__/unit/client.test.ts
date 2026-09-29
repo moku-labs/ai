@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FalRequest } from "../../client";
 import { falFetch, jobFailure, parseJson } from "../../client";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { callsOf, jsonResponse, stubFetch, TEST_KEY } from "./fixtures";
 
 const BASE: FalRequest = {

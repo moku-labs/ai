@@ -3,9 +3,9 @@
  */
 import type { TranslateHandler, TranslateRequest, TranslateResult } from "../../translate/contract";
 import { redactedFailureOf, requestChatCompletion } from "../client";
+import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import { estimateChatCostUsd, estimateTokenCount, getPrices } from "../prices";
 import type { OpenaiChatMessage, OpenaiChatRequestBody, OpenaiContext } from "../types";
-import { FlaggedProviderError, TerminalProviderError } from "../types";
 
 /**
  * Fixed translation system prompt template; `{source}`/`{target}` are

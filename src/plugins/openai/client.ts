@@ -12,6 +12,7 @@ import OpenAI, {
   APIUserAbortError,
   RateLimitError
 } from "openai";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import type {
   OpenaiCallOptions,
   OpenaiChatCompletion,
@@ -21,7 +22,6 @@ import type {
   OpenaiSpeechRequestBody,
   OpenaiSpeechResult
 } from "./types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
 
 /**
  * The SDK retries 5xx/429/timeout requests internally by default. This

@@ -6,8 +6,8 @@
  * `RetryableProviderError` / `TerminalProviderError` / `FlaggedProviderError`
  * taxonomy. It also narrows fal's untrusted JSON error bodies.
  */
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import type { FalProviderError } from "./types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
 
 /**
  * HTTP method used against fal.

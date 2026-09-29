@@ -1,7 +1,6 @@
 /**
- * @file codex provider plugin — types (Config/State/API), the
- * runner-compatible provider error classes, and the domain context type
- * shared by `api.ts`, `prices.ts` and `image/handler.ts`.
+ * @file codex provider plugin — types (Config/State/API) and the domain
+ * context type shared by `api.ts`, `prices.ts` and `image/handler.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -95,53 +94,10 @@ export type CodexApi = {
   info(): CodexInfo;
 };
 
-/**
- * Retryable failure: the CLI ran past `timeoutMs`. Carries `kind`, the
- * field the runner's `classifyError` reads to bucket it as retryable.
- */
-export class RetryableProviderError extends Error {
-  readonly kind: "timeout" | "network";
-
-  /**
-   * Creates a retryable provider error.
-   *
-   * @param message - Human-readable message (never the prompt).
-   * @param kind - Retry classification read by the runner.
-   * @example
-   * ```ts
-   * throw new RetryableProviderError("[ai] Codex timed out.", "timeout");
-   * ```
-   */
-  constructor(message: string, kind: "timeout" | "network") {
-    super(message);
-    this.name = "RetryableProviderError";
-    this.kind = kind;
-  }
-}
-
-/**
- * Terminal failure: CLI missing, non-zero exit, or no image written. Has no
- * `kind` and no `status`, so the runner buckets it as "unknown" (terminal,
- * never retried).
- */
-export class TerminalProviderError extends Error {
-  /**
-   * Creates a terminal provider error.
-   *
-   * @param message - Human-readable two-line message (never the prompt).
-   * @example
-   * ```ts
-   * throw new TerminalProviderError("[ai] Codex exited with code 1.\n  Run codex exec by hand.");
-   * ```
-   */
-  constructor(message: string) {
-    super(message);
-    this.name = "TerminalProviderError";
-  }
-}
-
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";
+/** The runtime error classes live in `./errors`; re-exported here as types only. */
+export type { RetryableProviderError, TerminalProviderError } from "./errors";
 
 /**
  * Domain context shared by `api.ts`, `prices.ts` and `image/handler.ts`:

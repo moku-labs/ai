@@ -14,9 +14,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { VideoFile } from "../video/contract";
 import { falFetch, parseJson, readString } from "./client";
+import { RetryableProviderError, TerminalProviderError } from "./errors";
 import type { SplitReferences, UploadedUrls } from "./models";
 import type { FalContext, UploadMode } from "./types";
-import { RetryableProviderError, TerminalProviderError } from "./types";
 
 /**
  * Per-call upload options.

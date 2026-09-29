@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCodexArguments, isBinResolvable, runCodex } from "../../cli";
-import { RetryableProviderError, TerminalProviderError } from "../../types";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { writeFakeCodex } from "./fixtures";
 
 describe("buildCodexArguments", () => {

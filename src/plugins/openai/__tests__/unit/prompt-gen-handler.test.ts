@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { FlaggedProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt-gen/handler";
-import { FlaggedProviderError } from "../../types";
 import {
   createFakeOpenaiClient,
   createFakeOpenaiContext,
