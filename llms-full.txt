@@ -10,7 +10,7 @@ Contents:
 2. Public package surface
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
-   elevenlabs, openai, compose, cli, asset, ark (full types + APIs)
+   elevenlabs, openai, compose, cli, asset, ark, music, fal (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -99,6 +99,12 @@ Value exports:
 - Type namespaces Asset (AssetRequest, AssetRecord, AssetResult, AssetJobPoll,
   AssetHandler, AssetFile, AssetGroupKind, AssetApi, Config) and Ark (Config, State,
   ArkApi, ArkInfo, ArkRegion, EstimateRequest, error classes)
+- musicPlugin, falPlugin (plugin instances); type namespaces Music (MusicChunk,
+  MusicRequest, MusicResult, MusicJobPoll, MusicHandler, MusicApi, MusicContext,
+  Config, RegistryApi) and Fal (Config, State, UploadMode, FalApi, FalInfo, FalTask,
+  FalModelInfo, LocalFile, RetryHint, FalProviderError, FalContext, EstimateInput,
+  EstimateRequest, RegistryApi); Fal.RetryableProviderError,
+  Fal.TerminalProviderError, Fal.FlaggedProviderError
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
 - Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
@@ -1014,6 +1020,254 @@ Tests are local on mocked fetch; __tests__/fixtures.ts copies documented example
 (ark-mcp: asset library contract spec, Seedance adapter + contract tests, OpenAPI
 signing script) with a // source: per fixture, and built bodies toEqual them.
 
+--------------------------------------------------------------------------------
+4.13 music — app.music (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "music" task contract; providers implement + register it; this plugin
+exposes a one-off facade. A handler has `estimate` plus either `execute`, or the async
+pair `submit` + `poll` (or both). The runner prefers `submit`/`poll` and journals the job
+id; the facade `generate` prefers `execute`, else submits and polls every
+`pollIntervalMs`. The ONE audited cast is behind `isMusicHandler` (module export, not on
+app.music). contract.ts imports nothing. The result shape matches VoiceoverResult: the
+runner stores `audio` and maps audio/mpeg to `.mp3`.
+
+`MusicRequest.model` is REQUIRED: the runner hashes the input as written, so a model
+defaulted inside a provider would not be part of the artifact key. No fallback between
+models.
+
+Contract (src/plugins/music/contract.ts; `Music.*` namespace):
+
+```ts
+export type MusicChunk = {
+  /** Lyrics or section description. */
+  text: string;
+  /** Section length, ms. */
+  durationMs: number;
+  /** Positive style tags. */
+  styles: string[];
+  /** Negative style tags. */
+  avoid?: string[];
+};
+
+export type MusicRequest = {
+  /** Overall music prompt. */
+  prompt: string;
+  /** Provider-scoped model alias, e.g. "elevenlabs-music-v2.5". Required: price, endpoint and output depend on it. */
+  model: string;
+  /** Track length, ms. */
+  lengthMs: number;
+  /** Composition plan; a model without plans rejects it (provider rule, never dropped silently). */
+  chunks?: MusicChunk[];
+  /** Seed, when the model takes one. */
+  seed?: number;
+  /** Provider params; each provider documents which keys it reads (fal reads none). */
+  params?: Record<string, unknown>;
+};
+
+export type MusicResult = {
+  /** The generated audio bytes. */
+  audio: Uint8Array;
+  /** MIME type of `audio`, e.g. "audio/mpeg". */
+  mimeType: string;
+  /** Actual cost of this generation, in US dollars. */
+  costUsd: number;
+  /** Metadata only, never a payload echo (e.g. model, endpoint, requestId, lengthMs). */
+  meta?: Record<string, unknown>;
+};
+
+export type MusicJobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & MusicResult)
+  | { state: "failed"; error: unknown };
+
+export type MusicHandler = {
+  estimate(request: MusicRequest): { usd: number };
+  execute?(request: MusicRequest, opts: { signal?: AbortSignal }): Promise<MusicResult>;
+  submit?(request: MusicRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(
+    jobId: string,
+    request: MusicRequest,
+    opts: { signal?: AbortSignal }
+  ): Promise<MusicJobPoll>;
+};
+```
+
+Plugin types (src/plugins/music/types.ts):
+
+```ts
+export type Config = {
+  /** Provider used by the facade when the caller names none. Default: "fal". */
+  defaultProvider: string;
+  /** Facade poll cadence for submit/poll providers, ms. Default: 5000. */
+  pollIntervalMs: number;
+};
+
+export type MusicApi = {
+  // One-off, NOT journaled. execute when present, else submit + poll every
+  // config.pollIntervalMs; a failed job throws its error as-is; abort rejects with the reason.
+  generate(
+    request: MusicRequest,
+    opts?: { provider?: string; signal?: AbortSignal }
+  ): Promise<MusicResult>;
+  estimate(request: MusicRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];     // registry.providers("music"), registration order
+};
+```
+
+Build file:
+
+```yaml
+- task: music
+  id: teaser-score
+  input:
+    model: "elevenlabs-music-v2.5"
+    prompt: "Tense synth pulse, rising."
+    lengthMs: 30000
+```
+
+Errors: `[ai] No music provider named "<name>" is registered.\n  Available: <list or "none">.`
+(also for a value that fails isMusicHandler).
+
+--------------------------------------------------------------------------------
+4.14 fal — app.fal (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Every fal-hosted task over one client (client/http.ts, client/queue.ts,
+client/upload.ts), one FAL_KEY, one upload cache and one merged price table. onInit
+registers four handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
+("music","fal"). Emits no events. Each task directory (video/, image/, llm/, music/)
+owns its models and prices.
+
+- video: submit + poll (no execute). Aliases seedance-2.5, seedance-2.5-ref,
+  minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref,
+  minimax-h3-max-extend, kling-3-pro, kling-o3-ref, seedance-2.0-mini,
+  seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3,
+  vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref. USD per second.
+- image: estimate + execute + submit + poll over the queue. Aliases nano-banana-pro,
+  seedream-4.5-edit, gpt-image-2.5 (default: imageDefaultModel). A request with refs
+  goes to the edit endpoint. params.resolution 1K / 2K / 4K / 1080; params.quality (gpt).
+- prompt-gen: estimate + execute, one sync POST to
+  `<runUrl>/openrouter/router/openai/v1/chat/completions`. `model` is an OpenRouter id;
+  undefined or "default" → llmDefaultModel. Listed: anthropic/claude-opus-5.5 (default),
+  anthropic/claude-sonnet-5, openai/gpt-6-sol, openai/gpt-6-astra,
+  google/gemini-3.8-flash, x-ai/grok-4.7. Params: reasoning, responseSchema,
+  strictSchema, images, max_tokens. 401/403 → PromptGenUnavailableError reason auth,
+  402/429 → reason limit (promptGen moves to its next fallback provider).
+- music: estimate + execute + submit + poll. elevenlabs-music-v2.5
+  (fal-ai/elevenlabs/music/v2.5, 3 000–600 000 ms, per started minute; chunks →
+  composition_plan) and stable-audio-2.5 (fal-ai/stable-audio-25/text-to-audio,
+  1 000–190 000 ms, per generation). Chunks: 3 000–120 000 ms each, at most 30, adding
+  up to lengthMs. `params` never reach the body.
+
+Image and music `execute` submit, then wait in process every `pollIntervalMs`, at most
+`jobTimeoutMs` (then a retryable `kind: "timeout"`; the job keeps running on fal and
+stays adoptable through `poll`). Every handler validates and prices a request before
+it reads the key, uploads or POSTs; a model without a price throws from `estimate`.
+
+Prices — one table: each task's bundled rows, then `priceOverrides` (overrides win).
+Video keys are unprefixed (`<alias>`, `<alias>@<resolution>`, `<alias>+audio`,
+`<alias>#ref*`); the other tasks carry the task: `image:<alias>` /
+`image:<alias>@<resolution>` (USD per image), `music:<alias>` (USD per started minute
+or per generation), `llm:<id>#in` / `llm:<id>#out` (USD per M tokens). Bundled:
+image:nano-banana-pro@1K/@2K/@4K 0.15/0.15/0.30, image:seedream-4.5-edit 0.04,
+image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20.
+
+Types (src/plugins/fal/types.ts; `Fal.*` namespace):
+
+```ts
+export type UploadMode = "storage" | "data-uri";
+
+export type Config = {
+  /** Env var name holding the fal key — resolved via ctx.env at request time, never stored. Default: "FAL_KEY". */
+  apiKeyEnv: string;
+  /** Queue base URL. Default: "https://queue.fal.run". */
+  queueUrl: string;
+  /** Storage upload initiate URL. Default: "https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3". */
+  uploadUrl: string;
+  /** How local files reach fal. Default: "storage". */
+  upload: UploadMode;
+  /** Per HTTP request timeout, ms. Default: 60_000. */
+  timeoutMs: number;
+  /**
+   * Price overrides, one table for every task. Video: `<alias>`, `<alias>@<resolution>`, `<alias>+audio`
+   * (USD/s) or a `<alias>#ref*` surcharge key. Image: `image:<alias>` or `image:<alias>@<resolution>` (USD/image).
+   * Music: `music:<alias>` (USD per started minute or per generation). prompt-gen: `llm:<id>#in` /
+   * `llm:<id>#out` (USD per M tokens). Default: {}.
+   */
+  priceOverrides: Record<string, number>;
+  /** Sync endpoint base; prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. Default: "https://fal.run". */
+  runUrl: string;
+  /** Image model used when `ImageRequest.model` is omitted. Default: "gpt-image-2.5". */
+  imageDefaultModel: string;
+  /** OpenRouter model id used when `PromptGenRequest.model` is omitted or `"default"`. Default: "anthropic/claude-opus-5.5". */
+  llmDefaultModel: string;
+  /** Status-check cadence, ms, of the in-process wait of image and music `execute`. Default: 2000. */
+  pollIntervalMs: number;
+  /** The in-process wait gives up after this many ms (retryable `timeout`); the fal job keeps running and stays adoptable through `poll`. Default: 900_000. */
+  jobTimeoutMs: number;
+  /** JSONL request log path, relative to the working directory: one line per billable request of every task. Off when undefined. Default: undefined. */
+  requestLog: string;
+};
+
+export type State = {
+  /** Effective price table of every task (bundled prices merged with config.priceOverrides), computed once at first use. */
+  prices: Record<string, number> | null;
+  /**
+   * fal storage URLs of files uploaded by this process, keyed `storage:<mime>:<sha256 of the bytes>`,
+   * shared by every task. Only storage URLs are kept, never a data-URI fallback. Kept for the life of
+   * the process: `app.stop()` does not clear it.
+   */
+  uploads: Map<string, string>;
+};
+
+export type FalInfo = {
+  /** Always "fal". */
+  provider: "fal";
+  /** Whether the configured key env var is present. */
+  configured: boolean;
+  /** Accepted model aliases, in catalog order. */
+  models: string[];
+};
+
+export type FalTask = "video" | "image" | "prompt-gen" | "music";
+
+export type FalModelInfo =
+  | { id: string; price: { inputPerM: number; outputPerM: number } }
+  | { id: string; price: { usd: number; per: "second" | "image" | "minute" | "generation" } };
+
+export type LocalFile = {
+  /** Path to the file bytes. */
+  path: string;
+  /** MIME type of the file. */
+  mimeType: string;
+  /** Content hash of the file bytes. */
+  hash: string;
+};
+
+export type FalApi = {
+  info(): FalInfo;                          // key present (never throws) + the video aliases
+  models(task: FalTask): FalModelInfo[];    // no network, no key; throws `[ai] Unknown fal task "x".`
+};
+// Error classes (values under the Fal namespace): RetryableProviderError { status?,
+// kind?: "timeout"|"network", retryAfterMs? }, TerminalProviderError { status },
+// FlaggedProviderError { kind: "content-policy" }; type FalProviderError = their union.
+```
+
+```ts
+app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } }
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
+app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
+app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
+```
+
+Request log (off by default): with `requestLog` set, every billable request (queue
+submit of image and music, each prompt-gen POST attempt) writes one JSONL line
+{ at, task, model, endpoint, requestId | error, prompt, body }; body without its prompt
+field, URLs and data URIs cut; never the key or a header. A failed write warns once.
+Logs (redacted): fal:video:submitted/done/failed, fal:image:submitted/done/failed,
+fal:music:submitted/done/failed, fal:llm:done, fal:llm:partial, fal:llm:retry,
+fal:poll:retry, fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
+fal:request-log:failed.
+
 ================================================================================
 5. COMPLETE EVENT CATALOG
 ================================================================================
@@ -1061,7 +1315,10 @@ Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, a
 Structured log events (ctx.log; diagnostics, not bus events): runner:stale-item,
 elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/failed,
 openai:prompt-gen:done/failed, ark:video:submitted/done/failed, ark:asset:group-created
-(warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn).
+(warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn),
+fal:video|image|music:submitted/done/failed, fal:llm:done/partial/retry, fal:poll:retry,
+fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
+fal:request-log:failed.
 
 ================================================================================
 6. CONFIG SCHEMA — EVERY FIELD
@@ -1122,6 +1379,24 @@ openai:
   timeoutMs: number = 60_000
   priceOverrides: Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }> = {}
 
+music:
+  defaultProvider: string = "fal"
+  pollIntervalMs: number = 5000                — facade poll cadence (the runner uses runner.pollIntervalMs)
+
+fal:
+  apiKeyEnv: string = "FAL_KEY"
+  queueUrl: string = "https://queue.fal.run"   — submit is POST <queueUrl>/<endpoint> (video, image, music)
+  uploadUrl: string = "https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"
+  upload: "storage" | "data-uri" = "storage"   — storage falls back to a data URI when the upload fails
+  timeoutMs: number = 60_000                   — one HTTP request
+  priceOverrides: Record<string, number> = {}  — video <alias>; image:<alias>; music:<alias>; llm:<id>#in / #out
+  runUrl: string = "https://fal.run"           — sync base for prompt-gen
+  imageDefaultModel: string = "gpt-image-2.5"
+  llmDefaultModel: string = "anthropic/claude-opus-5.5"
+  pollIntervalMs: number = 2000                 — in-process wait of image and music execute
+  jobTimeoutMs: number = 900_000               — that wait gives up (retryable timeout); the job stays adoptable
+  requestLog: string = ""                      — JSONL path; off when ""
+
 asset:
   defaultProvider: string = "ark"
   pollIntervalMs: number = 3000                — facade poll cadence (Ark GetAsset guidance)
@@ -1146,7 +1421,7 @@ compose:
 cli:
   plain: boolean = false                       — auto-true when !TTY or NO_COLOR (via ctx.env)
 
-Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY,
+Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY, FAL_KEY, ARK_API_KEY, ARK_ACCESS_KEY,
 ARK_SECRET_KEY (names configurable via apiKeyEnv / accessKeyEnv / secretKeyEnv; read via
 ctx.env at execute time only), NO_COLOR (CLI plain mode).
 
@@ -1198,6 +1473,11 @@ const speech = await app.voiceover.generate(
 await Bun.write("welcome.ogg", speech.audio);
 
 const translated = await app.translate.generate({ text: "Welcome!", targetLang: "ja" });
+const track = await app.music.generate(
+  { prompt: "tense synth pulse", model: "elevenlabs-music-v2.5", lengthMs: 60_000 },
+  { provider: "fal" }
+);
+await Bun.write("teaser.mp3", track.audio);
 const tagline = await app.promptGen.generate(
   { prompt: "One-line tagline for a durable AI build system.", temperature: 0.7 },
   { provider: "openai" }
@@ -1378,6 +1658,9 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] OPENAI_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.
 - [ai] Compose could not produce a valid build file after <n> attempts.\n  Refine the prompt or write the build file manually with "moku new".
 - [ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.
+- [ai] No music provider named "<name>" is registered.\n  Available: <list or "none">.
+- [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music.
+- [ai] No price for fal <task> model "<id>".\n  Add it to fal.priceOverrides.  (image, music, prompt-gen)
 - [ai] Not an asset record: <reason>.\n  Expected JSON with assetId, provider, account, groupId, registeredAt.
 - [ai] ark refused an image with a face: <code>.\n  Make it an asset item and $ref it.
 - [ai] ark refused asset "<name>": <reason>.\n  Items that use it will not run.
@@ -1422,7 +1705,8 @@ promptGen · W3 elevenlabs+openai+compose · W4 cli.
 
 Later waves add image, video, codex and fal, then W5 asset (registered after video)
 and W6 ark (registered after fal, before compose — fal stays the first, default video
-provider; ark is the only asset provider).
+provider; ark is the only asset provider). music is registered after video and before
+asset; fal registers ("music","fal"), so fal is the default (and only) music provider.
 
 ================================================================================
 10. EXTENSION PATTERNS
@@ -1493,8 +1777,9 @@ items:
     input: { prompt: "a neon city skyline", size: "1024x1024" }
 ```
 
-The built-in `image` (codex) and `video` (fal) tasks follow the same pattern; a video
-handler exposes `submit` + `poll` so the provider job id is journaled.
+The built-in `image` (codex, fal), `video` (fal) and `music` (fal) tasks follow the
+same pattern; a video or music handler exposes `submit` + `poll` so the provider job id
+is journaled.
 
 10.3 Event-consumer plugin (bus subscription — the only way; no app.on):
 

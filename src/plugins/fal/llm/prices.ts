@@ -25,10 +25,19 @@ export type LlmPrice = {
  *
  * @example
  * ```ts
- * llmPrices["x-ai/grok-4.7"]; // => { inputPerM: 1.6, outputPerM: 4.8 }
+ * llmPrices["x-ai/grok-4.7"]; // => { inputPerM: 2, outputPerM: 6 }
  * ```
  */
-export const llmPrices: Readonly<Record<string, LlmPrice>> = {};
+export const llmPrices: Readonly<Record<string, LlmPrice>> = {
+  "anthropic/claude-opus-5.5": { inputPerM: 4, outputPerM: 20 },
+  "anthropic/claude-sonnet-5": { inputPerM: 2, outputPerM: 10 },
+  "openai/gpt-6-sol": { inputPerM: 2, outputPerM: 10 },
+  "openai/gpt-6-astra": { inputPerM: 10, outputPerM: 50 },
+  "google/gemini-3.8-flash": { inputPerM: 0.75, outputPerM: 3.75 },
+  "x-ai/grok-4.7": { inputPerM: 2, outputPerM: 6 },
+  "anthropic/claude-haiku-4.5": { inputPerM: 1, outputPerM: 5 },
+  "google/gemini-2.5-flash": { inputPerM: 0.3, outputPerM: 2.5 }
+};
 
 /**
  * The bundled prices as flat merged-table rows.
