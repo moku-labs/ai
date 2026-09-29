@@ -27,6 +27,7 @@
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
+ * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
@@ -47,6 +48,7 @@
 import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
+  arkPlugin,
   assetPlugin,
   buildfilePlugin,
   cliPlugin,
@@ -80,6 +82,7 @@ const framework = createCore(coreConfig, {
     openaiPlugin,
     codexPlugin,
     falPlugin,
+    arkPlugin,
     composePlugin,
     cliPlugin
   ],
@@ -116,6 +119,7 @@ export const createPlugin = framework.createPlugin;
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {
+  arkPlugin,
   assetPlugin,
   buildfilePlugin,
   cliPlugin,
@@ -142,6 +146,7 @@ export { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "./plugins/asset
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
+  Ark,
   Asset,
   Buildfile,
   Cli,

@@ -6,6 +6,7 @@
  * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
  * (`../prices.ts`), so estimate and actual cost always agree.
  */
+import { ASSET_MIME } from "../../asset/contract";
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
@@ -116,6 +117,30 @@ function requireEndFrameSupport(
 
   throw new Error(
     `[ai] fal model "${model.alias}" takes no end frame.\n  Remove input.endImage, or use a model that takes one: ${endFrameAliases().join(", ")}.`
+  );
+}
+
+/**
+ * Refuses a registered asset as the first frame, the end frame or a ref,
+ * before any upload. fal takes image URLs only; an asset's bytes are its
+ * record's JSON, which fal would reject late as a broken image.
+ *
+ * @param request - The video request, with its inputs resolved.
+ * @throws {TerminalProviderError} A two-line HTTP 400 error naming an asset provider.
+ * @example
+ * ```ts
+ * rejectAssetReferences({ model: "minimax-h3", prompt: "p", image: { path: "mira.json", mimeType: ASSET_MIME, hash: "h" } });
+ * // throws: '[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.'
+ * ```
+ */
+function rejectAssetReferences(request: VideoRequest): void {
+  const inputs = [request.image, request.endImage, ...(request.refs ?? [])];
+  const hasAsset = inputs.some(file => file?.mimeType === ASSET_MIME);
+  if (!hasAsset) return;
+
+  throw new TerminalProviderError(
+    "[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.",
+    400
   );
 }
 
@@ -262,6 +287,7 @@ async function submitJob(
 ): Promise<{ jobId: string }> {
   // Refuse what the model cannot take and read the key, before any upload.
   const model = resolveFalModel(request.model);
+  rejectAssetReferences(request);
   const image = requireImage(model, request);
   requireEndFrameSupport(model, request);
   const apiKey = resolveApiKey(ctx);
