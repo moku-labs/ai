@@ -1,5 +1,5 @@
 /**
- * Standard tier — Codex provider: image generation and prompt-gen over the
+ * Complex tier — Codex provider: image generation and prompt-gen over the
  * local Codex CLI (`codex exec`), plan-billed at an explicit $0. Registers
  * `image/codex` then `prompt-gen/codex` in onInit. No events.
  *
@@ -25,7 +25,7 @@ const defaultConfig: Config = {
 };
 
 /**
- * codex — Standard tier image and prompt-gen provider. Depends on registry
+ * codex — Complex tier image and prompt-gen provider. Depends on registry
  * (onInit registration); the task contracts are plain imports, no depends edge.
  *
  * @see README.md

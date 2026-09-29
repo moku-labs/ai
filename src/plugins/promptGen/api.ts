@@ -34,7 +34,7 @@ function resolveProviderName(ctx: PromptGenContext, requestedProvider: string | 
  * @returns The signal options.
  * @example
  * ```ts
- * toSignalOptions({ provider: "codex" }); // {}
+ * toSignalOptions({}); // {}
  * ```
  */
 function toSignalOptions(opts?: { signal?: AbortSignal }): SignalOptions {

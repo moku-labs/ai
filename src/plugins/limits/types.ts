@@ -47,8 +47,13 @@ export type LaneState = {
   consecutiveFailures: number;
   /** Timestamp (ms epoch) the breaker stays open until; 0 means closed. */
   openUntil: number;
-  /** Whether the single half-open trial probe is currently in flight (cleared by reportOutcome or release). */
-  probing: boolean;
+  /**
+   * Claim id of the single half-open trial probe in flight; `0` when none. Cleared by
+   * reportOutcome, or by `release()` of the acquisition that still owns this id.
+   */
+  probe: number;
+  /** Counter the next probe claim id is drawn from. */
+  nextProbe: number;
 };
 
 /** Root `limits` state: every lane currently tracked, keyed by lane string. */
@@ -82,7 +87,8 @@ export type LimitsApi = {
    * An aborted wait leaves no leaked token or concurrency slot. In the
    * half-open phase the first caller holds the single probe slot until it
    * calls `reportOutcome` or `release()`, so a caller that never reports
-   * does not lock the lane.
+   * does not lock the lane. A late `release()` frees only its own claim,
+   * never a newer probe's.
    *
    * @example
    * ```ts

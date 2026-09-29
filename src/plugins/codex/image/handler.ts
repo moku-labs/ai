@@ -16,16 +16,15 @@ import { createCallDirectory } from "../workdir";
 import { copyReferences, findResultImage, mimeForFile } from "./files";
 import { buildImagePrompt } from "./prompt";
 
+/** MIME type used when the result file extension is not recognised. */
+const DEFAULT_MIME = "image/png";
+
 /**
  * Model for `request`: its own `model`, else `config.model`.
  *
  * @param ctx - Plugin context (for `config.model`).
  * @param request - The image request.
  * @returns The model id.
- * @example
- * ```ts
- * resolveModel(ctx, { prompt: "p" }); // => ctx.config.model
- * ```
  */
 function resolveModel(ctx: CodexContext, request: ImageRequest): string {
   return request.model ?? ctx.config.model;
@@ -41,10 +40,6 @@ function resolveModel(ctx: CodexContext, request: ImageRequest): string {
  * @param signal - Caller abort signal, if any.
  * @returns The image bytes and MIME type.
  * @throws {TerminalProviderError} When codex exits 0 without writing an image.
- * @example
- * ```ts
- * const { image, mimeType } = await generateIn(ctx, request, model, dir, signal);
- * ```
  */
 async function generateIn(
   ctx: CodexContext,
@@ -53,6 +48,7 @@ async function generateIn(
   dir: string,
   signal: AbortSignal | undefined
 ): Promise<{ image: Uint8Array; mimeType: string }> {
+  // Stage refs and build the prompt
   const refPaths = await copyReferences(request.refs ?? [], dir);
   const prompt = buildImagePrompt({
     prompt: request.prompt,
@@ -60,6 +56,8 @@ async function generateIn(
     aspect: request.aspect,
     refNames: refPaths.map(refPath => path.basename(refPath))
   });
+
+  // Run codex
   const args = buildCodexArguments({
     model,
     reasoningEffort: ctx.config.reasoningEffort,
@@ -67,7 +65,6 @@ async function generateIn(
     refPaths,
     prompt
   });
-
   await runCodex({
     bin: ctx.config.bin,
     args,
@@ -76,6 +73,7 @@ async function generateIn(
     ...(signal === undefined ? {} : { signal })
   });
 
+  // Read the image back
   const resultPath = await findResultImage(dir);
   if (resultPath === undefined) {
     throw new TerminalProviderError(
@@ -83,7 +81,7 @@ async function generateIn(
     );
   }
   const image = new Uint8Array(await readFile(resultPath));
-  return { image, mimeType: mimeForFile(resultPath) ?? "image/png" };
+  return { image, mimeType: mimeForFile(resultPath) ?? DEFAULT_MIME };
 }
 
 /**
@@ -92,10 +90,6 @@ async function generateIn(
  *
  * @param ctx - Plugin context (config, state, log).
  * @returns The `ImageHandler` registered under the "image" task.
- * @example
- * ```ts
- * registry.register("image", "codex", createImageHandler(ctx));
- * ```
  */
 export function createImageHandler(ctx: CodexContext): ImageHandler {
   return {
@@ -105,10 +99,6 @@ export function createImageHandler(ctx: CodexContext): ImageHandler {
      * @param request - The image request.
      * @returns The price in US dollars.
      * @throws {Error} When the model has no price.
-     * @example
-     * ```ts
-     * handler.estimate({ prompt: "a cat" }); // => { usd: 0 }
-     * ```
      */
     estimate(request: ImageRequest): { usd: number } {
       return { usd: priceOf(ctx, resolveModel(ctx, request)) };
@@ -122,10 +112,6 @@ export function createImageHandler(ctx: CodexContext): ImageHandler {
      * @returns The generated image, its MIME type, price and meta.
      * @throws {TerminalProviderError} CLI missing, non-zero exit, or no image.
      * @throws {RetryableProviderError} With kind "timeout" after `timeoutMs`.
-     * @example
-     * ```ts
-     * await handler.execute({ prompt: "a cat", aspect: "1:1" }, {});
-     * ```
      */
     async execute(request: ImageRequest, opts: { signal?: AbortSignal }): Promise<ImageResult> {
       const model = resolveModel(ctx, request);

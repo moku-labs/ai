@@ -23,7 +23,7 @@ export const PROMPT_GEN_TASK = "prompt-gen";
  * unknownProviderError("acme", ["openai"]).message; // '[ai] No prompt-gen provider named "acme" is registered.\n  Available: openai.'
  * ```
  */
-function unknownProviderError(provider: string, available: string[]): Error {
+export function unknownProviderError(provider: string, available: string[]): Error {
   const list = available.length > 0 ? available.join(", ") : "none";
   return new Error(
     `[ai] No prompt-gen provider named "${provider}" is registered.\n  Available: ${list}.`
@@ -43,7 +43,7 @@ function unknownProviderError(provider: string, available: string[]): Error {
  * hasPromptGenHandlerShape({ estimate: 123, execute: "nope" }); // false
  * ```
  */
-function hasPromptGenHandlerShape(value: unknown): boolean {
+export function hasPromptGenHandlerShape(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   return (
     "estimate" in value &&

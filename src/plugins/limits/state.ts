@@ -42,7 +42,8 @@ function createLaneState(config: LaneConfig, now: number): LaneState {
     waiters: [],
     consecutiveFailures: 0,
     openUntil: 0,
-    probing: false
+    probe: 0,
+    nextProbe: 0
   };
 }
 
@@ -172,7 +173,7 @@ export function breakerPhase(lane: LaneState, now: number): "closed" | "open" | 
  * Records a request outcome against the breaker: `"ok"` resets the failure
  * count and closes the breaker; `"retryable-error"` advances the failure
  * count and (re)opens the breaker once `breakerThreshold` is reached.
- * Either outcome settles a pending half-open probe (clears `probing`).
+ * Either outcome settles a pending half-open probe (clears `probe`).
  *
  * @param lane - Lane state to update (mutated in place).
  * @param config - Effective settings for this lane.
@@ -189,7 +190,7 @@ export function recordOutcome(
   outcome: "ok" | "retryable-error",
   now: number
 ): void {
-  lane.probing = false;
+  lane.probe = 0;
 
   if (outcome === "ok") {
     lane.consecutiveFailures = 0;

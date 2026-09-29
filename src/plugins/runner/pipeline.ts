@@ -827,7 +827,8 @@ function resolveReferenceFiles(
 /**
  * The per-item attempt loop: admit(limits.acquire) → gate(journal,
  * atomic) → attempt → apply the outcome, looping on retryable failures until
- * the item stops. Returns the verdict its artifact claim settles with: `open`
+ * the item stops. The lane slot is released before the retry backoff, and
+ * every retry re-acquires it. Returns the verdict its artifact claim settles with: `open`
  * when it stopped without a final provider verdict (lane refused, gate
  * refused, drained, aborted mid-attempt, retryable attempts exhausted).
  *
@@ -857,6 +858,7 @@ async function runAttempts(
       const admission = await acquireLane(ctx, lane, drain.signal);
       if (!admission) return OPEN_VERDICT;
 
+      let waitMs: number;
       try {
         const gate = ctx.journal.gateToDispatching(item.id);
         if (!gate.ok) {
@@ -870,10 +872,14 @@ async function runAttempts(
         if (applied.terminal) return applied.verdict;
 
         attempt = applied.attempt;
-        await delay(applied.waitMs, drain.signal);
+        waitMs = applied.waitMs;
       } finally {
         admission.release();
       }
+
+      // The backoff sleeps with the lane slot released, so a long Retry-After
+      // never keeps one of the lane's concurrency slots busy.
+      await delay(waitMs, drain.signal);
     } finally {
       active.inFlight -= 1;
     }
