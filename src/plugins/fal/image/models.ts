@@ -255,10 +255,8 @@ function seedreamBody(input: ImageBodyInput): Record<string, unknown> {
  */
 function gptImageBody(input: ImageBodyInput): Record<string, unknown> {
   const sizes = input.resolution === "2K" ? GPT_2K_SIZES : PRESET_SIZES;
-  const quality =
-    input.quality !== undefined && GPT_QUALITIES.has(input.quality)
-      ? input.quality
-      : DEFAULT_GPT_QUALITY;
+  const hasKnownQuality = input.quality !== undefined && GPT_QUALITIES.has(input.quality);
+  const quality = hasKnownQuality ? input.quality : DEFAULT_GPT_QUALITY;
   return {
     prompt: input.prompt,
     image_size: sizes[input.aspect],

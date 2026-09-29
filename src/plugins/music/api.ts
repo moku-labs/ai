@@ -1,10 +1,10 @@
 /**
  * @file music plugin — API factory (`app.music.*`).
  *
- * Owns the ONE audited cast for the "music" task: registry transports
+ * Owns the single narrowing site for the "music" task: registry transports
  * providers' `MusicHandler` values as `unknown` (spec/09 R9's "genuine
  * dynamic boundary"), and this file narrows them back behind a runtime
- * shape guard. The facade prefers `execute`; a submit/poll-only provider is
+ * shape guard, with no cast. The facade prefers `execute`; a submit/poll-only provider is
  * driven by an in-memory, abortable poll loop.
  */
 import { registryPlugin } from "../registry";
@@ -59,7 +59,7 @@ function hasFunction(candidate: object, key: string): boolean {
 /**
  * Runtime shape guard narrowing the registry's opaque `unknown` into a
  * `MusicHandler`: `estimate` plus either `execute` or `submit` + `poll`.
- * This is the ONE audited cast site for the music task (spec/09 R9).
+ * The single narrowing site for the music task, with no cast (spec/09 R9).
  *
  * @param candidate - The raw value returned by `registry.resolve("music", name)`.
  * @returns True when `candidate` structurally satisfies `MusicHandler`.
