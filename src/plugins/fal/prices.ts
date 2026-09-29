@@ -37,6 +37,10 @@ export const bundledPrices: Readonly<Record<string, number>> = {
   "minimax-h3-max-ref@1080P": 0.16,
   "minimax-h3-max-ref#refTokensIncluded": 4096,
   "minimax-h3-max-ref#refTokenUsdPer1k": 0.02,
+  // H3 Max image-to-video: the list rate after the promo ends on 2026-09-30, so the estimate stays an upper bound.
+  "minimax-h3-max-i2v@480P": 0.05,
+  "minimax-h3-max-i2v@768P": 0.08,
+  "minimax-h3-max-i2v@1080P": 0.16,
   "minimax-h3-ref@480P": 0.05,
   "minimax-h3-ref@768P": 0.06,
   "minimax-h3-ref@2K": 0.13,
@@ -127,10 +131,6 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
  *
  * @param ctx - Plugin context (`config.priceOverrides`, `state.prices`).
  * @returns The effective price table.
- * @example
- * ```ts
- * const prices = resolvePrices(ctx);
- * ```
  */
 export function resolvePrices(ctx: FalContext): Record<string, number> {
   if (ctx.state.prices === null) {
@@ -210,7 +210,7 @@ function isResolvedFile(value: EstimateInput): value is VideoFile {
  * @returns Tokens; the worst case when the file is unresolved or unreadable.
  * @example
  * ```ts
- * imageTokens({ path: "square.png", mimeType: "image/png", hash: "h" }); // => 1024
+ * imageTokens({ path: "missing.png", mimeType: "image/png", hash: "h" }); // => 2560
  * ```
  */
 function imageTokens(file: EstimateInput): number {
@@ -284,7 +284,7 @@ function isReferenceImage(file: EstimateInput): boolean {
  * @returns Number of reference images.
  * @example
  * ```ts
- * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: square, refs: [voice] }); // => 1
+ * referenceImageCount({ model: "minimax-h3-ref", prompt: "p", image: { $ref: "face" }, refs: [{ path: "v.mp3", mimeType: "audio/mpeg", hash: "h" }] }); // => 1
  * ```
  */
 function referenceImageCount(request: EstimateRequest): number {
@@ -303,7 +303,7 @@ function referenceImageCount(request: EstimateRequest): number {
  * @returns Surcharge in USD (unrounded).
  * @example
  * ```ts
- * refImageCostUsd(mergePrices({}), "minimax-h3-ref", request); // => 0.08 for six images
+ * refImageCostUsd(mergePrices({}), "minimax-h3-ref", { model: "minimax-h3-ref", prompt: "p", refs: Array.from({ length: 6 }, () => ({ $ref: "face" })) }); // => 0.08
  * ```
  */
 function refImageCostUsd(
@@ -327,7 +327,7 @@ function refImageCostUsd(
  * @returns Total reference tokens.
  * @example
  * ```ts
- * referenceTokens({ model: "minimax-h3-max-ref", prompt: "p", image: square }); // => 1024
+ * referenceTokens({ model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "face" } }); // => 2560
  * ```
  */
 function referenceTokens(request: EstimateRequest): number {
@@ -350,7 +350,7 @@ function referenceTokens(request: EstimateRequest): number {
  * @returns Surcharge in USD (unrounded).
  * @example
  * ```ts
- * refTokenCostUsd(mergePrices({}), "minimax-h3-max-ref", request); // => 0.02048 for five square images
+ * refTokenCostUsd(mergePrices({}), "minimax-h3-max-ref", { model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "a" }, refs: [{ $ref: "b" }] }); // => 0.02048
  * ```
  */
 function refTokenCostUsd(
@@ -369,18 +369,14 @@ function refTokenCostUsd(
 /**
  * Cost of a video request: seconds x USD per second of its model variant,
  * plus the reference-token or reference-image surcharge for models billed
- * that way. Estimate and
- * actual cost both come from here; reference images are sized from their
- * file headers once resolved, and priced at the worst case before.
+ * that way. Estimate and actual cost both come from here; reference images
+ * are sized from their file headers once resolved, and priced at the worst
+ * case before.
  *
  * @param ctx - Plugin context (effective price table).
  * @param request - The video request.
  * @returns Cost in USD, rounded to micro-dollars.
  * @throws {Error} For an unknown alias or a variant without a price.
- * @example
- * ```ts
- * videoCostUsd(ctx, { model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => 0.3
- * ```
  */
 export function videoCostUsd(ctx: FalContext, request: EstimateRequest): number {
   const model = resolveFalModel(request.model);

@@ -9,9 +9,9 @@
 import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
-import { buildFalBody, requestSeconds, resolveFalModel } from "../models";
+import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
-import type { FalContext, FalProviderError } from "../types";
+import type { EstimateRequest, FalContext, FalProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
@@ -28,6 +28,9 @@ export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" 
 
 /** Status values while fal is still working on a job. */
 const PENDING_STATUSES: ReadonlySet<string> = new Set(["IN_QUEUE", "IN_PROGRESS"]);
+
+/** Status of a job fal has finished. */
+const COMPLETED_STATUS = "COMPLETED";
 
 /** MIME type used when fal reports none. */
 const DEFAULT_VIDEO_MIME = "video/mp4";
@@ -59,14 +62,11 @@ const RETRY_STATUS = 503;
  * @param ctx - Plugin context.
  * @returns The key.
  * @throws {Error} A plain (terminal) two-line error when the key is not set.
- * @example
- * ```ts
- * const apiKey = resolveApiKey(ctx);
- * ```
  */
 function resolveApiKey(ctx: FalContext): string {
   const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  if (apiKey === undefined || apiKey === "") {
+  const isMissingKey = apiKey === undefined || apiKey === "";
+  if (isMissingKey) {
     throw new Error(
       `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
     );
@@ -83,7 +83,8 @@ function resolveApiKey(ctx: FalContext): string {
  * @throws {Error} A plain (terminal) two-line error when there is no image.
  * @example
  * ```ts
- * const image = requireImage(model, request);
+ * requireImage(resolveFalModel("minimax-h3"), { model: "minimax-h3", prompt: "p" });
+ * // throws: '[ai] fal model "minimax-h3" needs an image.\n  Set input.image to a $ref or $file.'
  * ```
  */
 function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile {
@@ -93,6 +94,29 @@ function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile
     );
   }
   return request.image;
+}
+
+/**
+ * Refuses an end frame on a model that takes none, before any upload.
+ *
+ * @param model - The resolved catalog row.
+ * @param request - The video request; its end frame may still be an unresolved `$ref`.
+ * @throws {Error} A plain (terminal) two-line error listing the models that take an end frame.
+ * @example
+ * ```ts
+ * requireEndFrameSupport(resolveFalModel("veo-3.1-fast"), { model: "veo-3.1-fast", prompt: "p", endImage: { path: "end.png", mimeType: "image/png", hash: "h" } });
+ * // throws: '[ai] fal model "veo-3.1-fast" takes no end frame.\n  Remove input.endImage, or use a model that takes one: seedance-2.5, minimax-h3, minimax-h3-max-i2v, kling-3-pro, seedance-2.0-mini, vidu-q3, gemini-omni-1.1-flash.'
+ * ```
+ */
+function requireEndFrameSupport(
+  model: ResolvedFalModel,
+  request: Pick<EstimateRequest, "endImage">
+): void {
+  if (request.endImage === undefined || model.endFrame) return;
+
+  throw new Error(
+    `[ai] fal model "${model.alias}" takes no end frame.\n  Remove input.endImage, or use a model that takes one: ${endFrameAliases().join(", ")}.`
+  );
 }
 
 /**
@@ -147,7 +171,8 @@ function isImageReference(file: VideoFile): boolean {
  * @returns A plain (terminal) error.
  * @example
  * ```ts
- * throw tooManyReferencesError(model, "reference images", 4, 6);
+ * tooManyReferencesError(resolveFalModel("kling-o3-ref"), "reference images", 4, 6).message;
+ * // => '[ai] fal model "kling-o3-ref" takes at most 4 reference images, got 6.\n  Remove refs from input.refs, or use a model that takes more.'
  * ```
  */
 function tooManyReferencesError(
@@ -174,8 +199,8 @@ function tooManyReferencesError(
  * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
  * @example
  * ```ts
- * splitReferences(resolveFalModel("kling-o3-ref"), [{ mime: "video/mp4", bytes }]);
- * // throws: [ai] fal model "kling-o3-ref" takes no video references, got 1.
+ * splitReferences(resolveFalModel("kling-o3-ref"), [{ path: "t.mp4", mimeType: "video/mp4", hash: "h" }]);
+ * // throws: '[ai] fal model "kling-o3-ref" takes no video references, got 1.\n  Remove refs from input.refs, or use a model that takes more.'
  * ```
  */
 export function splitReferences(
@@ -207,7 +232,7 @@ export function splitReferences(
  * @returns Redacted log fields.
  * @example
  * ```ts
- * ctx.log.warn("fal:video:failed", { requestId, ...redacted(error) });
+ * redacted(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => { errorType: "terminal", status: 400 }
  * ```
  */
 function redacted(error: FalProviderError): {
@@ -229,22 +254,21 @@ function redacted(error: FalProviderError): {
  * @param request - The video request.
  * @param signal - Caller abort signal.
  * @returns The opaque job id.
- * @example
- * ```ts
- * const { jobId } = await submitJob(ctx, request, signal);
- * ```
  */
 async function submitJob(
   ctx: FalContext,
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<{ jobId: string }> {
+  // Refuse what the model cannot take and read the key, before any upload.
   const model = resolveFalModel(request.model);
   const image = requireImage(model, request);
+  requireEndFrameSupport(model, request);
   const apiKey = resolveApiKey(ctx);
 
+  // Check the refs against the model's limits, then upload every input.
   const references = splitReferences(model, request.refs ?? []);
-  const urls = await uploadInputs(ctx, image, references, { apiKey, signal });
+  const urls = await uploadInputs(ctx, image, references, { apiKey, signal }, request.endImage);
 
   // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
   signal?.throwIfAborted();
@@ -256,6 +280,7 @@ async function submitJob(
     timeoutMs: ctx.config.timeoutMs
   });
 
+  // Keep fal's queue answer as the opaque job id.
   const job = parseSubmitResponse(parseJson(response, "submit response"), model.endpoint);
   ctx.log.info("fal:video:submitted", {
     model: model.alias,
@@ -294,10 +319,6 @@ function isJobVerdict(error: unknown): error is FlaggedProviderError | TerminalP
  * @param apiKey - The fal key (result call only; the CDN download goes without it).
  * @param signal - Caller abort signal.
  * @returns A done or failed poll.
- * @example
- * ```ts
- * return fetchResult(ctx, job, request, apiKey, signal);
- * ```
  */
 async function fetchResult(
   ctx: FalContext,
@@ -341,10 +362,6 @@ async function fetchResult(
  * @param job - The job.
  * @param error - What the result or download call threw.
  * @returns The error to throw.
- * @example
- * ```ts
- * throw asRetryable(ctx, job, error);
- * ```
  */
 function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
   if (!(error instanceof TerminalProviderError)) return error;
@@ -365,10 +382,6 @@ function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
  * @param request - The request the job was submitted with.
  * @param signal - Caller abort signal.
  * @returns The poll result.
- * @example
- * ```ts
- * const status = await pollJob(ctx, jobId, request, signal);
- * ```
  */
 async function pollJob(
   ctx: FalContext,
@@ -376,6 +389,7 @@ async function pollJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<VideoJobPoll> {
+  // Read the job status once.
   const job = decodeJobId(jobId);
   const apiKey = resolveApiKey(ctx);
   const response = await falFetch({
@@ -386,14 +400,17 @@ async function pollJob(
     signal
   });
 
+  // Still working, or a status we do not know: stay pending.
   const body = parseJson(response, "status response");
   const status = readString(body, "status");
-  if (status !== undefined && PENDING_STATUSES.has(status)) return PENDING;
-  if (status !== "COMPLETED") {
+  const isPending = status !== undefined && PENDING_STATUSES.has(status);
+  if (isPending) return PENDING;
+  if (status !== COMPLETED_STATUS) {
     ctx.log.warn("fal:poll:unknown-status", { requestId: job.requestId, status });
     return PENDING;
   }
 
+  // Done: fail on fal's job error, else fetch the clip.
   if (hasJobError(body)) {
     const error = jobFailure(body);
     ctx.log.warn(FAILED_EVENT, { requestId: job.requestId, ...redacted(error) });
@@ -404,20 +421,21 @@ async function pollJob(
 
 /**
  * Creates the fal video handler registered under `("video", "fal")`.
- * `estimate` touches no network. `submit` uploads the inputs and queues the
- * job; an abort stops the uploads, but once the queue POST is sent it runs to
- * the end, so a billed job always returns its id.
+ * `estimate` touches no network: it refuses an end frame the model cannot
+ * take, with the same error as `submit`, then prices the request. `submit`
+ * uploads the inputs and queues the job; an abort stops the uploads, but once
+ * the queue POST is sent it runs to the end, so a billed job always returns
+ * its id.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, submit and poll.
- * @example
- * ```ts
- * registry.register("video", "fal", createVideoHandler(ctx));
- * ```
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
-    estimate: (request: VideoRequest): { usd: number } => ({ usd: videoCostUsd(ctx, request) }),
+    estimate: (request: VideoRequest): { usd: number } => {
+      requireEndFrameSupport(resolveFalModel(request.model), request);
+      return { usd: videoCostUsd(ctx, request) };
+    },
     submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
       submitJob(ctx, request, opts.signal),
     poll: (

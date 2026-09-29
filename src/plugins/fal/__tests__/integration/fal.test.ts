@@ -97,6 +97,7 @@ describe("fal integration", () => {
         "seedance-2.5-ref",
         "minimax-h3",
         "minimax-h3-max-ref",
+        "minimax-h3-max-i2v",
         "minimax-h3-ref",
         "minimax-h3-max-extend",
         "kling-3-pro",

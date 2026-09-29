@@ -9,9 +9,9 @@ import type { RegistryApi, registryPlugin } from "../registry";
 import type { VideoFile, VideoRequest } from "../video/contract";
 
 /**
- * A request image or ref at estimate time: a resolved file, or still the
- * build-file reference the runner resolves before submit (the runner
- * estimates the unresolved request).
+ * A request image, end frame or ref at estimate time: a resolved file, or
+ * still the build-file reference the runner resolves before submit (the
+ * runner estimates the unresolved request).
  *
  * @example
  * ```ts
@@ -21,17 +21,21 @@ import type { VideoFile, VideoRequest } from "../video/contract";
 export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
 
 /**
- * A video request at estimate time: its first frame and refs may still be
- * build-file references. Every `VideoRequest` is one.
+ * A video request at estimate time: its first frame, end frame and refs may
+ * still be build-file references. Every `VideoRequest` is one.
  *
  * @example
  * ```ts
- * const request: EstimateRequest = { model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "s01.key" } };
+ * const request: EstimateRequest = {
+ *   model: "minimax-h3-max-i2v", prompt: "p", image: { $ref: "s01.key" }, endImage: { $ref: "s01.end" }
+ * };
  * ```
  */
-export type EstimateRequest = Omit<VideoRequest, "image" | "refs"> & {
+export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
   /** First frame, resolved or not. */
   image?: EstimateInput;
+  /** End frame, resolved or not. It does not change the price. */
+  endImage?: EstimateInput;
   /** Refs, resolved or not. */
   refs?: EstimateInput[];
 };
@@ -82,11 +86,6 @@ export type Config = {
  * fal plugin state: the effective price table, computed once at first use
  * (bundled prices merged with `config.priceOverrides`), and the URLs of the
  * files this process already put in fal storage.
- *
- * @example
- * ```ts
- * const state: State = { prices: null, uploads: new Map() };
- * ```
  */
 export type State = {
   /** Effective price table (bundled prices merged with config.priceOverrides), computed once at first use. */
@@ -173,8 +172,11 @@ export type RetryHint = {
  * ```
  */
 export class RetryableProviderError extends Error {
+  /** HTTP status code, when the failure came from an HTTP response (5xx or 429). */
   readonly status: number | undefined;
+  /** Explicit classification hint for a non-HTTP retryable failure. */
   readonly kind: "timeout" | "network" | undefined;
+  /** Provider-supplied Retry-After delay, ms. */
   readonly retryAfterMs: number | undefined;
 
   /**
@@ -207,6 +209,7 @@ export class RetryableProviderError extends Error {
  * ```
  */
 export class TerminalProviderError extends Error {
+  /** The HTTP status code that caused the failure. */
   readonly status: number;
 
   /**
@@ -237,6 +240,7 @@ export class TerminalProviderError extends Error {
  * ```
  */
 export class FlaggedProviderError extends Error {
+  /** Classification the runner reads to bucket the failure as `"content-policy"`. */
   readonly kind: "content-policy" = "content-policy";
 
   /**

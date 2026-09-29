@@ -5,6 +5,7 @@ import type {
   RegistryApi,
   VideoApi,
   VideoContext,
+  VideoFile,
   VideoHandler,
   VideoJobPoll,
   VideoRequest,
@@ -284,6 +285,18 @@ describe("standard tier: video plugin", () => {
       // @ts-expect-error -- missing required "model" field
       const bad: VideoRequest = { prompt: "push-in" };
       expect(bad).toBeDefined();
+    });
+
+    it("accepts an optional endImage: VideoFile last frame", () => {
+      const lastFrame: VideoFile = { path: "last.png", mimeType: "image/png", hash: "last" };
+      const withEnd: VideoRequest = {
+        model: "minimax-h3-max",
+        prompt: "push-in",
+        endImage: lastFrame
+      };
+      expectTypeOf<VideoRequest["endImage"]>().toEqualTypeOf<VideoFile | undefined>();
+      expectTypeOf<VideoRequest>().toHaveProperty("endImage");
+      expect(withEnd.endImage).toBe(lastFrame);
     });
   });
 });

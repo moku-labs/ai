@@ -21,7 +21,7 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`.
 | `apiKeyEnv` | `string` | `"FAL_KEY"` | Env var with the key, read through `ctx.env` at submit/poll time. Estimates never need it. |
 | `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>`. |
 | `uploadUrl` | `string` | `"https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"` | Storage upload initiate URL. |
-| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (first frame and refs) reach fal. `storage` falls back to a data URI when the upload fails. |
+| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (first frame, end frame and refs) reach fal. `storage` falls back to a data URI when the upload fails. |
 | `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download). |
 | `priceOverrides` | `Record<string, number>` | `{}` | USD per second, keyed `<alias>`, `<alias>@<resolution>` or `<alias>+audio`; also the `<alias>#refTokensIncluded` / `#refTokenUsdPer1k` / `#refImagesIncluded` / `#refImageUsd` surcharge keys. |
 
@@ -29,31 +29,33 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`.
 
 `input.model` must be one of these aliases. Any other value throws `Unknown fal video model`.
 
-| Alias | fal endpoint | Keyframe field | Image refs | Audio refs | Video refs (`maxVideoRefs`) | Video refs length (`maxVideoRefSec`) | Duration | Audio |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `seedance-2.5` | `bytedance/seedance-2.5/image-to-video` | `image_url` | none | none | none | 0 | `"4"`..`"30"` | `generate_audio` |
-| `seedance-2.5-ref` | `bytedance/seedance-2.5/reference-to-video` | `image_urls[0]` (`@Image1` in the prompt) | rest of `image_urls` (max 29) | `audio_urls` (max 10) | `video_urls` (max 10) | 30.2 s combined, 1.8-30.2 s each | `"4"`..`"30"` | `generate_audio` |
-| `minimax-h3` | `minimax/h3/image-to-video` | `image_url` | none | none | none | 0 | integer | always on (native stereo) |
-| `minimax-h3-max-ref` | `minimax/h3-max/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
-| `minimax-h3-ref` | `minimax/h3/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
-| `minimax-h3-max-extend` | `minimax/h3-max/extend-video` | `video_url` (the source clip, from `input.image`) | none | none | none | 0 | integer 5-15, new footage only | always on (native stereo) |
-| `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | none | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
-| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | `image_urls` (max 4) | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
-| `seedance-2.0-mini` | `bytedance/seedance-2.0/mini/image-to-video` | `image_url` | none | none | none | 0 | string, e.g. `"5"` | `generate_audio` |
-| `seedance-2.0-mini-ref` | `bytedance/seedance-2.0/mini/reference-to-video` | `image_urls[0]` | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
-| `seedance-2.0-ref` | `bytedance/seedance-2.0/reference-to-video` | `image_urls[0]` | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
-| `wan-3.0-ref` | `alibaba/wan-3.0/reference-to-video` | `reference_image_urls[0]` | rest of `reference_image_urls` (max 9) | `reference_audio_urls` (max 5) | none | 0 | integer | `audio` |
-| `veo-3.1-fast` | `fal-ai/veo3.1/fast/image-to-video` | `image_url` | none | none | none | 0 | `"4s"` / `"6s"` / `"8s"` | `generate_audio` |
-| `vidu-q3` | `fal-ai/vidu/q3/image-to-video` | `image_url` | none | none | none | 0 | integer | `audio` |
-| `vidu-q3-ref` | `fal-ai/vidu/q3/reference-to-video/mix` | `reference_image_urls[0]` | rest of `reference_image_urls` (max 3) | none | none | 0 | integer | `audio` |
-| `gemini-omni-1.1-flash` | `google/gemini-omni-flash/v1.1/image-to-video` | `image_url` (`end_image_url` via `params`) | none | none | none | 0 | integer 3-10 | no flag |
-| `gemini-omni-1.1-flash-ref` | `google/gemini-omni-flash/v1.1/reference-to-video` | `image_urls[0]` (`<IMAGE_REF_0>` in the prompt) | rest of `image_urls` (max 9) | none | `reference_video_urls` (max 3) | 3 s each (9 s combined) | integer 3-10 | no flag |
+| Alias | fal endpoint | Keyframe field | End frame | Image refs | Audio refs | Video refs (`maxVideoRefs`) | Video refs length (`maxVideoRefSec`) | Duration | Audio |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `seedance-2.5` | `bytedance/seedance-2.5/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | `"4"`..`"30"` | `generate_audio` |
+| `seedance-2.5-ref` | `bytedance/seedance-2.5/reference-to-video` | `image_urls[0]` (`@Image1` in the prompt) | none | rest of `image_urls` (max 29) | `audio_urls` (max 10) | `video_urls` (max 10) | 30.2 s combined, 1.8-30.2 s each | `"4"`..`"30"` | `generate_audio` |
+| `minimax-h3` | `minimax/h3/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer | always on (native stereo) |
+| `minimax-h3-max-ref` | `minimax/h3-max/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | none | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
+| `minimax-h3-max-i2v` | `minimax/h3-max/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer | always on (native stereo) |
+| `minimax-h3-ref` | `minimax/h3/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | none | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
+| `minimax-h3-max-extend` | `minimax/h3-max/extend-video` | `video_url` (the source clip, from `input.image`) | none | none | none | none | 0 | integer 5-15, new footage only | always on (native stereo) |
+| `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | `end_image_url` | none | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
+| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | none | `image_urls` (max 4) | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
+| `seedance-2.0-mini` | `bytedance/seedance-2.0/mini/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | string, e.g. `"5"` | `generate_audio` |
+| `seedance-2.0-mini-ref` | `bytedance/seedance-2.0/mini/reference-to-video` | `image_urls[0]` | none | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
+| `seedance-2.0-ref` | `bytedance/seedance-2.0/reference-to-video` | `image_urls[0]` | none | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
+| `wan-3.0-ref` | `alibaba/wan-3.0/reference-to-video` | `reference_image_urls[0]` | none | rest of `reference_image_urls` (max 9) | `reference_audio_urls` (max 5) | none | 0 | integer | `audio` |
+| `veo-3.1-fast` | `fal-ai/veo3.1/fast/image-to-video` | `image_url` | none | none | none | none | 0 | `"4s"` / `"6s"` / `"8s"` | `generate_audio` |
+| `vidu-q3` | `fal-ai/vidu/q3/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer | `audio` |
+| `vidu-q3-ref` | `fal-ai/vidu/q3/reference-to-video/mix` | `reference_image_urls[0]` | none | rest of `reference_image_urls` (max 3) | none | none | 0 | integer | `audio` |
+| `gemini-omni-1.1-flash` | `google/gemini-omni-flash/v1.1/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer 3-10 | no flag |
+| `gemini-omni-1.1-flash-ref` | `google/gemini-omni-flash/v1.1/reference-to-video` | `image_urls[0]` (`<IMAGE_REF_0>` in the prompt) | none | rest of `image_urls` (max 9) | none | `reference_video_urls` (max 3) | 3 s each (9 s combined) | integer 3-10 | no flag |
 
 Video-ref limits are from the fal model pages of 2026-09-25; `minimax-h3-ref` and the Gemini Omni rows
-from the fal schemas of 2026-09-26. The Seedance 2.0 and 2.0 Mini values follow
+from the fal schemas of 2026-09-26. End frames and the `minimax-h3-max-i2v` row are from the fal schemas
+of 2026-09-29. The Seedance 2.0 and 2.0 Mini values follow
 Seedance 2.0's reference schema; check them against fal before a release.
 
-Request fields map as: `prompt`, `image` (required), `refs`, `seconds` (default 5), `aspect` (default `9:16`,
+Request fields map as: `prompt`, `image` (required), `endImage` (see below), `refs`, `seconds` (default 5), `aspect` (default `9:16`,
 sent where the model takes `aspect_ratio`; `vidu-q3` has none, its clip takes the image's aspect),
 `resolution` (default `720p` Seedance, Wan, Veo, Vidu and Gemini Omni, `768P` MiniMax; fal's own H3 default is 2K), `audio` (default off),
 `negative` (only `kling-3-pro` and `veo-3.1-fast` have `negative_prompt`; the other fal schemas have no
@@ -72,13 +74,35 @@ never silently cut down:
   Remove refs from input.refs, or use a model that takes more.
 ```
 
+**End frame.** `input.endImage` is the last frame: the clip ends on this image. Like `image`, it is a `$ref` or
+`$file`. It goes out as `end_image_url` on the seven models with `end_image_url` in the End frame column; a body
+gets the field only when the request has an end frame, so a request without one sends the same body as before.
+Any other model fails the item with a terminal error before any upload:
+
+```
+[ai] fal model "veo-3.1-fast" takes no end frame.
+  Remove input.endImage, or use a model that takes one: seedance-2.5, minimax-h3, minimax-h3-max-i2v, kling-3-pro, seedance-2.0-mini, vidu-q3, gemini-omni-1.1-flash.
+```
+
+```yaml
+  - id: s01.clip
+    task: video
+    provider: fal
+    input:
+      model: minimax-h3-max-i2v
+      prompt: "she opens the door"
+      image: { $ref: s01.start }
+      endImage: { $ref: s01.end }
+```
+
 **Video refs.** `minimax-h3-max-ref`, `minimax-h3-ref` and `gemini-omni-1.1-flash-ref` send them as `reference_video_urls`; the Seedance reference models send
 them as `video_urls`. A body gets the field only when the request has video refs. The plugin does not read
 clip lengths: `maxVideoRefSec` is data for the caller, which keeps the clips within it. The plugin does not
 check fal's 12-file cap on H3 Max (first frame and every ref) either.
 
 **MiniMax H3 dialogue.** H3 and H3 Max voice lines written in the prompt, e.g. `<d>[Japanese] 行こう。</d>`.
-H3 Max and `minimax-h3-ref` send `prompt_expansion_mode: "balanced"` (H3 Max requires it; override with `params`).
+`minimax-h3-max-ref` and `minimax-h3-ref` send `prompt_expansion_mode: "balanced"` (H3 Max requires it; override with `params`).
+`minimax-h3-max-i2v` sends `prompt_expansion_mode: "disabled"`, so a start + end frame clip follows the prompt as written.
 `minimax-h3-ref` uses the H3 Max body builder: the two schemas take the same fields.
 
 **MiniMax H3 Max extend.** `minimax-h3-max-extend` continues a clip. Put the source clip in `input.image`, for
@@ -95,6 +119,7 @@ Any of these can be changed with `params`. The plugin does not check the source'
 | `seedance-2.5@720p`, `seedance-2.5-ref@720p` | 0.4730 |
 | `minimax-h3@480P` / `@768P` / `@2K` / `@4K` | 0.05 / 0.06 / 0.13 / 0.16 |
 | `minimax-h3-max-ref@480P` / `@768P` / `@1080P` | 0.05 / 0.08 / 0.16 |
+| `minimax-h3-max-i2v@480P` / `@768P` / `@1080P` | 0.05 / 0.08 / 0.16 |
 | `minimax-h3-ref@480P` / `@768P` / `@2K` / `@4K` | 0.05 / 0.06 / 0.13 / 0.16 |
 | `minimax-h3-max-extend@480P` / `@768P` / `@1080P` / `@2K` | 0.05 / 0.08 / 0.16 / 0.32 |
 | `kling-3-pro` / `kling-3-pro+audio` | 0.112 / 0.168 |
@@ -132,14 +157,18 @@ included. Not verified against a fal bill.
 each image ref; audio and video refs do not count, an unresolved ref counts as an image. Example: 5 s at 768P
 with the first frame and five image refs is 0.38.
 
+**H3 Max image-to-video (`minimax-h3-max-i2v`).** Per second only: fal names no reference-token charge for it.
+The rate is fal's list rate after the promo ends on 2026-09-30, so the estimate stays an upper bound. The end
+frame does not change the price. Example: 5 s at 768P is 0.40.
+
 Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` (or
 `seedance-2.0-mini@1080p`) to `priceOverrides` to use it.
 
 ## Job protocol
 
 1. **Upload.** `storage`: `POST uploadUrl { file_name, content_type }` → `{ upload_url, file_url }`, then
-   `PUT upload_url` with the bytes. The first frame goes first, then every ref (image, audio, video) in
-   parallel, 4 at a time. On any failure, a `data:<mime>;base64,...` URI for this and later files, logged
+   `PUT upload_url` with the bytes. The first frame goes first, then every ref (image, audio, video) and the
+   end frame, last, in parallel, 4 at a time. On any failure, a `data:<mime>;base64,...` URI for this and later files, logged
    once as `fal:upload:fallback`.
    **Upload cache.** Each storage URL is kept for the process in `state.uploads`, keyed
    `storage:<mime>:<sha256 of the bytes>`. The same face or tail clip is uploaded once, across items,
@@ -165,7 +194,7 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 | Result or download of a `COMPLETED` job fails with another 4xx | Retryable 503 (`fal:result:unreadable`): the clip exists and is paid for, so polling goes on and the job stays adoptable |
 | Job `COMPLETED` + `generation_timeout` / `downstream_service_unavailable` / `internal_server_error` | `failed` with a retryable 503: the next attempt submits again |
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
-| `FAL_KEY` not set, unknown model, missing image, too many refs | Plain error: terminal after one attempt, nothing billed |
+| `FAL_KEY` not set, unknown model, missing image, too many refs, end frame on a model without one | Plain error: terminal after one attempt, nothing billed |
 
 Messages start with `[ai] fal …` and never contain the key. Logs carry ids and statuses, never prompts.
 

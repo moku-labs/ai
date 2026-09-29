@@ -27,8 +27,8 @@ export type VideoFile = {
 };
 
 /**
- * A single video generation request: model, prompt, optional keyframe and
- * references, plus clip shape hints and pass-through provider params.
+ * A single video generation request: model, prompt, optional keyframe, end
+ * frame and references, plus clip shape hints and pass-through provider params.
  *
  * @example
  * ```ts
@@ -44,6 +44,11 @@ export type VideoRequest = {
   negative?: string;
   /** First frame / keyframe. */
   image?: VideoFile;
+  /**
+   * Last frame: the clip ends on this image. A provider whose model takes no end
+   * frame rejects the request before any upload or charge; it never drops it silently.
+   */
+  endImage?: VideoFile;
   /** Extra references: images, audio or video files, told apart by MIME type. */
   refs?: VideoFile[];
   /** Clip length in seconds. Default 5. */
@@ -115,10 +120,6 @@ export type VideoHandler = {
    *
    * @param request - The request to estimate.
    * @returns The estimated cost in US dollars.
-   * @example
-   * ```ts
-   * handler.estimate({ model: "minimax-h3", prompt: "push-in" }); // => { usd: 0.25 }
-   * ```
    */
   estimate(request: VideoRequest): { usd: number };
   /**
@@ -128,10 +129,6 @@ export type VideoHandler = {
    * @param opts - Execution options.
    * @param opts.signal - Abort signal for cancelling the in-flight request.
    * @returns The generation result.
-   * @example
-   * ```ts
-   * await handler.execute?.({ model: "minimax-h3", prompt: "push-in" }, {});
-   * ```
    */
   execute?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoResult>;
   /**
@@ -141,10 +138,6 @@ export type VideoHandler = {
    * @param opts - Submission options.
    * @param opts.signal - Abort signal for cancelling the submission call.
    * @returns The provider job id.
-   * @example
-   * ```ts
-   * const { jobId } = await handler.submit!({ model: "minimax-h3", prompt: "push-in" }, {});
-   * ```
    */
   submit?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
   /**
@@ -155,10 +148,6 @@ export type VideoHandler = {
    * @param opts - Poll options.
    * @param opts.signal - Abort signal for cancelling the poll call.
    * @returns The job state: pending, done with a result, or failed.
-   * @example
-   * ```ts
-   * const status = await handler.poll!("job-1", request, {});
-   * ```
    */
   poll?(
     jobId: string,
