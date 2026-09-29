@@ -99,11 +99,10 @@ function buildMeta(
   model: string | undefined,
   answer: ClaudeAnswer
 ): Record<string, unknown> {
-  const isModelChanged = request.model !== undefined && request.model !== model;
   return {
     provider: "claude",
     ...(model === undefined ? {} : { model }),
-    ...(isModelChanged ? { modelRequested: request.model } : {}),
+    ...(request.model === undefined ? {} : { modelRequested: request.model }),
     listCostUsd: answer.listCostUsd,
     usage: { inputTokens: answer.inputTokens, outputTokens: answer.outputTokens },
     ...(request.temperature === undefined ? {} : { ignored: ["temperature"] })

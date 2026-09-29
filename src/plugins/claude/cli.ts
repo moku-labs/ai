@@ -37,6 +37,8 @@ export type RunClaudeOptions = {
   timeoutMs: number;
   /** Caller signal; aborting kills the process and rethrows `signal.reason`. */
   signal?: AbortSignal;
+  /** Wait this long after SIGTERM, then SIGKILL, ms. Default: 5000. */
+  killGraceMs?: number;
 };
 
 /** Outcome of a finished `claude` process, whatever its exit code. */
@@ -57,6 +59,9 @@ export const DEFAULT_SYSTEM = "Answer the request directly. Output only the answ
 /** How many trailing stderr characters are kept for error messages. */
 const STDERR_TAIL_CHARS = 4096;
 
+/** How long a killed process gets to exit after SIGTERM before SIGKILL, ms. */
+const KILL_GRACE_MS = 5000;
+
 /** Name of the only tool a call with images may use. */
 const READ_TOOL = "Read";
 
@@ -73,7 +78,17 @@ const READ_TOOL = "Read";
  */
 export function buildClaudeArguments(options: ClaudeArgumentsOptions): string[] {
   const toolArguments = options.withImages
-    ? ["--tools", READ_TOOL, "--allowedTools", READ_TOOL, "--permission-prompts", "none"]
+    ? [
+        // --restricted confines the file tools to the cwd (the per-call dir):
+        // an allow rule alone does not stop Read outside it (checked live 2026-09-29).
+        "--restricted",
+        "--tools",
+        READ_TOOL,
+        "--allowedTools",
+        READ_TOOL,
+        "--permission-prompts",
+        "none"
+      ]
     : ["--tools", ""];
   const modelArguments = options.model === undefined ? [] : ["--model", options.model];
   const effortArguments = options.effort === undefined ? [] : ["--effort", options.effort];
@@ -171,13 +186,15 @@ export function runClaude(options: RunClaudeOptions): Promise<ClaudeRun> {
     let settled = false;
 
     /**
-     * Records why the process is being killed, then sends SIGTERM.
+     * Records why the process is being killed, sends SIGTERM, and sends
+     * SIGKILL after the grace period in case the process ignores it.
      *
      * @param reason - Why the process is killed.
      */
     const kill = (reason: "timeout" | "abort"): void => {
       killedFor = reason;
       child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), options.killGraceMs ?? KILL_GRACE_MS).unref();
     };
     /**
      * Kills the process when the caller aborts.

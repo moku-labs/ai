@@ -58,16 +58,21 @@ export type RunCodexOptions = {
   timeoutMs: number;
   /** Caller signal; aborting kills the process and rethrows `signal.reason`. */
   signal?: AbortSignal;
+  /** Wait this long after SIGTERM, then SIGKILL, ms. Default: 5000. */
+  killGraceMs?: number;
 };
 
 /** How many trailing stderr characters are kept for error messages. */
 const STDERR_TAIL_CHARS = 4096;
 
+/** How long a killed process gets to exit after SIGTERM before SIGKILL, ms. */
+const KILL_GRACE_MS = 5000;
+
 /** stderr that means the CLI is not logged in. */
 const AUTH_PATTERN = /401 Unauthorized|not logged in|codex login/i;
 
 /** stderr that means the ChatGPT plan or the API rate limit is used up. */
-const LIMIT_PATTERN = /usage limit|rate limit|429|too many requests/i;
+const LIMIT_PATTERN = /usage limit|rate limit|\b429\b|too many requests/i;
 
 /**
  * Builds the `codex exec` argv. `--` always precedes the prompt, because
@@ -270,7 +275,8 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
     let settled = false;
 
     /**
-     * Records why the process is being killed, then sends SIGTERM.
+     * Records why the process is being killed, sends SIGTERM, and sends
+     * SIGKILL after the grace period in case the process ignores it.
      *
      * @param reason - Why the process is killed.
      * @example
@@ -281,6 +287,7 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
     const kill = (reason: "timeout" | "abort"): void => {
       killedFor = reason;
       child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), options.killGraceMs ?? KILL_GRACE_MS).unref();
     };
     /**
      * Kills the process when the caller aborts.

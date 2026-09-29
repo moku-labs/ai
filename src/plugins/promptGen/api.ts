@@ -141,41 +141,15 @@ function toSignalOptions(opts?: { signal?: AbortSignal }): SignalOptions {
 
 /**
  * The fallback providers that follow `head`: de-duplicated (first occurrence
- * kept), without `head`, and without unregistered names, each of which is
- * skipped with a `prompt-gen:fallback-skip` warn.
+ * kept) and without `head`. Unregistered names stay in the list; the walk
+ * skips them only when it reaches them.
  *
  * @param ctx - The promptGen plugin context.
  * @param head - The provider tried first.
- * @returns The registered fallback providers, in order.
+ * @returns The fallback provider names, in order.
  */
-function registeredFallback(ctx: PromptGenContext, head: string): string[] {
-  const registry = ctx.require(registryPlugin);
-  const later: string[] = [];
-
-  for (const provider of new Set(ctx.config.fallback)) {
-    if (provider === head) continue;
-    if (isRegistered(registry, provider)) {
-      later.push(provider);
-      continue;
-    }
-    ctx.log.warn("prompt-gen:fallback-skip", { provider, reason: "unregistered" });
-  }
-
-  return later;
-}
-
-/**
- * Type guard: the chain still has a provider to try.
- *
- * @param chain - The remaining provider names.
- * @returns True when `chain` has at least one name.
- * @example
- * ```ts
- * hasNext(["codex"]); // true
- * ```
- */
-function hasNext(chain: string[]): chain is ProviderChain {
-  return chain.length > 0;
+function fallbackAfter(ctx: PromptGenContext, head: string): string[] {
+  return [...new Set(ctx.config.fallback)].filter(provider => provider !== head);
 }
 
 /**
@@ -272,10 +246,12 @@ async function attempt(
 
 /**
  * Walks the chain from its head: returns the first answer, moves on only
- * while providers are unavailable, and rethrows the last error.
+ * while providers are unavailable, and rethrows the last error. A fallback
+ * name with no registration is skipped with a `prompt-gen:fallback-skip`
+ * warn, only when the walk reaches it.
  *
  * @param ctx - The promptGen plugin context.
- * @param chain - The providers left to try, head first.
+ * @param chain - The providers to try, head first.
  * @param request - The prompt-gen request.
  * @param options - The caller's abort signal.
  * @returns The answering provider's result.
@@ -286,20 +262,37 @@ async function generateFrom(
   request: PromptGenRequest,
   options: SignalOptions
 ): Promise<PromptGenResult> {
-  const [provider, ...rest] = chain;
+  const [head, ...fallback] = chain;
+  const registry = ctx.require(registryPlugin);
+  let lastError: unknown;
+  let from = head;
 
+  // The head is always tried: an unregistered head throws the pinned error.
   try {
-    return await attempt(ctx, provider, request, options);
+    return await attempt(ctx, head, request, options);
   } catch (error) {
-    if (!hasNext(rest) || !canFallBack(error, options.signal)) throw error;
-
-    ctx.log.warn("prompt-gen:fallback", {
-      from: provider,
-      to: rest[0],
-      reason: fallbackReason(error)
-    });
-    return generateFrom(ctx, rest, request, options);
+    if (!canFallBack(error, options.signal)) throw error;
+    lastError = error;
   }
+
+  // Each fallback is tried in order, one at a time.
+  for (const provider of fallback) {
+    if (!isRegistered(registry, provider)) {
+      ctx.log.warn("prompt-gen:fallback-skip", { provider, reason: "unregistered" });
+      continue;
+    }
+
+    ctx.log.warn("prompt-gen:fallback", { from, to: provider, reason: fallbackReason(lastError) });
+    try {
+      return await attempt(ctx, provider, request, options);
+    } catch (error) {
+      if (!canFallBack(error, options.signal)) throw error;
+      lastError = error;
+      from = provider;
+    }
+  }
+
+  throw lastError;
 }
 
 /**
@@ -315,7 +308,7 @@ export function createPromptGenApi(ctx: PromptGenContext): PromptGenApi {
       opts?: { signal?: AbortSignal; provider?: string }
     ) => {
       const head = resolveProviderName(ctx, opts?.provider);
-      const chain: ProviderChain = [head, ...registeredFallback(ctx, head)];
+      const chain: ProviderChain = [head, ...fallbackAfter(ctx, head)];
       return generateFrom(ctx, chain, request, toSignalOptions(opts));
     },
 

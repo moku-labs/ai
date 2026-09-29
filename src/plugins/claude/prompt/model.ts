@@ -35,7 +35,7 @@ export function mapModel(
 
   const fallback = config.textModel === "" ? undefined : config.textModel;
   if (requestModel === undefined) return fallback;
-  if (requestModel.startsWith(VENDOR_PREFIX)) {
+  if (requestModel.startsWith(VENDOR_PREFIX) && requestModel !== VENDOR_PREFIX) {
     return requestModel.slice(VENDOR_PREFIX.length).replaceAll(".", "-");
   }
   return OWN_FAMILY_PATTERN.test(requestModel) ? requestModel : fallback;
