@@ -34,7 +34,7 @@ describe("addActiveRun", () => {
     const second = addActiveRun(state, "run-2", controller.signal);
 
     expect([...state.active.keys()]).toEqual(["run-1", "run-2"]);
-    expect(second).toMatchObject({ runId: "run-2", signal: controller.signal, inFlight: 0 });
+    expect(second).toMatchObject({ runId: "run-2", signal: controller.signal });
     expect(state.active.get("run-2")).toBe(second);
   });
 

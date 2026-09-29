@@ -1,60 +1,11 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { createPromptGenApi } from "../../api";
-import type {
-  PromptGenApi,
-  PromptGenContext,
-  PromptGenHandler,
-  PromptGenRequest
-} from "../../types";
+import type { PromptGenApi, PromptGenRequest, PromptGenResult } from "../../types";
+import { createEchoHandler, createFakeRegistry, createMockCtx } from "./fixtures";
 
 // ---------------------------------------------------------------------------
 // Unit test: createPromptGenApi (mock context, no kernel)
 // ---------------------------------------------------------------------------
-
-/** In-memory registry double matching the real registry plugin's shape. */
-function createFakeRegistry() {
-  const handlers = new Map<string, Map<string, unknown>>();
-  return {
-    register(task: string, provider: string, handler: unknown): void {
-      const taskProviders = handlers.get(task) ?? new Map<string, unknown>();
-      taskProviders.set(provider, handler);
-      handlers.set(task, taskProviders);
-    },
-    resolve(task: string, provider: string): unknown {
-      return handlers.get(task)?.get(provider);
-    },
-    providers(task: string): string[] {
-      return [...(handlers.get(task)?.keys() ?? [])];
-    },
-    tasks(): string[] {
-      return [...handlers.keys()];
-    }
-  };
-}
-
-/** Well-formed prompt-gen handler fixture: echoes the prompt back as text. */
-function createEchoHandler(name: string): PromptGenHandler {
-  return {
-    estimate: (request: PromptGenRequest) => ({ usd: request.prompt.length / 1000 }),
-    execute: async (request: PromptGenRequest) => ({
-      text: `${name}:${request.prompt}`,
-      costUsd: request.prompt.length / 1000
-    })
-  };
-}
-
-/** Builds a mock promptGen context around a given fake registry. */
-function createMockCtx(
-  registry: ReturnType<typeof createFakeRegistry>,
-  configOverrides?: Partial<PromptGenContext["config"]>
-): PromptGenContext {
-  return {
-    config: { defaultProvider: "openai", ...configOverrides },
-    state: {},
-    emit: () => undefined,
-    require: () => registry
-  };
-}
 
 describe("createPromptGenApi", () => {
   // -------------------------------------------------------------------------
@@ -234,6 +185,8 @@ describe("createPromptGenApi", () => {
       const api = createPromptGenApi(createMockCtx(registry));
 
       expectTypeOf(api.generate).parameter(0).toEqualTypeOf<PromptGenRequest>();
+      expectTypeOf(api.generate).returns.toEqualTypeOf<Promise<PromptGenResult>>();
+      expectTypeOf(api.estimate).parameter(0).toEqualTypeOf<PromptGenRequest>();
       expectTypeOf(api.estimate).returns.toEqualTypeOf<{ usd: number }>();
       expectTypeOf(api.providers).returns.toEqualTypeOf<string[]>();
     });
