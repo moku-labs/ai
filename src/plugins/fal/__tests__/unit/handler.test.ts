@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { classifyError } from "../../../runner/retry";
 import type { VideoFile, VideoJobPoll, VideoRequest } from "../../../video/contract";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
 import { createVideoHandler } from "../../video/handler";
@@ -70,6 +71,17 @@ function loggedText(ctx: ReturnType<typeof createTestCtx>): string {
 function failedError(result: VideoJobPoll): unknown {
   if (result.state !== "failed") throw new Error(`expected failed, got ${result.state}`);
   return result.error;
+}
+
+/** Asserts a poll rejection is the plain key error: no status and no kind, so the runner reads it `unknown`. */
+function expectPollKeyError(rejection: unknown, apiKeyEnv: string): void {
+  expect(rejection).toBeInstanceOf(Error);
+  expect((rejection as Error).message).toBe(
+    `[ai] fal cannot poll without a valid API key.\n  Fix ${apiKeyEnv}; the next run adopts the same job.`
+  );
+  expect(rejection).not.toHaveProperty("status");
+  expect(rejection).not.toHaveProperty("kind");
+  expect(classifyError(rejection)).toBe("unknown");
 }
 
 describe("estimate", () => {
@@ -184,6 +196,17 @@ describe("submit", () => {
       "[ai] FAL_KEY is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key."
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a 401 on the queue POST stays a terminal 401", async () => {
+    stubFetch(initiateResponse(1), okResponse(), jsonResponse(401, { detail: "Unauthorized" }));
+    const handler = createVideoHandler(createTestCtx());
+
+    const rejection = await handler.submit(minimaxRequest(), {}).catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(TerminalProviderError);
+    expect((rejection as TerminalProviderError).status).toBe(401);
+    expect(classifyError(rejection)).toBe("http-4xx");
   });
 
   it("throws a plain Error when the model needs an image and none is given", async () => {
@@ -504,11 +527,50 @@ describe("poll", () => {
     ).rejects.toThrow(/is not valid/);
   });
 
-  it("requires the key", async () => {
-    stubFetch();
+  it("a missing key throws a plain Error with no status or kind, before any fetch", async () => {
+    const fetchMock = stubFetch();
     const handler = createVideoHandler(createTestCtx({ env: createFakeEnv({}) }));
-    await expect(handler.poll(JOB_ID, minimaxRequest(), {})).rejects.toThrow(
-      "[ai] FAL_KEY is not set."
-    );
+
+    const rejection = await handler
+      .poll(JOB_ID, minimaxRequest(), {})
+      .catch((error: unknown) => error);
+
+    expectPollKeyError(rejection, "FAL_KEY");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the key error names the configured apiKeyEnv", async () => {
+    stubFetch();
+    const ctx = createTestCtx({ config: { apiKeyEnv: "MY_FAL" }, env: createFakeEnv({}) });
+
+    const rejection = await createVideoHandler(ctx)
+      .poll(JOB_ID, minimaxRequest(), {})
+      .catch((error: unknown) => error);
+
+    expectPollKeyError(rejection, "MY_FAL");
+  });
+
+  it.each([
+    401, 403
+  ])("a %i on the status GET throws the same plain Error, so the job stays adoptable", async status => {
+    const fetchMock = stubFetch(jsonResponse(status, { detail: "Unauthorized" }));
+
+    const rejection = await createVideoHandler(createTestCtx())
+      .poll(JOB_ID, minimaxRequest(), {})
+      .catch((error: unknown) => error);
+
+    expectPollKeyError(rejection, "FAL_KEY");
+    expect(callsOf(fetchMock).map(call => call.url)).toEqual([STATUS_URL]);
+  });
+
+  it("another 4xx on the status GET stays terminal with its status", async () => {
+    stubFetch(jsonResponse(404, { detail: "Not found" }));
+
+    const rejection = await createVideoHandler(createTestCtx())
+      .poll(JOB_ID, minimaxRequest(), {})
+      .catch((error: unknown) => error);
+
+    expect(rejection).toBeInstanceOf(TerminalProviderError);
+    expect((rejection as TerminalProviderError).status).toBe(404);
   });
 });

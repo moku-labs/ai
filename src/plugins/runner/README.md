@@ -272,6 +272,10 @@ A handler with both `submit` and `poll` always runs through the job path:
    `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never
    billed twice for one shot.
 
+A poll error with no hint marks the job `expired`, so the next run adopts it: a provider uses
+this for a lost or rejected key. `kind: "resubmit"` retries like its status says (503 is
+`http-5xx`) but never feeds the lane breaker: "submit again" is not a sick lane.
+
 ### Several runs at once
 
 One process drives up to `maxActiveRuns` runs at the same time (default 1). Each run keeps its
@@ -332,7 +336,9 @@ const [ep1, ep2] = await Promise.all([
 
 Provider handlers steer classification by attaching an optional structural hint
 (`ProviderErrorHint`) to their thrown errors — `status?: number`,
-`kind?: "timeout" | "network" | "content-policy"` (overrides status), and `retryAfterMs?: number`.
+`kind?: "timeout" | "network" | "content-policy" | "resubmit"`, and `retryAfterMs?: number`.
+`timeout`, `network` and `content-policy` override the status. `resubmit` keeps the status class
+and stays off the lane breaker.
 
 ### The handler protocol
 

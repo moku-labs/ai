@@ -36,7 +36,7 @@ the three-layer Moku model).
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
   (`voiceover`, `translate`, `prompt-gen`, `image`, `video`); provider plugins
-  (`elevenlabs`, `openai`, `codex`, `claude`, `fal`) register handlers with a dumb registry. Neither imports the other — consumer apps
+  (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `apimodels`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
   provider, input, params, and the keys of everything it references). A done artifact
@@ -168,6 +168,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`codex`](./src/plugins/codex/README.md) | Complex | regular (`app.codex`) | Image and prompt-gen provider over the local Codex CLI (`codex exec`), plan-billed. |
 | [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
 | [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Video provider over the fal queue API — Seedance 2.5 and 2.0 (Mini), MiniMax H3 and H3 Max, Kling 3, Wan 3.0, Veo 3.1 Fast, Vidu Q3; image and audio refs; per-second and reference-token prices. |
+| [`apimodels`](./src/plugins/apimodels/README.md) | Complex | regular (`app.apimodels`) | Video provider over apimodels.app: Seedance 2.5 and 2.0 official, which accept real faces; optional `asset://` registration via item `params.assets`, cached in the journal. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI

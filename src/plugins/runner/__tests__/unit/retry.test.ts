@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ErrorClass } from "../../../journal/types";
-import { backoffMs, classifyError, isRetryableErrorClass, retryAfterMsOf } from "../../retry";
+import {
+  backoffMs,
+  classifyError,
+  isResubmitVerdict,
+  isRetryableErrorClass,
+  retryAfterMsOf
+} from "../../retry";
+import type { ProviderErrorHint } from "../../types";
 
 // ---------------------------------------------------------------------------
 // classifyError — the retry taxonomy classification table
@@ -40,6 +47,16 @@ describe("classifyError", () => {
     );
   });
 
+  it("classifies a kind:resubmit hint by its status: 503 is http-5xx, retried", () => {
+    const lostTask: ProviderErrorHint = { kind: "resubmit", status: 503 };
+    expect(classifyError(lostTask)).toBe("http-5xx");
+  });
+
+  it("classifies a kind:resubmit hint with no status as unknown", () => {
+    const noStatus: ProviderErrorHint = { kind: "resubmit" };
+    expect(classifyError(noStatus)).toBe("unknown");
+  });
+
   it("classifies a plain Error with no hint as unknown (terminal, never retried)", () => {
     expect(classifyError(new Error("mystery failure"))).toBe("unknown");
     expect(classifyError(new TypeError("x is not a function"))).toBe("unknown");
@@ -47,6 +64,23 @@ describe("classifyError", () => {
 
   it("classifies a non-object thrown value as unknown", () => {
     expect(classifyError("just a string")).toBe("unknown");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isResubmitVerdict — a "submit again" verdict stays off the lane breaker
+// ---------------------------------------------------------------------------
+
+describe("isResubmitVerdict", () => {
+  it("is true for an error tagged kind:resubmit", () => {
+    const lostTask: ProviderErrorHint = { kind: "resubmit", status: 503 };
+    expect(isResubmitVerdict(Object.assign(new Error("task lost"), lostTask))).toBe(true);
+  });
+
+  it("is false for a plain 503, another kind, or a thrown non-object", () => {
+    expect(isResubmitVerdict(Object.assign(new Error("busy"), { status: 503 }))).toBe(false);
+    expect(isResubmitVerdict(Object.assign(new Error("slow"), { kind: "timeout" }))).toBe(false);
+    expect(isResubmitVerdict("resubmit")).toBe(false);
   });
 });
 

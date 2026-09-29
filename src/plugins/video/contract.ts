@@ -64,6 +64,38 @@ export type VideoRequest = {
 };
 
 /**
+ * A request image, end frame or ref at estimate time: a resolved file, or
+ * still the build-file reference the runner resolves before submit (the
+ * runner estimates the unresolved request).
+ *
+ * @example
+ * ```ts
+ * const input: EstimateInput = { $file: "cast/anna.png" };
+ * ```
+ */
+export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
+
+/**
+ * A video request at estimate time: its first frame, end frame and refs may
+ * still be build-file references. Every `VideoRequest` is one.
+ *
+ * @example
+ * ```ts
+ * const request: EstimateRequest = {
+ *   model: "seedance-2.5", prompt: "p", image: { $ref: "s01.key" }, params: { assets: ["image"] }
+ * };
+ * ```
+ */
+export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
+  /** First frame, resolved or not. */
+  image?: EstimateInput;
+  /** End frame, resolved or not. */
+  endImage?: EstimateInput;
+  /** Refs, resolved or not. */
+  refs?: EstimateInput[];
+};
+
+/**
  * The result of one video generation: raw clip bytes plus enough metadata
  * to journal cost and identity without re-deriving them.
  *
@@ -116,12 +148,14 @@ export type VideoJobPoll =
 export type VideoHandler = {
   /**
    * Estimates the cost of `request` without executing it — used by the
-   * runner's budget gate and by `app.video.estimate()`.
+   * runner's budget gate and by `app.video.estimate()`. The runner estimates
+   * at plan time, so `image`, `endImage` and `refs` may still be `$ref` /
+   * `$file` references.
    *
-   * @param request - The request to estimate.
+   * @param request - The request to estimate, resolved or not.
    * @returns The estimated cost in US dollars.
    */
-  estimate(request: VideoRequest): { usd: number };
+  estimate(request: EstimateRequest): { usd: number };
   /**
    * Executes `request` in one call, returning the clip and its actual cost.
    *
