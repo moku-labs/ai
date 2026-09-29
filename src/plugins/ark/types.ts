@@ -175,7 +175,7 @@ export type RetryHint = {
 
 /**
  * Retryable transport/provider failure: HTTP 5xx, HTTP 429 or an OpenAPI
- * `Throttling*` error (with an optional `Retry-After` hint), a request
+ * throttling error (with an optional `Retry-After` hint), a request
  * timeout, a network failure, or a response ark sent but that could not be
  * read. Carries the structural fields the runner's `classifyError` reads
  * (`status`/`kind`/`retryAfterMs`).

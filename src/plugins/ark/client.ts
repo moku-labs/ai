@@ -133,6 +133,9 @@ const ENVELOPE_ERROR_STATUS = 400;
 /** HTTP statuses on which a SensitiveContent code is a refusal. */
 const REFUSAL_STATUSES: ReadonlySet<number> = new Set([400, 422]);
 
+/** OpenAPI error-code prefixes of ark-mcp's throttling set: retryable as 429. */
+const THROTTLING_CODE = /^(Throttling|RequestLimitExceeded|FlowLimitExceeded|TooManyRequests)/;
+
 /** Second line of an entitlement-related OpenAPI error. */
 const ENTITLEMENT_HINT =
   "Check the Seedance Advanced Creation Rights and the AIGC authorization letter in the Ark console";
@@ -337,6 +340,20 @@ function terminalFailure(
 }
 
 /**
+ * Whether an OpenAPI error code is a throttling code.
+ *
+ * @param code - The OpenAPI error code.
+ * @returns True for `Throttling*`, `RequestLimitExceeded*`, `FlowLimitExceeded*` and `TooManyRequests*`.
+ * @example
+ * ```ts
+ * isThrottlingCode("RequestLimitExceeded"); // => true
+ * ```
+ */
+function isThrottlingCode(code: string): boolean {
+  return THROTTLING_CODE.test(code);
+}
+
+/**
  * Whether an OpenAPI error code is about the account's entitlement.
  *
  * @param code - The OpenAPI error code.
@@ -356,8 +373,8 @@ function isEntitlementCode(code: string): boolean {
 
 /**
  * Classifies a failed call: 429 and 5xx are retryable, a SensitiveContent
- * code on 400/422 is flagged, an OpenAPI `Throttling*` code is retryable
- * 429, an entitlement code is terminal with a hint, anything else terminal.
+ * code on 400/422 is flagged, an OpenAPI throttling code is retryable 429,
+ * an entitlement code is terminal with a hint, anything else terminal.
  *
  * @param label - The Action or path.
  * @param status - The HTTP status (400 for an envelope error in a 2xx).
@@ -393,7 +410,7 @@ function failureOf(
   if (REFUSAL_STATUSES.has(status) && code.includes("SensitiveContent")) {
     return flaggedError(code, localImage);
   }
-  if (info.envelope && code.startsWith("Throttling")) {
+  if (info.envelope && isThrottlingCode(code)) {
     return new RetryableProviderError(
       `[ai] ark ${label} was throttled (${code}).\n  The runner retries it.`,
       { status: 429, retryAfterMs }

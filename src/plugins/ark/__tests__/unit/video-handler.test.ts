@@ -27,6 +27,7 @@ import {
   GET_TASK_CANCELLED,
   GET_TASK_EXPIRED,
   GET_TASK_FAILED,
+  GET_TASK_FAILED_OUTPUT_VIDEO,
   GET_TASK_FAILED_SENSITIVE,
   GET_TASK_QUEUED,
   GET_TASK_RUNNING,
@@ -569,6 +570,21 @@ describe("poll", () => {
 
     expect(error).toBeInstanceOf(FlaggedProviderError);
     expect((error as Error).message).toBe(GENERIC_FLAG_MESSAGE);
+  });
+
+  it("flags an OutputVideoSensitiveContentDetected failure", async () => {
+    stubFetch(jsonResponse(200, GET_TASK_FAILED_OUTPUT_VIDEO));
+    const ctx = createTestCtx();
+
+    const error = failedError(await createVideoHandler(ctx).poll(TASK_ID, request(), {}));
+
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect(error).toMatchObject({ kind: "content-policy" });
+    expect(ctx.log.warn).toHaveBeenCalledWith("ark:video:failed", {
+      taskId: TASK_ID,
+      errorType: "flagged",
+      code: "OutputVideoSensitiveContentDetected"
+    });
   });
 
   it("fails terminally on another task error, carrying the code and message", async () => {

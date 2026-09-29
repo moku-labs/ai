@@ -331,6 +331,19 @@ describe("poll", () => {
     );
   });
 
+  it("says no reason given when FailedReason is empty", async () => {
+    stubFetch(jsonResponse(200, { Result: { Id: ASSET_ID, Status: "Failed", FailedReason: "" } }));
+
+    const error = failedError(
+      await createAssetHandler(createTestCtx()).poll(JOB_ID, request(), {})
+    );
+
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect((error as Error).message).toBe(
+      '[ai] ark refused asset "mira.png": no reason given.\n  Items that use it will not run.'
+    );
+  });
+
   it("stays pending on an unknown status, with a warning", async () => {
     stubFetch(jsonResponse(200, { Result: { Id: ASSET_ID, Status: "Queued" } }));
     const ctx = createTestCtx();

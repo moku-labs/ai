@@ -108,7 +108,6 @@ describe("documented request bodies (toEqual)", () => {
         params: {
           watermark: true,
           return_last_frame: true,
-          camera_fixed: false,
           execution_expires_after: 3600
         }
       })
@@ -186,7 +185,6 @@ describe("mapping rows", () => {
       "watermark",
       "seed",
       "return_last_frame",
-      "camera_fixed",
       "execution_expires_after",
       "priority"
     ]);
@@ -211,7 +209,13 @@ describe("checkVideoRequest rejections", () => {
 
   it("rejects an unknown param", () => {
     expect(() => checkVideoRequest(MODEL, request({ params: { cfg_scale: 7 } }))).toThrow(
-      '[ai] Unknown ark param "cfg_scale".\n  Allowed: refUrls, watermark, seed, return_last_frame, camera_fixed, execution_expires_after, priority.'
+      '[ai] Unknown ark param "cfg_scale".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority.'
+    );
+  });
+
+  it("rejects camera_fixed as an unknown param", () => {
+    expect(() => checkVideoRequest(MODEL, request({ params: { camera_fixed: true } }))).toThrow(
+      '[ai] Unknown ark param "camera_fixed".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority.'
     );
   });
 

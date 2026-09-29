@@ -47,7 +47,6 @@ export const ARK_PARAMS = [
   "watermark",
   "seed",
   "return_last_frame",
-  "camera_fixed",
   "execution_expires_after",
   "priority"
 ] as const;
@@ -67,7 +66,7 @@ export type ArkParameterName = (typeof ARK_PARAMS)[number];
  *
  * @example
  * ```ts
- * const key: ArkPassthroughKey = "camera_fixed";
+ * const key: ArkPassthroughKey = "return_last_frame";
  * ```
  */
 export type ArkPassthroughKey = Exclude<ArkParameterName, "refUrls">;

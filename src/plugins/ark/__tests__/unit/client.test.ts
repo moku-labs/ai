@@ -237,6 +237,24 @@ describe("arkFetch OpenAPI envelope errors", () => {
     );
   });
 
+  it.each([
+    "Throttling",
+    "RequestLimitExceeded",
+    "FlowLimitExceeded",
+    "TooManyRequests"
+  ])("a %s* code is retryable as 429", async prefix => {
+    const code = `${prefix}.Account`;
+    stubFetch(
+      jsonResponse(400, { ResponseMetadata: { Error: { Code: code, Message: "slow down" } } })
+    );
+
+    const error = await rejectionOf({ ...OPTIONS, label: "GetAsset" });
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect(error).toMatchObject({ status: 429 });
+    expect((error as Error).message).toContain(`(${code})`);
+  });
+
   it("AccessDenied is terminal with the entitlement hint", async () => {
     stubFetch(jsonResponse(403, OPENAPI_ERROR_ACCESS_DENIED));
 
