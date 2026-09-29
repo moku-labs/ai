@@ -211,7 +211,7 @@ function webpSize(bytes: Uint8Array): ImageSize | undefined {
  * @returns The size, or undefined for another format or a damaged header.
  * @example
  * ```ts
- * imageSize(await readFile("face.png")); // => { width: 1024, height: 1024 }
+ * imageSize(new Uint8Array([1, 2, 3])); // => undefined
  * ```
  */
 export function imageSize(bytes: Uint8Array): ImageSize | undefined {

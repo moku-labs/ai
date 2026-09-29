@@ -135,7 +135,7 @@ function shorten(text: string): string {
  * @returns The messages found, joined with "; ", or undefined when none.
  * @example
  * ```ts
- * detailMessages([{ msg: "bad", type: "value_error" }], types); // => "bad"
+ * detailMessages([{ msg: "bad", type: "value_error" }], []); // => "bad"
  * ```
  */
 function detailMessages(detail: unknown[], types: string[]): string | undefined {
@@ -365,10 +365,12 @@ function bodyOf(request: FalRequest): string | Uint8Array<ArrayBuffer> | undefin
  * @throws {FlaggedProviderError} When fal names a content-policy rejection.
  */
 export async function falFetch(request: FalRequest): Promise<FalResponse> {
+  // Our timeout, joined with the caller's abort when there is one.
   const timeout = AbortSignal.timeout(request.timeoutMs);
   const signal =
     request.signal === undefined ? timeout : AbortSignal.any([request.signal, timeout]);
 
+  // Fetch and read the whole body; a transport failure is classified here.
   let response: FalResponse;
   try {
     const raw = await fetch(request.url, {
@@ -383,6 +385,7 @@ export async function falFetch(request: FalRequest): Promise<FalResponse> {
     throw transportFailure(error, request.signal, timeout);
   }
 
+  // Only a 2xx passes; every other status is classified.
   const isSuccess = response.status >= 200 && response.status < 300;
   if (!isSuccess) throw classifyHttpFailure(response);
   return response;
