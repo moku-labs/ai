@@ -265,7 +265,7 @@ deliberately not the SDK's own namespace type, which `.d.ts` bundling drops.
 The SDK's internal retry loop is disabled (`maxRetries: 0`): retry timing, backoff, and jitter
 are owned entirely by the `runner` (`src/plugins/runner/retry.ts`), so each provider failure
 surfaces exactly once per attempt. `classifyOpenaiError` maps every caught SDK error onto three
-error classes (defined in this plugin's `types.ts`), carrying the structural
+error classes (defined in this plugin's `errors.ts`), carrying the structural
 `ProviderErrorHint` fields (`status` / `kind` / `retryAfterMs`) the runner's `classifyError`
 reads:
 
@@ -315,7 +315,8 @@ health signal honest.
 ```
 openai/
 ├── index.ts             # createPlugin: depends [registry], onInit registers 3 handlers
-├── types.ts             # Config/State/OpenaiClient/request-response shapes + error classes
+├── types.ts             # Config/State/OpenaiClient/request-response shapes (error classes re-exported as types)
+├── errors.ts            # RetryableProviderError / TerminalProviderError / FlaggedProviderError (runtime values)
 ├── state.ts             # { client: null, prices: null } — both lazily created
 ├── api.ts               # app.openai.info()
 ├── client.ts            # lazy SDK factory, call options, error classification, redaction
