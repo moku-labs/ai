@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { createImageHandler } from "../../image/handler";
-import { RetryableProviderError, TerminalProviderError } from "../../types";
 import { createFakeLog, createTestCtx, WRITE_OUTPUT_PNG, writeFakeCodex } from "./fixtures";
 
 /** The eight PNG signature bytes the fake codex writes. */

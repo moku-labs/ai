@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { PromptGenHandler } from "../../../promptGen/contract";
+import { TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../llm/handler";
-import { TerminalProviderError } from "../../types";
 import { createFakeEnv, createTestCtx, stubFetch } from "./fixtures";
 
 // ─────────────────────────────────────────────────────────────────────────────

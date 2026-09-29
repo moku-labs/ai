@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
+import { TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt/handler";
-import { TerminalProviderError } from "../../types";
 import {
   claudeJson,
   createFakeLog,

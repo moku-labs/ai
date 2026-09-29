@@ -5,9 +5,9 @@
  * paid job never runs at an unknown price.
  */
 import type { EstimateRequest } from "../video/contract";
+import { TerminalProviderError } from "./errors";
 import { BAD_REQUEST } from "./http";
 import type { ApimodelsContext } from "./types";
-import { TerminalProviderError } from "./types";
 import { requestResolution, requestSeconds, resolveModel } from "./video/models";
 
 /**

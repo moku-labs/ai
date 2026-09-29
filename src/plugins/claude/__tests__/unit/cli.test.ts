@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import { buildClaudeArguments, DEFAULT_SYSTEM, isBinResolvable, runClaude } from "../../cli";
-import { RetryableProviderError, TerminalProviderError } from "../../types";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { printStdout, SUCCESS_STDOUT, writeFakeClaude } from "./fixtures";
 
 const BASE_ARGUMENTS = [

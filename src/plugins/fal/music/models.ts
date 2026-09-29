@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 import type { MusicChunk, MusicRequest } from "../../music/contract";
-import { TerminalProviderError } from "../types";
+import { TerminalProviderError } from "../errors";
 
 /**
  * How a music model is billed.

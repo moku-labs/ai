@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
+import { RetryableProviderError } from "../../errors";
 import { cutString } from "../../log";
-import { RetryableProviderError } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "./fixtures";
 import {

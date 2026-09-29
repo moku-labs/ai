@@ -15,10 +15,10 @@ import { createHash } from "node:crypto";
 import type { ProviderRecord } from "../journal/types";
 import type { EstimateRequest, VideoFile, VideoRequest } from "../video/contract";
 import { apiData, readField, withRateLimitWait } from "./client";
+import { RetryableProviderError, TerminalProviderError } from "./errors";
 import { BAD_REQUEST, RETRY_STATUS, refusal } from "./http";
 import { assetPriceUsd, roundUsd } from "./prices";
 import type { ApimodelsContext } from "./types";
-import { RetryableProviderError, TerminalProviderError } from "./types";
 import type { UploadOptions } from "./upload";
 import { mapInSlots, SLOTS, shareInFlight, uploadFiles } from "./upload";
 

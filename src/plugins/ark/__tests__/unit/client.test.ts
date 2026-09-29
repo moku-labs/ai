@@ -9,7 +9,7 @@ import {
   readString,
   unreadableResponse
 } from "../../client";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import {
   CREATE_ASSET_GROUP_REQUEST,
   CREATE_ASSET_GROUP_RESPONSE,

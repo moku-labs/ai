@@ -144,7 +144,7 @@ const result = await app.voiceover.generate(
 ### Error taxonomy
 
 `client.ts` classifies every failure into one of three `Error` subclasses (defined in this
-plugin's `types.ts` and exported via the `Elevenlabs` types namespace). Each carries the
+plugin's `errors.ts` and exported as values via the `ElevenlabsErrors` namespace). Each carries the
 structural fields the runner's `classifyError` (`../runner/retry.ts`) reads by shape alone
 (`status` / `kind` / `retryAfterMs`) — no cross-plugin error-class import anywhere.
 
@@ -166,18 +166,22 @@ response bodies — only status codes and error classes.
 ### Exported types and classes
 
 The plugin instance is exported from `"@moku-labs/ai"` as `elevenlabsPlugin`; its types are
-re-exported under the `Elevenlabs` namespace:
+re-exported under the `Elevenlabs` namespace, and its error classes (values) under the
+`ElevenlabsErrors` namespace:
 
 ```ts
-import { Elevenlabs, elevenlabsPlugin } from "@moku-labs/ai";
+import { Elevenlabs, ElevenlabsErrors, elevenlabsPlugin } from "@moku-labs/ai";
 
 type Cfg = Elevenlabs.Config; // { apiKeyEnv, baseUrl, defaultModel, timeoutMs, priceOverrides }
 type Api = Elevenlabs.ElevenlabsApi; // { info() }
 
 // Error classes (values) for instanceof checks in custom pipelines:
-Elevenlabs.RetryableProviderError;
-Elevenlabs.TerminalProviderError;
-Elevenlabs.FlaggedProviderError;
+ElevenlabsErrors.RetryableProviderError;
+ElevenlabsErrors.TerminalProviderError;
+ElevenlabsErrors.FlaggedProviderError;
+
+// `Elevenlabs.<Class>` still works in type position:
+type Retryable = Elevenlabs.RetryableProviderError;
 ```
 
 ## Events
@@ -234,20 +238,23 @@ controller.abort(); // cancels the in-flight HTTP request cleanly
 ### Handling the error taxonomy directly
 
 ```ts
-import { Elevenlabs } from "@moku-labs/ai";
+import { ElevenlabsErrors } from "@moku-labs/ai";
 
 try {
   await app.voiceover.generate({ text: "Hi", voice: "21m00Tcm4TlvDq8ikWAM" });
 } catch (error) {
-  if (error instanceof Elevenlabs.RetryableProviderError) {
+  if (error instanceof ElevenlabsErrors.RetryableProviderError) {
     console.warn("transient — retry later", error.status ?? error.kind, error.retryAfterMs);
-  } else if (error instanceof Elevenlabs.FlaggedProviderError) {
+  } else if (error instanceof ElevenlabsErrors.FlaggedProviderError) {
     console.error("content policy — do not re-queue");
   } else {
     throw error;
   }
 }
 ```
+
+`instanceof` and `new` need the value from `ElevenlabsErrors`. `Elevenlabs.RetryableProviderError`
+(and the other two) still work in type position, for example `let last: Elevenlabs.RetryableProviderError`.
 
 ## Integration
 
@@ -280,7 +287,8 @@ try {
 | File | Role |
 | --- | --- |
 | `index.ts` | Plugin definition (`createPlugin`), defaults, `onInit` registration. |
-| `types.ts` | `Config` / `State` / `ElevenlabsApi`, the three provider error classes, `RegistryApi` re-export (declared once in `registry/index.ts`), `ElevenlabsContext`. |
+| `types.ts` | `Config` / `State` / `ElevenlabsApi`, type-only re-exports of the three provider error classes, `RegistryApi` re-export (declared once in `registry/index.ts`), `ElevenlabsContext`. No runtime values. |
+| `errors.ts` | The three provider error classes (values, exported as `ElevenlabsErrors`) and their module-private `RetryHint`. Imports nothing from `types.ts`. |
 | `api.ts` | `createElevenlabsApi` — the `info()` surface. |
 | `client.ts` | Thin generic fetch client: request execution, timeout/signal merging, HTTP failure classification. |
 | `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state). |

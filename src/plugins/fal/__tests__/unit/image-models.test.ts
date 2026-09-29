@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TerminalProviderError } from "../../errors";
 import {
   checkImageAspect,
   imageAliases,
@@ -6,7 +7,6 @@ import {
   promptWithNegative,
   resolveImageModel
 } from "../../image/models";
-import { TerminalProviderError } from "../../types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fal image catalog: endpoints, resolution mapping, aspects, body builders.

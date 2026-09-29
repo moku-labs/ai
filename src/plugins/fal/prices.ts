@@ -6,11 +6,11 @@
  * other tasks' keys carry `image:`, `music:` or `llm:`. The merge runs at call
  * time, never at module load, so the import cycle with `video/prices.ts` is safe.
  */
+import { TerminalProviderError } from "./errors";
 import { imagePrices } from "./image/prices";
 import { llmPriceRows } from "./llm/prices";
 import { musicPrices } from "./music/prices";
 import type { FalContext, FalTask } from "./types";
-import { TerminalProviderError } from "./types";
 import { videoPrices } from "./video/prices";
 
 /** Status of a request refused before any charge. */

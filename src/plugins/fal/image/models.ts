@@ -3,7 +3,7 @@
  * text and edit endpoints, reference limit, aspects, resolution mapping, size
  * tables and body builder. A request with refs goes to the edit endpoint.
  */
-import { TerminalProviderError } from "../types";
+import { TerminalProviderError } from "../errors";
 
 /**
  * Image model aliases this plugin accepts in `ImageRequest.model`.

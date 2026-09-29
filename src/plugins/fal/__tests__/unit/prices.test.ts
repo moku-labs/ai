@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { TerminalProviderError } from "../../errors";
 import { imagePriceOf } from "../../image/prices";
 import { llmPriceOf, llmPriceRows } from "../../llm/prices";
 import { musicPriceOf } from "../../music/prices";
 import { mergePrices, missingPriceError, prefixKeys, resolvePrices } from "../../prices";
-import { TerminalProviderError } from "../../types";
 import { videoPrices as bundledPrices, lookupPrice, videoCostUsd } from "../../video/prices";
 import { createTestCtx } from "./fixtures";
 

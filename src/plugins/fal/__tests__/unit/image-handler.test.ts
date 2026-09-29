@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ImageFile, ImageHandler, ImageRequest } from "../../../image/contract";
 import { encodeJobId } from "../../client/queue";
+import { TerminalProviderError } from "../../errors";
 import { createImageHandler } from "../../image/handler";
-import { TerminalProviderError } from "../../types";
 import type { TempFiles } from "./fixtures";
 import {
   bytesResponse,

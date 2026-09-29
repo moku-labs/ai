@@ -35,6 +35,11 @@
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
  *
+ * Types ship as per-plugin namespaces (`Fal.RetryableProviderError`); the
+ * provider error classes ship as values in `ApimodelsErrors`, `ArkErrors`,
+ * `ClaudeErrors`, `CodexErrors`, `ElevenlabsErrors`, `FalErrors` and
+ * `OpenaiErrors` for `instanceof` checks.
+ *
  * @example
  * ```ts
  * import { createApp } from "@moku-labs/ai";
@@ -47,7 +52,7 @@
  * await app.stop();
  * ```
  */
-// biome-ignore-all assist/source/organizeImports: manifest section order (Framework API → Plugins → Helpers → Types) is mandated by spec/04 §4
+// biome-ignore-all assist/source/organizeImports: manifest section order (Framework API → Plugins → Helpers → Types → Errors) is mandated by spec/04 §4
 import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
@@ -188,3 +193,19 @@ export {
   Video,
   Voiceover
 } from "./plugins";
+
+// ─── Errors (per-provider runtime classes: `FalErrors.RetryableProviderError`, …) ──
+/** Apimodels provider error classes as runtime values, for `instanceof` checks. */
+export * as ApimodelsErrors from "./plugins/apimodels/errors";
+/** Ark provider error classes as runtime values, for `instanceof` checks. */
+export * as ArkErrors from "./plugins/ark/errors";
+/** Claude provider error classes as runtime values, for `instanceof` checks. */
+export * as ClaudeErrors from "./plugins/claude/errors";
+/** Codex provider error classes as runtime values, for `instanceof` checks. */
+export * as CodexErrors from "./plugins/codex/errors";
+/** Elevenlabs provider error classes as runtime values, for `instanceof` checks. */
+export * as ElevenlabsErrors from "./plugins/elevenlabs/errors";
+/** Fal provider error classes as runtime values, for `instanceof` checks. */
+export * as FalErrors from "./plugins/fal/errors";
+/** Openai provider error classes as runtime values, for `instanceof` checks. */
+export * as OpenaiErrors from "./plugins/openai/errors";

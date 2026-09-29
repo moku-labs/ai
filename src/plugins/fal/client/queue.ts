@@ -4,8 +4,8 @@
  * handlers; the video handler keeps its own poll and imports the codec through
  * `../video/job.ts`. fal's status and result URLs are used verbatim.
  */
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import type { FalContext, FalProviderError } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import {
   falFetch,
   jobFailure,

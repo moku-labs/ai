@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ASSET_MIME } from "../../../asset/contract";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import { TerminalProviderError } from "../../types";
+import { TerminalProviderError } from "../../errors";
 import { createVideoHandler } from "../../video/handler";
 import { buildFalBody, resolveFalModel } from "../../video/models";
 import { uploadInputs } from "../../video/upload";

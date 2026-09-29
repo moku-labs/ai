@@ -11,9 +11,9 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { VideoFile } from "../video/contract";
 import { apiData, readString, withRateLimitWait } from "./client";
+import { TerminalProviderError } from "./errors";
 import { BAD_REQUEST } from "./http";
 import type { ApimodelsContext } from "./types";
-import { TerminalProviderError } from "./types";
 
 /**
  * Per-call upload options.

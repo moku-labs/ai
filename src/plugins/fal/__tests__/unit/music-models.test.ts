@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MusicChunk, MusicRequest } from "../../../music/contract";
+import { TerminalProviderError } from "../../errors";
 import { checkMusicRequest, musicAliases } from "../../music/models";
-import { TerminalProviderError } from "../../types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // fal music catalog: zod validation, chunk and range rules, body builders.

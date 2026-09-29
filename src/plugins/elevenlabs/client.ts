@@ -7,7 +7,7 @@
  * `voiceover/handler.ts`) build the endpoint path + request body; this file
  * never inspects task-specific request/response shapes.
  */
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 
 /** Options for one ElevenLabs API request. */
 export type ElevenlabsRequestOptions = {

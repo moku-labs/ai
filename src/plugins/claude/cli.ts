@@ -8,8 +8,8 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { PromptGenUnavailableError } from "../promptGen/contract";
+import { RetryableProviderError, TerminalProviderError } from "./errors";
 import type { Effort } from "./types";
-import { RetryableProviderError, TerminalProviderError } from "./types";
 
 /** Inputs for {@link buildClaudeArguments}. */
 export type ClaudeArgumentsOptions = {

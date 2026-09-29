@@ -12,9 +12,9 @@ import type { AssetHandler, AssetJobPoll, AssetRequest } from "../../asset/contr
 import { ASSET_MIME, encodeAssetRecord } from "../../asset/contract";
 import { ownAccount } from "../account";
 import { openApiCall, readString, shorten, unreadableResponse } from "../client";
+import { FlaggedProviderError } from "../errors";
 import { checkAssetImage, readAssetImage } from "../image-check";
 import type { ArkContext } from "../types";
-import { FlaggedProviderError } from "../types";
 import { findOrCreateGroup } from "./group";
 
 /**

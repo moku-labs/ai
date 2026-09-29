@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ElevenlabsRequestOptions } from "../../client";
 import { elevenlabsRequest } from "../../client";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 
 /**
  * Builds a fake `Response` for a given status/body/headers — a partial

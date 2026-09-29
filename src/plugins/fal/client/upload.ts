@@ -11,8 +11,8 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { RetryableProviderError, TerminalProviderError } from "../errors";
 import type { FalContext, LocalFile, UploadMode } from "../types";
-import { RetryableProviderError, TerminalProviderError } from "../types";
 import { falFetch, parseJson, readString } from "./http";
 
 /**

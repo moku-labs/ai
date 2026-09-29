@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { AssetJobPoll, AssetRequest } from "../../../asset/contract";
 import { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "../../../asset/contract";
 import { createAssetHandler } from "../../asset/handler";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import type { TempFiles } from "../fixtures";
 import {
   ASSET_ID,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TerminalProviderError } from "../../errors";
 import {
   AUTH_STATUSES,
   BAD_REQUEST,
@@ -8,7 +9,6 @@ import {
   refusal,
   UNAUTHORIZED
 } from "../../http";
-import { TerminalProviderError } from "../../types";
 
 describe("http vocabulary", () => {
   it("refusal is a terminal 400 that keeps the message as given", () => {

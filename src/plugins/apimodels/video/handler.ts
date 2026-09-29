@@ -23,10 +23,10 @@ import {
   selectAssetFiles
 } from "../assets";
 import { apiData, isEmpty } from "../client";
+import { TerminalProviderError } from "../errors";
 import { BAD_REQUEST, UNAUTHORIZED } from "../http";
 import { assetPriceUsd, roundUsd, videoCostUsd } from "../prices";
 import type { ApimodelsContext } from "../types";
-import { TerminalProviderError } from "../types";
 import type { UploadOptions } from "../upload";
 import { uploadFiles } from "../upload";
 import { encodeJobId, readTask } from "./job";

@@ -2,9 +2,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { TerminalProviderError } from "../../errors";
 import type { RequestLogEntry } from "../../log";
 import { createRequestLog, cutString, withRequestLog } from "../../log";
-import { TerminalProviderError } from "../../types";
 import { createTestCtx } from "./fixtures";
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -7,9 +7,9 @@ import { coreConfig, createCore } from "../../../../config";
 import { registryPlugin } from "../../../registry";
 import { videoPlugin } from "../../../video";
 import type { VideoFile, VideoHandler } from "../../../video/contract";
+import { FlaggedProviderError } from "../../errors";
 import { falPlugin } from "../../index";
 import type { FalContext, FalInfo } from "../../types";
-import { FlaggedProviderError } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 
 // ---------------------------------------------------------------------------

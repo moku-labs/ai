@@ -6,7 +6,7 @@ import type {
   VideoJobPoll,
   VideoRequest
 } from "../../../video/contract";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { fileNameOf } from "../../upload";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "./fixtures";

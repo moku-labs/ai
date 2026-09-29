@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile, VideoJobPoll, VideoRequest } from "../../../video/contract";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "../fixtures";
 import {

@@ -18,11 +18,11 @@ import {
 import type { FalCall } from "../client/queue";
 import { sleep } from "../client/queue";
 import { uploadFiles } from "../client/upload";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import type { RequestLog } from "../log";
 import { withRequestLog } from "../log";
 import { resolvePrices } from "../prices";
 import type { FalContext, LocalFile } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { resolveModelId } from "./models";
 import type { LlmPrice } from "./prices";
 import { llmPriceOf } from "./prices";

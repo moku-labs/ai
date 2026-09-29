@@ -26,10 +26,10 @@ import {
   resolveApiKey
 } from "../client/http";
 import { isKeyRejection, pollKeyError, submitJob } from "../client/queue";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import type { RequestLog, RequestLogEntry } from "../log";
 import { createRequestLog, withRequestLog } from "../log";
 import type { FalContext } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import type { FalJob } from "./job";
 import { decodeJobId, encodeJobId, hasJobError, parseVideoResult } from "./job";
 import type { ResolvedFalModel, SplitReferences, UploadedUrls } from "./models";

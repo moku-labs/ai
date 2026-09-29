@@ -4,7 +4,7 @@
  * Declared once here; `client.ts`, `upload.ts`, `assets.ts`, `prices.ts` and
  * `video/*` import them.
  */
-import { TerminalProviderError } from "./types";
+import { TerminalProviderError } from "./errors";
 
 /** Status of a request refused for good: terminal, retrying cannot help. */
 export const BAD_REQUEST = 400;

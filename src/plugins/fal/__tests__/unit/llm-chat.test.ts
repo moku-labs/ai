@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { CHAT_PATH, DEFAULT_MAX_TOKENS, planChat, RETRY_BASE_MS } from "../../llm/chat";
 import { createPromptGenHandler } from "../../llm/handler";
 import type { LocalFile } from "../../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

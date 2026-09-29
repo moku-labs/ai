@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TerminalProviderError } from "../../errors";
 import {
   assetPriceUsd,
   bundledPrices,
@@ -8,7 +9,6 @@ import {
   roundUsd,
   videoCostUsd
 } from "../../prices";
-import { TerminalProviderError } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 import { createTestCtx, thrownBy } from "./fixtures";
 

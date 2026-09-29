@@ -1,11 +1,16 @@
 /**
  * @file codex provider plugin — types (Config/State/API), the
- * runner-compatible provider error classes, and the domain context type
- * shared by `api.ts`, `prices.ts`, `image/handler.ts` and `prompt/handler.ts`.
+ * runner-compatible provider error types (the classes live in `./errors`),
+ * and the domain context type shared by `api.ts`, `prices.ts`,
+ * `image/handler.ts` and `prompt/handler.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
+import type {
+  RetryableProviderError as RetryableProviderErrorClass,
+  TerminalProviderError as TerminalProviderErrorClass
+} from "./errors";
 
 /**
  * codex plugin configuration: which CLI to run, which image and text models
@@ -87,52 +92,13 @@ export type CodexApi = {
   info(): CodexInfo;
 };
 
-/**
- * Retryable failure: the CLI ran past `timeoutMs`. Carries `kind`, the
- * field the runner's `classifyError` reads to bucket it as retryable.
- */
-export class RetryableProviderError extends Error {
-  /** Retry classification read by the runner's classifyError. */
-  readonly kind: "timeout" | "network";
-
-  /**
-   * Creates a retryable provider error.
-   *
-   * @param message - Human-readable message (never the prompt).
-   * @param kind - Retry classification read by the runner.
-   * @example
-   * ```ts
-   * throw new RetryableProviderError("[ai] Codex timed out.", "timeout");
-   * ```
-   */
-  constructor(message: string, kind: "timeout" | "network") {
-    super(message);
-    this.name = "RetryableProviderError";
-    this.kind = kind;
-  }
-}
-
-/**
- * Terminal failure: CLI not startable, non-zero exit, no image written, or
- * no (valid) prompt-gen answer. Has no
- * `kind` and no `status`, so the runner buckets it as "unknown" (terminal,
- * never retried).
- */
-export class TerminalProviderError extends Error {
-  /**
-   * Creates a terminal provider error.
-   *
-   * @param message - Human-readable two-line message (never the prompt).
-   * @example
-   * ```ts
-   * throw new TerminalProviderError("[ai] Codex exited with code 1.\n  Run codex exec by hand.");
-   * ```
-   */
-  constructor(message: string) {
-    super(message);
-    this.name = "TerminalProviderError";
-  }
-}
+// Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
+// class re-export back into `declare class`, so `Codex.X` would pass tsc as a value that is
+// `undefined` at runtime. The classes ship as values in `CodexErrors` from the package root.
+/** Instance type of the retryable provider error; the class is `CodexErrors.RetryableProviderError`. */
+export type RetryableProviderError = RetryableProviderErrorClass;
+/** Instance type of the terminal provider error; the class is `CodexErrors.TerminalProviderError`. */
+export type TerminalProviderError = TerminalProviderErrorClass;
 
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";

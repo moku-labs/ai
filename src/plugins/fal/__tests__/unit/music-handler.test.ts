@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { MusicHandler, MusicRequest } from "../../../music/contract";
 import { encodeJobId } from "../../client/queue";
+import { TerminalProviderError } from "../../errors";
 import { createMusicHandler } from "../../music/handler";
-import { TerminalProviderError } from "../../types";
 import {
   bytesResponse,
   callsOf,

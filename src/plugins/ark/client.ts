@@ -7,10 +7,11 @@
  * `kind`, so the runner never classifies an ark failure as `unknown`.
  * `openApiCall` signs one control-plane call and unwraps the OpenAPI envelope.
  */
+
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import { arkRegions, controlPlaneUrl, OPENAPI_VERSION } from "./regions";
 import { signRequest } from "./sign";
 import type { ArkContext, ArkProviderError } from "./types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
 
 /**
  * HTTP method used against ark.

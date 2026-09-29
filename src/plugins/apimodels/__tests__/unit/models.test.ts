@@ -5,7 +5,7 @@ import type {
   VideoFile,
   VideoRequest
 } from "../../../video/contract";
-import { TerminalProviderError } from "../../types";
+import { TerminalProviderError } from "../../errors";
 import type { InputUrls, SeedanceBody, SubmitBody } from "../../video/models";
 import {
   apimodelsAliases,

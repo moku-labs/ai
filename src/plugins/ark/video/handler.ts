@@ -21,11 +21,11 @@ import {
   shorten,
   unreadableResponse
 } from "../client";
+import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import { DEFAULT_RESOLUTION, DEFAULT_SECONDS, resolveArkModel } from "../models";
 import { costUsd, estimateTokens, estimateUsd } from "../prices";
 import { dataPlaneUrl } from "../regions";
 import type { ArkContext } from "../types";
-import { FlaggedProviderError, TerminalProviderError } from "../types";
 import {
   assetRecordsOf,
   buildArkBody,

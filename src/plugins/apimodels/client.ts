@@ -7,6 +7,8 @@
  * `FlaggedProviderError` taxonomy. `apiData` reads the `{ code, msg, data }`
  * envelope, where a `code` other than 200 is read like the HTTP status.
  */
+
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import {
   AUTH_STATUSES,
   CONTENT_MODERATION,
@@ -15,7 +17,6 @@ import {
   RATE_LIMITED
 } from "./http";
 import type { UpstreamFailure } from "./types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
 import type { SubmitBody } from "./video/models";
 
 /**

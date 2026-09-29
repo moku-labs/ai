@@ -13,7 +13,7 @@ import {
   submitJob,
   waitForJob
 } from "../../client/queue";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import {
   bytesResponse,
   callsOf,

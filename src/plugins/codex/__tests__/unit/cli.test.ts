@@ -17,7 +17,7 @@ import {
   isBinResolvable,
   runCodex
 } from "../../cli";
-import { RetryableProviderError, TerminalProviderError } from "../../types";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { CODEX_401_STDERR, printStderr, writeFakeCodex } from "./fixtures";
 
 describe("buildCodexArguments", () => {

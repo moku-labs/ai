@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { PromptGenUnavailableError } from "../promptGen/contract";
-import { RetryableProviderError, TerminalProviderError } from "./types";
+import { RetryableProviderError, TerminalProviderError } from "./errors";
 
 /** File codex writes its final answer to (`-o`), inside the call dir. */
 export const LAST_MESSAGE_FILE = "last-message.txt";

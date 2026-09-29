@@ -8,8 +8,8 @@ import { promptGenPlugin } from "../../../promptGen";
 import { registryPlugin } from "../../../registry";
 import { translatePlugin } from "../../../translate";
 import { voiceoverPlugin } from "../../../voiceover";
+import { FlaggedProviderError } from "../../errors";
 import { openaiPlugin } from "../../index";
-import { FlaggedProviderError } from "../../types";
 
 // ---------------------------------------------------------------------------
 // Integration test: openai provider through the real createApp lifecycle —

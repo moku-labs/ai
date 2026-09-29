@@ -17,11 +17,11 @@ import {
   submitJob
 } from "../client/queue";
 import { uploadFiles } from "../client/upload";
+import { TerminalProviderError } from "../errors";
 import type { RequestLog, RequestLogEntry } from "../log";
 import { createRequestLog, withRequestLog } from "../log";
 import { resolvePrices } from "../prices";
 import type { FalContext, LocalFile } from "../types";
-import { TerminalProviderError } from "../types";
 import type { ResolvedImageModel } from "./models";
 import {
   checkImageAspect,

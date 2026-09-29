@@ -13,7 +13,7 @@ import {
   selectAssetFiles,
   usedAssetsOf
 } from "../../assets";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 import { fileNameOf } from "../../upload";
 import type { TempFiles } from "./fixtures";
 import {

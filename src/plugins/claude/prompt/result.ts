@@ -7,7 +7,7 @@ import type { ZodType } from "zod";
 import { z } from "zod";
 import { PromptGenUnavailableError } from "../../promptGen/contract";
 import type { ClaudeRun } from "../cli";
-import { TerminalProviderError } from "../types";
+import { TerminalProviderError } from "../errors";
 
 /** The answer of a successful run, with the CLI's own accounting. */
 export type ClaudeAnswer = {

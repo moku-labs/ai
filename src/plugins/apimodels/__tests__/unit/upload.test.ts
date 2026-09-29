@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile } from "../../../video/contract";
-import { RetryableProviderError, TerminalProviderError } from "../../types";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { fileNameOf, mapInSlots, SLOTS, shareInFlight, uploadFiles, uploadKey } from "../../upload";
 import type { TempFiles } from "./fixtures";
 import {

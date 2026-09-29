@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
+import { TerminalProviderError } from "../../errors";
 import { parseClaudeResult, parseSchemaAnswer } from "../../prompt/result";
-import { TerminalProviderError } from "../../types";
 import { claudeJson, NOT_LOGGED_IN_STDOUT, SUCCESS_STDOUT } from "./fixtures";
 
 const NOT_LOGGED_IN =

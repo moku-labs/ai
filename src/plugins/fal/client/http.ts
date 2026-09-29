@@ -7,8 +7,8 @@
  * taxonomy. It also narrows fal's untrusted JSON bodies, reads the key through
  * `ctx.env` (MC3) and redacts errors for the logs. Shared by every task.
  */
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
 import type { FalContext, FalProviderError } from "../types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 
 /**
  * HTTP method used against fal.
