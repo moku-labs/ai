@@ -56,12 +56,15 @@ export function isRetryableErrorClass(errorClass: ErrorClass): boolean {
  * neither is present. `"unknown"` is terminal: a programming error (a
  * `TypeError`, a wrong request shape) must never re-run a paid job.
  * Providers tag real transport failures with `kind: "network"`.
+ * `kind: "resubmit"` falls through to the status (503 is `http-5xx`,
+ * retried); the pipeline keeps it off the lane breaker. A poll error that
+ * classifies `"unknown"` marks the job expired, so the next run adopts it.
  *
  * @param error - The thrown error.
  * @returns The error's taxonomy class.
  * @example
  * ```ts
- * const errorClass = classifyError(error);
+ * classifyError({ kind: "resubmit", status: 503 }); // "http-5xx"
  * ```
  */
 export function classifyError(error: unknown): ErrorClass {
@@ -73,6 +76,22 @@ export function classifyError(error: unknown): ErrorClass {
   if (typeof error.status === "number" && error.status >= 500) return "http-5xx";
   if (typeof error.status === "number" && error.status >= 400) return "http-4xx";
   return "unknown";
+}
+
+/**
+ * Whether a provider tagged its error `kind: "resubmit"`: a verdict to submit
+ * the job again, not a sign the lane is unhealthy, so it never feeds the
+ * lane breaker.
+ *
+ * @param error - The error a failed attempt threw.
+ * @returns True when the error carries `kind: "resubmit"`.
+ * @example
+ * ```ts
+ * isResubmitVerdict({ kind: "resubmit", status: 503 }); // true
+ * ```
+ */
+export function isResubmitVerdict(error: unknown): boolean {
+  return isProviderErrorHint(error) && error.kind === "resubmit";
 }
 
 /**

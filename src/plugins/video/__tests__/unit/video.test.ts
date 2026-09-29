@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createVideoApi, isVideoHandler } from "../../api";
+import type { EstimateInput, EstimateRequest } from "../../contract";
 import type {
   Config,
   RegistryApi,
@@ -285,6 +286,18 @@ describe("standard tier: video plugin", () => {
       // @ts-expect-error -- missing required "model" field
       const bad: VideoRequest = { prompt: "push-in" };
       expect(bad).toBeDefined();
+    });
+
+    it("VideoHandler.estimate takes an EstimateRequest: inputs may still be $ref / $file", () => {
+      const refs: EstimateInput[] = [{ $file: "cast/anna.png" }, { $ref: "s01.key" }];
+      const unresolved: EstimateRequest = { model: "seedance-2.5-ref", prompt: "p", refs };
+      const handler: VideoHandler = {
+        estimate: estimated => ({ usd: (estimated.refs?.length ?? 0) * 0.5 })
+      };
+
+      expectTypeOf<VideoHandler["estimate"]>().parameter(0).toEqualTypeOf<EstimateRequest>();
+      expectTypeOf<VideoRequest>().toMatchTypeOf<EstimateRequest>();
+      expect(handler.estimate(unresolved)).toEqual({ usd: 1 });
     });
 
     it("accepts an optional endImage: VideoFile last frame", () => {

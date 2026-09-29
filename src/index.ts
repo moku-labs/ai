@@ -13,7 +13,7 @@
  * |---|---|---|
  * | journal (core) | `path` · `checkpointIntervalMs` · `busyTimeoutMs` | `".moku/journal.db"` · `30_000` · `5000` |
  * | store (core) | `dir` · `algo` | `".moku/store"` · `"sha256"` |
- * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{}` |
+ * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 } }`. A `lanes` override replaces the whole map: repeat this lane. |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
  * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
@@ -28,6 +28,7 @@
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
  * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
+ * | apimodels | `apiKeyEnv` · `baseUrl` · `assetGroup` · `timeoutMs` · `priceOverrides` | `"APIMODELS_API_KEY"` · `"https://api.apimodels.app/v1"` · `"moku-ai"` · `60_000` · `{}` |
  * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
@@ -49,6 +50,7 @@
 import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
+  apimodelsPlugin,
   arkPlugin,
   assetPlugin,
   buildfilePlugin,
@@ -85,6 +87,7 @@ const framework = createCore(coreConfig, {
     codexPlugin,
     claudePlugin,
     falPlugin,
+    apimodelsPlugin,
     arkPlugin,
     composePlugin,
     cliPlugin
@@ -92,9 +95,11 @@ const framework = createCore(coreConfig, {
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // Provider keys (FAL_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
+    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
     // the process environment first, then `.env.local` in the working directory.
-    env: { providers: [processEnv(), dotenv(".env.local")] }
+    env: { providers: [processEnv(), dotenv(".env.local")] },
+    // apimodels.app documents no rate limits: a conservative lane until real limits are known.
+    limits: { lanes: { "video/apimodels": { concurrency: 2, rpm: 20 } } }
   }
 });
 
@@ -122,6 +127,7 @@ export const createPlugin = framework.createPlugin;
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {
+  apimodelsPlugin,
   arkPlugin,
   assetPlugin,
   buildfilePlugin,
@@ -151,6 +157,7 @@ export { isPromptGenUnavailable, PromptGenUnavailableError } from "./plugins/pro
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
+  Apimodels,
   Ark,
   Asset,
   Buildfile,

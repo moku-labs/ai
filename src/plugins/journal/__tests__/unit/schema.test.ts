@@ -102,4 +102,28 @@ describe("migrateSchema", () => {
     );
     expect(columnsOf("attempts")).toEqual(expect.arrayContaining(["external_id", "job_state"]));
   });
+
+  it("adds the provider_records table to a journal from before it", () => {
+    driver.exec(`
+      CREATE TABLE runs (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, status TEXT NOT NULL,
+        glob TEXT NOT NULL, max_cost_usd REAL, finished_at INTEGER);
+    `);
+
+    createSchema(driver);
+
+    expect(columnsOf("provider_records")).toEqual([
+      "provider",
+      "account",
+      "kind",
+      "key",
+      "value",
+      "created_at"
+    ]);
+    const primaryKey = driver
+      .all<{ name: string; pk: number }>("PRAGMA table_info(provider_records)")
+      .filter(column => column.pk > 0)
+      .toSorted((a, b) => a.pk - b.pk)
+      .map(column => column.name);
+    expect(primaryKey).toEqual(["provider", "account", "kind", "key"]);
+  });
 });

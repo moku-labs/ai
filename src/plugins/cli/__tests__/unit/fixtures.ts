@@ -174,6 +174,10 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
     findLiveJob: vi.fn(),
     latestRun: vi.fn(),
     getItem: vi.fn(),
+    isOpen: vi.fn(),
+    findProviderRecord: vi.fn(),
+    putProviderRecords: vi.fn(),
+    deleteProviderRecord: vi.fn(),
     ...overrides.journal
   };
 

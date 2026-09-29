@@ -9,7 +9,13 @@ import {
   resolveHandler
 } from "../../pipeline";
 import { openClaim } from "../../state";
-import type { ClaimVerdict, UnstampedRunEvent } from "../../types";
+import type {
+  ClaimVerdict,
+  ExecutableHandler,
+  JobPoll,
+  ProviderErrorHint,
+  UnstampedRunEvent
+} from "../../types";
 import {
   type CallLog,
   createFakeRunnerContext,
@@ -1124,5 +1130,110 @@ describe("executeItem — cross-run dedupe claim", () => {
       await expect(claimed.mock.calls[0]?.[1].settled).resolves.toEqual({ kind: "open" });
       expect(ctx.state.claims.size).toBe(0);
     });
+  });
+});
+
+/**
+ * A job handler (`submit` + `poll`) whose first job ends `failed` with `error`
+ * and whose next job is done. Logs every submit and poll.
+ *
+ * @param log - Shared call-order log to append to.
+ * @param error - The error the first job fails with.
+ * @returns The fake job handler.
+ * @example
+ * ```ts
+ * const handler = failFirstJobHandler(log, { kind: "resubmit", status: 503 });
+ * ```
+ */
+function failFirstJobHandler(log: CallLog, error: ProviderErrorHint): ExecutableHandler {
+  let submits = 0;
+  return {
+    estimate: () => ({ usd: 0.1 }),
+    submit: async () => {
+      submits += 1;
+      log.push(`handler.submit(job-${submits})`);
+      return { jobId: `job-${submits}` };
+    },
+    poll: async (jobId): Promise<JobPoll> => {
+      log.push(`handler.poll(${jobId})`);
+      if (jobId === "job-1") return { state: "failed", error };
+      return {
+        state: "done",
+        video: new TextEncoder().encode("clip"),
+        mimeType: "video/mp4",
+        costUsd: 0.5
+      };
+    }
+  };
+}
+
+/**
+ * Runs one job item whose first job fails with `error`, and returns what it logged and reported.
+ *
+ * @param error - The error the first job fails with.
+ * @returns The call log, the stream records and the item id.
+ * @example
+ * ```ts
+ * const { log } = await runFailFirstJob({ status: 503 });
+ * ```
+ */
+async function runFailFirstJob(
+  error: ProviderErrorHint
+): Promise<{ log: CallLog; events: UnstampedRunEvent[]; itemId: string }> {
+  const log: CallLog = [];
+  const handler = failFirstJobHandler(log, error);
+  const ctx = createFakeRunnerContext(log, {
+    config: { retryBaseMs: 1 },
+    registry: { resolve: (): unknown => handler }
+  });
+  const item = fakeItemRow();
+  const { report, events } = collectReports();
+
+  await executeItem(
+    ctx,
+    item,
+    fakePlan(3),
+    createDrainController(undefined),
+    report,
+    Promise.resolve()
+  );
+
+  return { log, events, itemId: item.id };
+}
+
+// ---------------------------------------------------------------------------
+// executeItem — a provider's "submit again" verdict retries off the lane breaker
+// ---------------------------------------------------------------------------
+
+describe("executeItem — a job failed with kind:resubmit", () => {
+  it("re-queues and re-submits, and never reports a retryable-error to the lane breaker", async () => {
+    const { log, events, itemId } = await runFailFirstJob({ kind: "resubmit", status: 503 });
+
+    expect(events.map(event => event.type)).toEqual([
+      "item:queued",
+      "item:dispatching",
+      "item:retry",
+      "item:dispatching",
+      "item:done"
+    ]);
+    expect(events[2]).toMatchObject({ errorClass: "http-5xx", attempt: 1 });
+    expect(log).toContain(`journal.markFailed(${itemId},retry)`);
+    expect(log.filter(entry => entry.startsWith("handler.submit"))).toEqual([
+      "handler.submit(job-1)",
+      "handler.submit(job-2)"
+    ]);
+    expect(log.filter(entry => entry.startsWith("limits.reportOutcome"))).toEqual([
+      "limits.reportOutcome(ok)"
+    ]);
+  });
+
+  it("a plain 503 job failure still reports a retryable-error to the lane breaker", async () => {
+    const { log, events } = await runFailFirstJob({ status: 503 });
+
+    expect(events.at(-1)?.type).toBe("item:done");
+    expect(log.filter(entry => entry.startsWith("limits.reportOutcome"))).toEqual([
+      "limits.reportOutcome(retryable-error)",
+      "limits.reportOutcome(ok)"
+    ]);
   });
 });

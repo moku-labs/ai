@@ -197,6 +197,7 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 | Job `COMPLETED` + `generation_timeout` / `downstream_service_unavailable` / `internal_server_error` | `failed` with a retryable 503: the next attempt submits again |
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
 | `FAL_KEY` not set, unknown model, missing image, too many refs, end frame on a model without one | Plain error: terminal after one attempt, nothing billed |
+| Poll with `FAL_KEY` not set, or the status call answers 401 / 403 | Plain error with no `status` and no `kind` (`[ai] fal cannot poll without a valid API key.`): the runner marks the job `expired`, not `failed`, so the next run adopts the same job instead of paying again |
 
 Messages start with `[ai] fal …` and never contain the key. Logs carry ids and statuses, never prompts.
 
