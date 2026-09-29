@@ -45,7 +45,9 @@ const EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
   "audio/ogg": "ogg",
   "audio/mp4": "m4a",
   "text/plain": "txt",
-  "application/json": "json"
+  "application/json": "json",
+  // Asset records (the `asset` plugin's MIME) export as `<label>.json`.
+  "application/vnd.moku.asset+json": "json"
 };
 
 /**

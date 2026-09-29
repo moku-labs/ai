@@ -22,6 +22,7 @@
  * | promptGen | `defaultProvider` | `"openai"` |
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
+ * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` |
@@ -46,6 +47,7 @@
 import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
+  assetPlugin,
   buildfilePlugin,
   cliPlugin,
   codexPlugin,
@@ -73,6 +75,7 @@ const framework = createCore(coreConfig, {
     promptGenPlugin,
     imagePlugin,
     videoPlugin,
+    assetPlugin,
     elevenlabsPlugin,
     openaiPlugin,
     codexPlugin,
@@ -113,6 +116,7 @@ export const createPlugin = framework.createPlugin;
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {
+  assetPlugin,
   buildfilePlugin,
   cliPlugin,
   codexPlugin,
@@ -134,9 +138,11 @@ export {
 
 // ─── Helpers ──────────────────────────────────────────────────
 export { defineBuild } from "./plugins/buildfile";
+export { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "./plugins/asset/contract";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
+  Asset,
   Buildfile,
   Cli,
   Codex,
