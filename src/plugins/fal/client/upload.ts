@@ -1,22 +1,19 @@
 /**
- * @file fal input upload — turns local `VideoFile`s into URLs fal can read.
- * `"storage"` mode initiates a fal storage upload, PUTs the bytes to the
- * presigned URL and sends the returned file URL. When an upload fails, the
- * rest of that request falls back to base64 data URIs (logged once as
- * `fal:upload:fallback`). `"data-uri"` mode always inlines. The first frame
- * goes first, then the refs and the end frame (last) in parallel, at most
- * {@link UPLOAD_SLOTS} at a time. A storage URL is cached in `state.uploads`
- * by MIME type and content sha256, so the same bytes are uploaded once per
- * process.
+ * @file fal input upload — turns resolved local files into URLs fal can read,
+ * for every task. `"storage"` mode initiates a fal storage upload, PUTs the
+ * bytes to the presigned URL and sends the returned file URL. When an upload
+ * fails, the rest of that upload session falls back to base64 data URIs
+ * (logged once as `fal:upload:fallback`). `"data-uri"` mode always inlines.
+ * Files of one call upload in parallel, at most {@link UPLOAD_SLOTS} at a
+ * time, in order. A storage URL is cached in `state.uploads` by MIME type and
+ * content sha256, so the same bytes are uploaded once per process, across tasks.
  */
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { VideoFile } from "../video/contract";
-import { falFetch, parseJson, readString } from "./client";
-import type { SplitReferences, UploadedUrls } from "./models";
-import type { FalContext, UploadMode } from "./types";
-import { RetryableProviderError, TerminalProviderError } from "./types";
+import type { FalContext, LocalFile, UploadMode } from "../types";
+import { RetryableProviderError, TerminalProviderError } from "../types";
+import { falFetch, parseJson, readString } from "./http";
 
 /**
  * Per-call upload options.
@@ -44,13 +41,28 @@ type StorageTarget = {
 };
 
 /**
- * Mutable mode of one upload call: starts at `config.upload` and drops to
- * `"data-uri"` after an upload failure.
+ * Mutable mode of one upload session: starts at `config.upload` and drops to
+ * `"data-uri"` after an upload failure, for every later file of the session.
+ *
+ * @example
+ * ```ts
+ * const session: UploadSession = { mode: "storage" };
+ * ```
  */
-type UploadSession = { mode: UploadMode };
+export type UploadSession = {
+  /** Current mode; `"data-uri"` after the first failed upload. */
+  mode: UploadMode;
+};
 
-/** How many ref and end-frame uploads of one request run at once. */
-const UPLOAD_SLOTS = 4;
+/**
+ * How many uploads of one call run at once.
+ *
+ * @example
+ * ```ts
+ * UPLOAD_SLOTS; // => 4
+ * ```
+ */
+export const UPLOAD_SLOTS = 4;
 
 /** File extensions by MIME type, for the storage file name. */
 const EXTENSIONS: Readonly<Record<string, string>> = {
@@ -78,7 +90,7 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
  * fileNameOf({ path: "/a/b.png", mimeType: "image/png", hash: "abcd1234abcd1234ffff" }); // => "abcd1234abcd1234.png"
  * ```
  */
-export function fileNameOf(file: VideoFile): string {
+export function fileNameOf(file: LocalFile): string {
   const fromPath = path.extname(file.path).slice(1).toLowerCase();
   const extension = EXTENSIONS[file.mimeType] ?? (fromPath === "" ? "bin" : fromPath);
   return `${file.hash.slice(0, 16)}.${extension}`;
@@ -106,7 +118,7 @@ export function toDataUri(bytes: Uint8Array, mimeType: string): string {
  * @returns The bytes.
  * @throws {Error} A plain (terminal) error when the file cannot be read.
  */
-async function readInput(file: VideoFile): Promise<Uint8Array> {
+async function readInput(file: LocalFile): Promise<Uint8Array> {
   try {
     return new Uint8Array(await readFile(file.path));
   } catch {
@@ -143,7 +155,7 @@ function statusOf(error: unknown): number | undefined {
  */
 async function initiate(
   ctx: FalContext,
-  file: VideoFile,
+  file: LocalFile,
   options: UploadOptions
 ): Promise<StorageTarget> {
   const response = await falFetch({
@@ -183,12 +195,12 @@ function uploadKey(mimeType: string, bytes: Uint8Array): string {
 }
 
 /**
- * Switches the call to data URIs after a failed upload. Only the first
- * failure of a call logs `fal:upload:fallback`, also when parallel uploads
+ * Switches the session to data URIs after a failed upload. Only the first
+ * failure of a session logs `fal:upload:fallback`, also when parallel uploads
  * fail together.
  *
  * @param ctx - Plugin context (log).
- * @param session - The call's upload mode.
+ * @param session - The session's upload mode.
  * @param error - What the upload threw.
  */
 function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void {
@@ -198,11 +210,11 @@ function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void
 
 /**
  * Uploads one file to fal storage. Returns undefined, after switching the
- * call to data URIs, when the initiate call or the PUT fails; a caller abort
- * is rethrown.
+ * session to data URIs, when the initiate call or the PUT fails; a caller
+ * abort is rethrown.
  *
  * @param ctx - Plugin context.
- * @param session - The call's upload mode.
+ * @param session - The session's upload mode.
  * @param file - The input file.
  * @param bytes - The file bytes.
  * @param options - Key and caller signal.
@@ -211,7 +223,7 @@ function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void
 async function uploadToStorage(
   ctx: FalContext,
   session: UploadSession,
-  file: VideoFile,
+  file: LocalFile,
   bytes: Uint8Array,
   options: UploadOptions
 ): Promise<string | undefined> {
@@ -242,19 +254,30 @@ async function uploadToStorage(
 }
 
 /**
+ * Starts an upload session at `config.upload`.
+ *
+ * @param ctx - Plugin context (`config.upload`).
+ * @returns A fresh session.
+ */
+export function createUploadSession(ctx: FalContext): UploadSession {
+  return { mode: ctx.config.upload };
+}
+
+/**
  * Makes one file readable by fal: its cached storage URL, a new storage
  * upload, or a data URI.
  *
  * @param ctx - Plugin context (`config.upload`, `state.uploads`).
- * @param session - The call's upload mode (downgraded on an upload failure).
+ * @param session - The session's upload mode (downgraded on an upload failure).
  * @param file - The input file.
  * @param options - Key and caller signal.
  * @returns A file URL or a data URI.
+ * @throws {Error} When the file cannot be read, or the caller aborted.
  */
-async function uploadOne(
+export async function uploadOne(
   ctx: FalContext,
   session: UploadSession,
-  file: VideoFile,
+  file: LocalFile,
   options: UploadOptions
 ): Promise<string> {
   const bytes = await readInput(file);
@@ -315,47 +338,22 @@ async function mapInSlots<Item, Result>(
 }
 
 /**
- * Makes a request's first frame, refs and end frame readable by fal: the
- * first frame first, then the image, audio and video refs and the end frame
- * (last) in parallel, at most {@link UPLOAD_SLOTS} at a time. After an upload
- * failure the remaining files of this call go as data URIs.
+ * Makes files readable by fal, {@link UPLOAD_SLOTS} at a time, keeping their
+ * order. After an upload failure the remaining files of the session go as
+ * data URIs. An empty list makes no call.
  *
  * @param ctx - Plugin context (`config.upload`, `config.uploadUrl`, `config.timeoutMs`, `state.uploads`, `log`).
- * @param image - The first frame.
- * @param references - Image, audio and video refs, already checked against the model's limits.
+ * @param files - The resolved files, in the order the body lists them.
  * @param options - Key and caller signal.
- * @param endImage - The end frame, when the request has one (the model was checked to take it).
- * @returns URLs (or data URIs) for the image, for each image, audio and video ref in order, and for the end frame when there is one.
+ * @param session - An open session to continue (the video first frame opens one); a new one by default.
+ * @returns One URL (or data URI) per file, in file order.
  * @throws {Error} When a file cannot be read, or the caller aborted.
  */
-export async function uploadInputs(
+export function uploadFiles(
   ctx: FalContext,
-  image: VideoFile,
-  references: SplitReferences,
+  files: readonly LocalFile[],
   options: UploadOptions,
-  endImage?: VideoFile
-): Promise<UploadedUrls> {
-  // The first frame goes first, alone; a failure here flips the session to data-uri
-  const session: UploadSession = { mode: ctx.config.upload };
-  const imageUrl = await uploadOne(ctx, session, image, options);
-
-  // Every ref, then the end frame, in parallel, UPLOAD_SLOTS at a time, in request order
-  const files = [...references.images, ...references.audio, ...references.videos];
-  if (endImage !== undefined) files.push(endImage);
-  const urls = await mapInSlots(files, UPLOAD_SLOTS, file =>
-    uploadOne(ctx, session, file, options)
-  );
-
-  // Slice the flat URL list back into the three groups and the end frame
-  const audioStart = references.images.length;
-  const videoStart = audioStart + references.audio.length;
-  const endStart = videoStart + references.videos.length;
-  const base: UploadedUrls = {
-    image: imageUrl,
-    refs: urls.slice(0, audioStart),
-    audioRefs: urls.slice(audioStart, videoStart),
-    videoRefs: urls.slice(videoStart, endStart)
-  };
-  const endUrl = urls[endStart];
-  return endUrl === undefined ? base : { ...base, endImage: endUrl };
+  session: UploadSession = createUploadSession(ctx)
+): Promise<string[]> {
+  return mapInSlots(files, UPLOAD_SLOTS, file => uploadOne(ctx, session, file, options));
 }

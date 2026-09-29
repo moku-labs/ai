@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile } from "../../../video/contract";
-import { fileNameOf, toDataUri, uploadInputs } from "../../upload";
+import { fileNameOf, toDataUri } from "../../client/upload";
+import { uploadInputs } from "../../video/upload";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

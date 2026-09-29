@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { VideoFile, VideoRequest } from "../../../video/contract";
-import type { UploadedUrls } from "../../models";
-import { buildFalBody, endFrameAliases, falAliases, resolveFalModel } from "../../models";
-import { bundledPrices, videoCostUsd } from "../../prices";
+import { toDataUri } from "../../client/upload";
 import type { EstimateRequest } from "../../types";
-import { toDataUri, uploadInputs } from "../../upload";
 import { createVideoHandler } from "../../video/handler";
+import type { UploadedUrls } from "../../video/models";
+import { buildFalBody, endFrameAliases, falAliases, resolveFalModel } from "../../video/models";
+import { videoPrices as bundledPrices, videoCostUsd } from "../../video/prices";
+import { uploadInputs } from "../../video/upload";
 import type { TempFiles } from "./fixtures";
 import {
   callsOf,

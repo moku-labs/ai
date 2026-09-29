@@ -1,13 +1,14 @@
 /**
  * @file fal thin fetch client (global fetch — Node >= 24 and Bun). One
  * `falFetch` helper performs every HTTP call of this plugin (queue submit,
- * status, result, storage upload, CDN download) and owns the one place that
- * classifies transport and HTTP failures into the plugin's
+ * status, result, storage upload, CDN download, chat POST) and owns the one
+ * place that classifies transport and HTTP failures into the plugin's
  * `RetryableProviderError` / `TerminalProviderError` / `FlaggedProviderError`
- * taxonomy. It also narrows fal's untrusted JSON error bodies.
+ * taxonomy. It also narrows fal's untrusted JSON bodies, reads the key through
+ * `ctx.env` (MC3) and redacts errors for the logs. Shared by every task.
  */
-import type { FalProviderError } from "./types";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
+import type { FalContext, FalProviderError } from "../types";
+import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 
 /**
  * HTTP method used against fal.
@@ -94,6 +95,23 @@ export function readString(value: unknown, key: string): string | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const field: unknown = Reflect.get(value, key);
   return typeof field === "string" ? field : undefined;
+}
+
+/**
+ * Reads a finite number property off an untrusted JSON value.
+ *
+ * @param value - Parsed JSON (anything).
+ * @param key - Property name.
+ * @returns The number, or undefined when absent, not a number, or not finite.
+ * @example
+ * ```ts
+ * readNumber({ width: 1152, height: "2048" }, "width"); // => 1152
+ * ```
+ */
+export function readNumber(value: unknown, key: string): number | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const field: unknown = Reflect.get(value, key);
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
 }
 
 /**
@@ -437,4 +455,62 @@ export function jobFailure(body: unknown): FalProviderError {
     return new FlaggedProviderError(`[ai] fal flagged the job (content policy): ${text}`);
   }
   return new TerminalProviderError(`[ai] fal job failed (${label}): ${text}`, 400);
+}
+
+/**
+ * Reads the fal key through the injected env API (MC3), at request time.
+ *
+ * @param ctx - Plugin context (`config.apiKeyEnv`, `env`).
+ * @returns The key, or undefined when it is not set or empty.
+ */
+export function readApiKey(ctx: FalContext): string | undefined {
+  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
+  return apiKey === undefined || apiKey === "" ? undefined : apiKey;
+}
+
+/**
+ * Reads the fal key for a request that needs it (submit, poll, chat POST).
+ *
+ * @param ctx - Plugin context (`config.apiKeyEnv`, `env`).
+ * @returns The key.
+ * @throws {Error} A plain (terminal) two-line error when the key is not set.
+ */
+export function resolveApiKey(ctx: FalContext): string {
+  const apiKey = readApiKey(ctx);
+  if (apiKey === undefined) {
+    throw new Error(
+      `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
+    );
+  }
+  return apiKey;
+}
+
+/**
+ * Loggable fields of a failure: its class, status and kind only, never the
+ * message (it may quote fal's text). An error outside the plugin's taxonomy
+ * (an abort, a plain error) is `errorType: "error"`.
+ *
+ * @param error - Any thrown value.
+ * @returns Redacted log fields.
+ * @example
+ * ```ts
+ * redacted(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => { errorType: "terminal", status: 400 }
+ * redacted(new RetryableProviderError("[ai] fal request timed out.", { kind: "timeout" })); // => { errorType: "retryable", status: undefined, kind: "timeout" }
+ * redacted(new Error("x")); // => { errorType: "error" }
+ * ```
+ */
+export function redacted(error: unknown): {
+  errorType: "retryable" | "terminal" | "flagged" | "error";
+  status?: number | undefined;
+  kind?: string;
+} {
+  if (error instanceof FlaggedProviderError) return { errorType: "flagged", kind: error.kind };
+  if (error instanceof TerminalProviderError) {
+    return { errorType: "terminal", status: error.status };
+  }
+  if (!(error instanceof RetryableProviderError)) return { errorType: "error" };
+
+  // A retryable error names its kind only when it has one, so HTTP failures log as before.
+  if (error.kind === undefined) return { errorType: "retryable", status: error.status };
+  return { errorType: "retryable", status: error.status, kind: error.kind };
 }

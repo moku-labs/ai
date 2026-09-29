@@ -4,7 +4,7 @@
  * inputs and queues the job; `poll` reads the status once and, when the job
  * is done, fetches the result and downloads the clip. There is no `execute`:
  * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
- * (`../prices.ts`), so estimate and actual cost always agree.
+ * (`./prices.ts`), so estimate and actual cost always agree.
  */
 import { ASSET_MIME } from "../../asset/contract";
 import type {
@@ -14,14 +14,19 @@ import type {
   VideoJobPoll,
   VideoRequest
 } from "../../video/contract";
-import type { FalResponse } from "../client";
-import { falFetch, jobFailure, parseJson, readString } from "../client";
-import type { ResolvedFalModel, SplitReferences } from "../models";
-import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
-import { videoCostUsd } from "../prices";
-import type { FalContext, FalProviderError } from "../types";
+import type { FalResponse } from "../client/http";
+import {
+  falFetch,
+  jobFailure,
+  parseJson,
+  readApiKey,
+  readString,
+  redacted,
+  resolveApiKey
+} from "../client/http";
+import { isKeyRejection, pollKeyError } from "../client/queue";
+import type { FalContext } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
-import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
 import {
   decodeJobId,
@@ -30,6 +35,10 @@ import {
   parseSubmitResponse,
   parseVideoResult
 } from "./job";
+import type { ResolvedFalModel, SplitReferences } from "./models";
+import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "./models";
+import { videoCostUsd } from "./prices";
+import { uploadInputs } from "./upload";
 
 /** The fal video handler: the async form of the contract (no `execute`). */
 export type FalVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" | "poll">>;
@@ -63,69 +72,6 @@ const JOB_VERDICT_STATUSES: ReadonlySet<number> = new Set([BAD_REQUEST, UNPROCES
 
 /** Status carried by a result that could not be read, so the runner classifies it retryable (5xx). */
 const RETRY_STATUS = 503;
-
-/** Statuses fal answers for a bad or missing key. */
-const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
-
-/**
- * Reads the fal key through the injected env API (MC3), at request time.
- *
- * @param ctx - Plugin context.
- * @returns The key, or undefined when it is not set.
- */
-function readApiKey(ctx: FalContext): string | undefined {
-  const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
-  return apiKey === undefined || apiKey === "" ? undefined : apiKey;
-}
-
-/**
- * Reads the fal key for a submit.
- *
- * @param ctx - Plugin context.
- * @returns The key.
- * @throws {Error} A plain (terminal) two-line error when the key is not set.
- */
-function resolveApiKey(ctx: FalContext): string {
-  const apiKey = readApiKey(ctx);
-  if (apiKey === undefined) {
-    throw new Error(
-      `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or set fal.apiKeyEnv to the variable that holds your key.`
-    );
-  }
-  return apiKey;
-}
-
-/**
- * The error of a poll without a valid key: a plain `Error` with no `status`
- * and no `kind`. The runner classifies it `unknown` and marks the job
- * expired, so the next run adopts the same job instead of paying again.
- *
- * @param keyVariable - The variable that holds the fal key (`config.apiKeyEnv`).
- * @returns The error to throw.
- * @example
- * ```ts
- * pollKeyError("FAL_KEY").message; // => "[ai] fal cannot poll without a valid API key.\n  Fix FAL_KEY; the next run adopts the same job."
- * ```
- */
-function pollKeyError(keyVariable: string): Error {
-  return new Error(
-    `[ai] fal cannot poll without a valid API key.\n  Fix ${keyVariable}; the next run adopts the same job.`
-  );
-}
-
-/**
- * Whether a status call failure says fal refused the key.
- *
- * @param error - What the status call threw.
- * @returns True for a terminal 401 or 403.
- * @example
- * ```ts
- * isKeyRejection(new TerminalProviderError("[ai] fal rejected the request (HTTP 403).", 403)); // => true
- * ```
- */
-function isKeyRejection(error: unknown): boolean {
-  return error instanceof TerminalProviderError && AUTH_STATUSES.has(error.status);
-}
 
 /**
  * Returns the request's first frame; every current alias needs one.
@@ -300,27 +246,6 @@ export function splitReferences(
     throw tooManyReferencesError(model, "video references", model.maxVideoRefs, videos.length);
   }
   return { images, audio, videos };
-}
-
-/**
- * Loggable fields of a failure: class, status and kind only.
- *
- * @param error - The classified error.
- * @returns Redacted log fields.
- * @example
- * ```ts
- * redacted(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => { errorType: "terminal", status: 400 }
- * ```
- */
-function redacted(error: FalProviderError): {
-  errorType: "retryable" | "terminal" | "flagged";
-  status?: number | undefined;
-  kind?: string;
-} {
-  if (error instanceof FlaggedProviderError) return { errorType: "flagged", kind: error.kind };
-  if (error instanceof TerminalProviderError)
-    return { errorType: "terminal", status: error.status };
-  return { errorType: "retryable", status: error.status };
 }
 
 /**
