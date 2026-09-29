@@ -10,7 +10,7 @@ Contents:
 2. Public package surface
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
-   elevenlabs, openai, compose, cli (full types + APIs)
+   elevenlabs, openai, compose, cli, asset, ark (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -93,6 +93,12 @@ Value exports:
   Elevenlabs.TerminalProviderError, Elevenlabs.FlaggedProviderError, and the same three
   names under Openai.*
 - Cli.EXIT_CODES (const object)
+- assetPlugin, arkPlugin (plugin instances); ASSET_MIME, encodeAssetRecord,
+  parseAssetRecord (asset contract values); Ark.RetryableProviderError,
+  Ark.TerminalProviderError, Ark.FlaggedProviderError
+- Type namespaces Asset (AssetRequest, AssetRecord, AssetResult, AssetJobPoll,
+  AssetHandler, AssetFile, AssetGroupKind, AssetApi, Config) and Ark (Config, State,
+  ArkApi, ArkInfo, ArkRegion, EstimateRequest, error classes)
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
 - Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
@@ -801,6 +807,213 @@ Commands:
 - moku compose "<prompt>" [--emit build|script] [--out <path>] — compose.compose;
   writes --out or prints; exits 0 ok, 3 usage, 2 repair-exhausted, else 1.
 
+--------------------------------------------------------------------------------
+4.11 asset — app.asset (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "asset" task contract: register ONE portrait with a provider, in the
+provider's own account, and get back an opaque AssetRecord. Registration is its own
+build item that runs BEFORE any video item that uses it — never a retry after a
+refusal, never a fallback to the raw photo. The done item's stored artifact is the
+AssetRecord JSON under ASSET_MIME; a video item `$ref`s it and the runner hands the
+video handler a file with mimeType === ASSET_MIME. Ordering, dedupe, resume and reuse
+come from the runner/journal/store (no new tables); the only runner change is one MIME
+entry so an exported record is `<label>.json`. contract.ts imports nothing.
+
+```ts
+export const ASSET_MIME = "application/vnd.moku.asset+json";
+export type AssetFile = { path: string; mimeType: string; hash: string };
+export type AssetGroupKind = "aigc";               // only kind in v1
+export type AssetRequest = {
+  image: AssetFile;          // its sha256 hash is part of the artifact key
+  url?: string;              // public https URL of the same bytes (Ark CreateAsset fetches URLs only)
+  group?: AssetGroupKind;    // default "aigc"
+  name?: string;             // display name, max 64 chars; default: the file's base name
+  params?: Record<string, unknown>; // `generation` (number) = the re-register knob (changes the key)
+};
+export type AssetRecord = {
+  assetId: string;           // ark sends it as asset://<assetId>
+  provider: string;          // e.g. "ark"
+  account: string;           // provider-computed one-way account fingerprint
+  groupId: string;
+  registeredAt: number;      // epoch ms when the provider reported it active
+};
+export type AssetResult = {
+  body: Uint8Array;          // encodeAssetRecord(record) — the runner stores it as is
+  mimeType: typeof ASSET_MIME;
+  costUsd: number;
+  meta?: { assetId: string; account: string };
+};
+export type AssetJobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & AssetResult)
+  | { state: "failed"; error: unknown };   // refusal: error.kind === "content-policy" → item flagged
+export type AssetHandler = {               // submit + poll only (registration is async upstream)
+  estimate(request: AssetRequest): { usd: number };
+  submit(request: AssetRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll(jobId: string, request: AssetRequest, opts: { signal?: AbortSignal }): Promise<AssetJobPoll>;
+};
+export function encodeAssetRecord(record: AssetRecord): Uint8Array; // UTF-8 JSON, stable key order
+export function parseAssetRecord(bytes: Uint8Array): AssetRecord;   // throws the pinned error
+
+export type Config = {
+  defaultProvider: string;   // default "ark"
+  pollIntervalMs: number;    // default 3000 (facade only; the runner uses runner.pollIntervalMs)
+};
+export type AssetApi = {
+  // One-off, NOT journaled, NOT cached: submit once, poll every pollIntervalMs,
+  // parse the done body; a failed poll rethrows its error; abort rejects with the reason.
+  register(request: AssetRequest, opts?: { provider?: string; signal?: AbortSignal }): Promise<AssetRecord>;
+  estimate(request: AssetRequest, opts?: { provider?: string }): { usd: number }; // ark: 0
+  providers(): string[];     // registry.providers("asset")
+};
+```
+
+Build file:
+
+```yaml
+items:
+  - id: face-mira
+    task: asset
+    provider: ark
+    input: { image: { $file: faces/mira.png }, url: "https://cdn.example/faces/mira.png" }
+    params: { generation: 1 }   # bump to register again (dead asset, new account)
+  - id: clip-01
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, prompt: "image 1 walks into the rain",
+             refs: [{ $ref: face-mira }], seconds: 10 }
+```
+
+A flagged asset item leaves every item that `$ref`s it queued (logged runner:blocked),
+never dispatched. A video provider that cannot use assets (fal) refuses an ASSET_MIME
+input before any upload with a terminal 400.
+Errors: `[ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.`
+(also for a value that fails isAssetHandler) · `[ai] Not an asset record: <reason>.\n  Expected
+JSON with assetId, provider, account, groupId, registeredAt.`
+
+--------------------------------------------------------------------------------
+4.12 ark — app.ark (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Seedance straight from ByteDance. One instance = one region + one account. onInit
+registers ("video","ark") and ("asset","ark"); both are submit + poll (no execute).
+Registered AFTER fal in src/index.ts, so registry.providers("video")[0] === "fal" and
+fal stays the default video provider. Imports contract modules (asset/contract,
+video/contract) only — no import from fal. fetch + node:crypto, no package.
+
+Regions:
+- intl (default): BytePlus ModelArk — data plane https://ark.ap-southeast.bytepluses.com/api/v3
+  (video, Bearer ARK_API_KEY), control plane https://ark.ap-southeast-1.byteplusapi.com
+  (assets, HMAC-SHA256 signed with ARK_ACCESS_KEY/ARK_SECRET_KEY, sign region
+  ap-southeast-1, service ark), prices in USD.
+- cn: Volcengine Ark — https://ark.cn-beijing.volces.com/api/v3 and
+  https://open.volcengineapi.com, sign region cn-beijing, prices in CNY.
+Control-plane calls: POST {controlPlane}/?Action=<Action>&Version=2024-01-01, JSON body.
+
+Prerequisites for real use: "Seedance Advanced Creation Rights" on the account (asset
+API) and a one-time AIGC authorization letter in the console. groupId: leave null for
+the first run; the first registration of the process creates a group (CreateAssetGroup
+{ GroupType: "AIGC", Name: groupName }) and logs `ark:asset:group-created { groupId,
+hint }` — set config groupId to it afterwards (an account holds at most 50 groups).
+
+```ts
+export type Config = {
+  region: "intl" | "cn";           // default "intl"
+  apiKeyEnv: string;               // default "ARK_API_KEY" (video)
+  accessKeyEnv: string;            // default "ARK_ACCESS_KEY" (assets)
+  secretKeyEnv: string;            // default "ARK_SECRET_KEY" (assets)
+  baseUrl: string | null;          // default null = region data plane
+  controlUrl: string | null;       // default null = region control plane
+  groupId: string | null;          // default null = create one per process and log it
+  groupName: string;               // default "moku-ai"
+  timeoutMs: number;               // default 60_000
+  priceOverrides: Record<string, number>; // USD per 1M output tokens by model id
+  cnyPerUsd: number;               // default 7.1
+};
+export type State = {
+  group: Promise<string> | null;   // single-flight group id
+  account: string | null;          // fingerprint cache
+  activeAssets: Set<string>;       // GetAsset preflight cache (per process)
+  negativeWarned: boolean;
+};
+export type ArkInfo = {
+  provider: "ark"; region: "intl" | "cn";
+  configured: { video: boolean; assets: boolean }; // env presence via ctx.env.get, never throws
+  models: string[];                // the region's ids
+};
+export type ArkApi = { info(): ArkInfo };  // no network call
+// Error classes (values under the Ark namespace), same structural shape as fal's:
+// RetryableProviderError { status?, kind?: "timeout"|"network", retryAfterMs? },
+// TerminalProviderError { status, code? }, FlaggedProviderError { kind: "content-policy" }.
+```
+
+Models (ids and prices from summaries of the rate cards — verify in console):
+
+| model                        | region | max clip | resolutions        | refs img/vid/aud | price per 1M out tokens (base / with video input) |
+|------------------------------|--------|----------|--------------------|------------------|------|
+| dreamina-seedance-2-0-260128 | intl   | 15 s     | 480p, 720p, 1080p  | 9 / 3 / 3        | $7.0 / $4.3 |
+| dreamina-seedance-2-5-260628 | intl   | 30 s     | 480p, 720p         | 30 / 10 / 10     | $10.7 / $6.4 |
+| doubao-seedance-2-0-260128   | cn     | 15 s     | 480p, 720p, 1080p  | 9 / 3 / 3        | ¥46 / ¥28 |
+| doubao-seedance-2-5-260628   | cn     | 30 s     | 480p, 720p         | 30 / 10 / 10     | ¥70 / ¥42 |
+Min 4 s on every row; defaults seconds 5, resolution 720p, aspect 9:16; no row takes a seed.
+
+Video body (POST {base}/contents/generations/tasks): model; content[0] text (prompt as
+written); image → image_url role first_frame; endImage → last_frame; refs →
+reference_image (request order); a local image is data:<mime>;base64,...; an
+ASSET_MIME input is asset://<assetId>; seconds → duration; aspect → ratio (16:9, 9:16,
+1:1, 4:3, 3:4, 21:9, adaptive); resolution; audio → generate_audio; negative dropped
+(one ark:negative:ignored warning). params allowlist: refUrls, watermark (default
+false), seed (only with seed support), return_last_frame, execution_expires_after,
+priority; anything else → `[ai] Unknown ark param "<key>".\n  Allowed: ...`.
+params.refUrls: string[] — video/audio refs by PUBLIC https URL (caller hosts them; ark
+never uploads): .mp4/.mov → video_url reference_video, .mp3/.wav → audio_url
+reference_audio, after the image refs. A local video/audio file in refs →
+`[ai] ark takes video and audio references by public URL only.\n  Pass them in params.refUrls.`
+
+Asset preflight (in submit, before the POST, for every ASSET_MIME input):
+record.provider === "ark" · record.account === own fingerprint · GetAsset Status
+"Active" (cached per process). Any failure is terminal and nothing is POSTed.
+
+Poll (GET .../tasks/{id}): queued/running → pending; succeeded → download
+content.video_url at once (expires 24 h) → done video/mp4, meta { taskId, model,
+seconds, resolution, completionTokens, lastFrameUrl? }; failed + /SensitiveContent/
+code → flagged; failed other → terminal 400; expired/cancelled → terminal 410.
+Cost = usage.completion_tokens / 1e6 × price (withVideoInput when refUrls holds a video
+URL; priceOverrides[model] USD wins; cn ÷ cnyPerUsd). Estimate (no file read) = w×h×24×
+seconds/1024 tokens at the base price (480p 864×480, 720p 1280×720, 1080p 1920×1080).
+
+Face refusal: a SensitiveContent refusal of a request with a plain local image →
+`[ai] ark refused an image with a face: <code>.\n  Make it an asset item and $ref it.`;
+otherwise `[ai] ark flagged the request: <code>.\n  Change the prompt or the inputs.`
+No raw-photo fallback, no on-refusal registration (CreateAsset needs a public URL).
+
+Asset handler: estimate { usd: 0 }. submit: group "aigc" only · input.url must be a
+public https URL (`[ai] ark CreateAsset needs a public https url.\n  Pass input.url with
+the same bytes as input.image.`) — url is part of the artifact key · local image PNG/
+JPEG/WebP, < 30 MB, 300–6000 px per side, W/H 0.4–2.5 (header probe) · group (config
+groupId or single-flight CreateAssetGroup) · CreateAsset { GroupId, URL, AssetType:
+"Image", Name } → jobId "<groupId>/<assetId>". poll: GetAsset { Id } — Processing →
+pending; Active → done { body: encodeAssetRecord(...), mimeType: ASSET_MIME, costUsd:
+0, meta }; Failed → flagged `[ai] ark refused asset "<name>": <FailedReason>.\n  Items
+that use it will not run.` A dead asset: bump params.generation on the asset item.
+
+Account fingerprint: sha256("moku-ai:" + region + ":" + accessKey).slice(0, 12) —
+one-way, never contains the key; region included (same key in two regions = two
+accounts). Mismatch → `[ai] Asset "<assetId>" belongs to another ark account.\n  Register
+the portrait again with this account's keys.`
+
+HTTP mapping: 429 → retryable (Retry-After seconds or HTTP date); 5xx → retryable;
+timeout/network → retryable kind; 400/422 SensitiveContent → flagged; other 4xx →
+terminal `[ai] ark <Action or path> failed (<status> <code>): <message>.`. OpenAPI
+envelope ResponseMetadata.Error: Throttling*/RequestLimitExceeded*/FlowLimitExceeded*/
+TooManyRequests* → retryable 429; QuotaExceeded/AccessDenied*/InvalidAuthorization* →
+terminal with an entitlement hint; other → terminal.
+Logs (redacted — ids, codes, statuses; never keys or URLs): ark:video:submitted,
+ark:video:done, ark:video:failed, ark:asset:group-created, ark:asset:registered,
+ark:asset:refused, ark:negative:ignored.
+Tests are local on mocked fetch; __tests__/fixtures.ts copies documented examples
+(ark-mcp: asset library contract spec, Seedance adapter + contract tests, OpenAPI
+signing script) with a // source: per fixture, and built bodies toEqual them.
+
 ================================================================================
 5. COMPLETE EVENT CATALOG
 ================================================================================
@@ -847,7 +1060,8 @@ Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, a
 
 Structured log events (ctx.log; diagnostics, not bus events): runner:stale-item,
 elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/failed,
-openai:prompt-gen:done/failed.
+openai:prompt-gen:done/failed, ark:video:submitted/done/failed, ark:asset:group-created
+(warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn).
 
 ================================================================================
 6. CONFIG SCHEMA — EVERY FIELD
@@ -908,6 +1122,23 @@ openai:
   timeoutMs: number = 60_000
   priceOverrides: Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }> = {}
 
+asset:
+  defaultProvider: string = "ark"
+  pollIntervalMs: number = 3000                — facade poll cadence (Ark GetAsset guidance)
+
+ark:
+  region: "intl" | "cn" = "intl"               — BytePlus ModelArk or Volcengine Ark
+  apiKeyEnv: string = "ARK_API_KEY"            — Bearer key, video tasks
+  accessKeyEnv: string = "ARK_ACCESS_KEY"      — signed asset API
+  secretKeyEnv: string = "ARK_SECRET_KEY"
+  baseUrl: string | null = null                — null = region data plane
+  controlUrl: string | null = null             — null = region control plane
+  groupId: string | null = null                — null = create one per process, log its id (max 50 per account)
+  groupName: string = "moku-ai"
+  timeoutMs: number = 60_000
+  priceOverrides: Record<string, number> = {}  — USD per 1M output tokens by model id
+  cnyPerUsd: number = 7.1
+
 compose:
   provider: string = "openai"
   maxRepairAttempts: number = 2                — additional attempts; total = 1 + this
@@ -915,8 +1146,9 @@ compose:
 cli:
   plain: boolean = false                       — auto-true when !TTY or NO_COLOR (via ctx.env)
 
-Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY (names configurable via
-apiKeyEnv; read via ctx.env at execute time only), NO_COLOR (CLI plain mode).
+Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY,
+ARK_SECRET_KEY (names configurable via apiKeyEnv / accessKeyEnv / secretKeyEnv; read via
+ctx.env at execute time only), NO_COLOR (CLI plain mode).
 
 ================================================================================
 7. COMPLETE USAGE EXAMPLES
@@ -1145,6 +1377,12 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] ELEVENLABS_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.
 - [ai] OPENAI_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.
 - [ai] Compose could not produce a valid build file after <n> attempts.\n  Refine the prompt or write the build file manually with "moku new".
+- [ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.
+- [ai] Not an asset record: <reason>.\n  Expected JSON with assetId, provider, account, groupId, registeredAt.
+- [ai] ark refused an image with a face: <code>.\n  Make it an asset item and $ref it.
+- [ai] ark refused asset "<name>": <reason>.\n  Items that use it will not run.
+- [ai] ark asset "<assetId>" is <Status>.\n  Bump params.generation on its asset item to register again.
+- [ai] ark CreateAsset needs a public https url.\n  Pass input.url with the same bytes as input.image.
 
 ================================================================================
 9. DEPENDENCY GRAPH + INITIALIZATION ORDER
@@ -1181,6 +1419,10 @@ task facade sees its providers. Registration order makes elevenlabs the first (a
 therefore default) voiceover provider; openai is the only translate/prompt-gen
 provider at M0. Wave history: W1 registry+buildfile · W2 runner+voiceover+translate+
 promptGen · W3 elevenlabs+openai+compose · W4 cli.
+
+Later waves add image, video, codex and fal, then W5 asset (registered after video)
+and W6 ark (registered after fal, before compose — fal stays the first, default video
+provider; ark is the only asset provider).
 
 ================================================================================
 10. EXTENSION PATTERNS

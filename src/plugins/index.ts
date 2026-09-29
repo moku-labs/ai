@@ -6,6 +6,8 @@
 
 // ─── Plugin Instances ────────────────────────────────────────
 export { apimodelsPlugin } from "./apimodels";
+export { arkPlugin } from "./ark";
+export { assetPlugin } from "./asset";
 export { buildfilePlugin } from "./buildfile";
 export { claudePlugin } from "./claude";
 export { cliPlugin } from "./cli";
@@ -28,6 +30,8 @@ export { voiceoverPlugin } from "./voiceover";
 // ─── Plugin Types (namespace re-exports) ─────────────────────
 // Consumers access types as PluginName.Config, PluginName.Api, etc.
 export * as Apimodels from "./apimodels/types";
+export * as Ark from "./ark/types";
+export * as Asset from "./asset/types";
 export * as Buildfile from "./buildfile/types";
 export * as Claude from "./claude/types";
 export * as Cli from "./cli/types";

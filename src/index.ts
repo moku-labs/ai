@@ -22,12 +22,14 @@
  * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
+ * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
  * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` |
  * | apimodels | `apiKeyEnv` · `baseUrl` · `assetGroup` · `timeoutMs` · `priceOverrides` | `"APIMODELS_API_KEY"` · `"https://api.apimodels.app/v1"` · `"moku-ai"` · `60_000` · `{}` |
+ * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
@@ -49,6 +51,8 @@ import { dotenv, processEnv } from "@moku-labs/common";
 import { coreConfig, createCore } from "./config";
 import {
   apimodelsPlugin,
+  arkPlugin,
+  assetPlugin,
   buildfilePlugin,
   claudePlugin,
   cliPlugin,
@@ -77,19 +81,21 @@ const framework = createCore(coreConfig, {
     promptGenPlugin,
     imagePlugin,
     videoPlugin,
+    assetPlugin,
     elevenlabsPlugin,
     openaiPlugin,
     codexPlugin,
     claudePlugin,
     falPlugin,
     apimodelsPlugin,
+    arkPlugin,
     composePlugin,
     cliPlugin
   ],
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY) and PATH:
+    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
     // the process environment first, then `.env.local` in the working directory.
     env: { providers: [processEnv(), dotenv(".env.local")] },
     // apimodels.app documents no rate limits: a conservative lane until real limits are known.
@@ -122,6 +128,8 @@ export const createPlugin = framework.createPlugin;
 // ─── Plugins ──────────────────────────────────────────────────
 export {
   apimodelsPlugin,
+  arkPlugin,
+  assetPlugin,
   buildfilePlugin,
   claudePlugin,
   cliPlugin,
@@ -144,11 +152,14 @@ export {
 
 // ─── Helpers ──────────────────────────────────────────────────
 export { defineBuild } from "./plugins/buildfile";
+export { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "./plugins/asset/contract";
 export { isPromptGenUnavailable, PromptGenUnavailableError } from "./plugins/promptGen/contract";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
   Apimodels,
+  Ark,
+  Asset,
   Buildfile,
   Claude,
   Cli,

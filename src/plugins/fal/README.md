@@ -74,6 +74,8 @@ never silently cut down:
   Remove refs from input.refs, or use a model that takes more.
 ```
 
+**Asset refs.** fal cannot use registered assets. An `image`, `endImage` or ref that `$ref`s an `asset` item fails the item with a terminal HTTP 400 error before any upload. Use provider `ark` for those items.
+
 **End frame.** `input.endImage` is the last frame: the clip ends on this image. Like `image`, it is a `$ref` or
 `$file`. It goes out as `end_image_url` on the seven models with `end_image_url` in the End frame column; a body
 gets the field only when the request has an end frame, so a request without one sends the same body as before.
