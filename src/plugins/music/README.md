@@ -1,6 +1,6 @@
 # music
 
-> Owner of the "music" task contract and the typed one-off facade `app.music.*` — sync or async providers, one audited cast, zero state.
+> Owner of the "music" task contract and the typed one-off facade `app.music.*` — sync or async providers, one runtime guard, zero state.
 
 ## Purpose
 
@@ -14,8 +14,8 @@ both). The runner prefers `submit`/`poll` and journals the job id, so an aborted
 polling, never by re-submitting. The facade `generate` prefers `execute`, and runs its own
 in-memory submit/poll loop when the provider has no `execute`.
 
-The registry transports handlers as `unknown`. `api.ts` performs the ONE audited cast for the
-music task (spec/09 R9) behind the runtime guard `isMusicHandler`. A malformed registration fails
+The registry transports handlers as `unknown`. `api.ts` narrows them for the music task
+(spec/09 R9) with the runtime guard `isMusicHandler`, with no cast. A malformed registration fails
 with the pinned error, never a crash. The plugin is stateless: no `state.ts`, no lifecycle, no
 events.
 
@@ -160,7 +160,7 @@ app.music.providers(); // => ["fal"]
 
 ### Module-level export (not on `app.music`)
 
-- `isMusicHandler(candidate)` — the runtime guard of the audited cast.
+- `isMusicHandler(candidate)` — the runtime guard that narrows registry values.
 
 ## Events
 
