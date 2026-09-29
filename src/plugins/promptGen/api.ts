@@ -3,14 +3,30 @@
  *
  * Stateless facade over `registry`: resolves the configured (or requested)
  * provider's handler, performs the plugin's one audited cast to
- * `PromptGenHandler` (spec/09 R9), and either executes it immediately
- * (`generate`) or asks it for a cost estimate (`estimate`) — neither path is
- * journaled; the durable path is `app.runner.run()`.
+ * `PromptGenHandler` (spec/09 R9), and either executes it (`generate`) or asks
+ * it for a cost estimate (`estimate`). `generate` runs each attempt inside the
+ * provider's `limits` lane and walks the `fallback` chain while providers are
+ * unavailable. Neither path is journaled; the durable path is
+ * `app.runner.run()`.
  */
+import type { RegistryApi } from "../registry";
 import { registryPlugin } from "../registry";
-import type { PromptGenApi, PromptGenContext, PromptGenHandler, PromptGenRequest } from "./types";
+import { isPromptGenUnavailable } from "./contract";
+import type {
+  PromptGenApi,
+  PromptGenContext,
+  PromptGenHandler,
+  PromptGenRequest,
+  PromptGenResult
+} from "./types";
 
 const PROMPT_GEN_TASK = "prompt-gen";
+
+/** A provider chain with at least one name: its head is always tried. */
+type ProviderChain = [string, ...string[]];
+
+/** The abort signal forwarded to `limits.acquire` and `PromptGenHandler.execute`. */
+type SignalOptions = { signal?: AbortSignal };
 
 /**
  * Builds the pinned two-line "unknown provider" error.
@@ -20,7 +36,7 @@ const PROMPT_GEN_TASK = "prompt-gen";
  * @returns A two-line `Error` in the exact `[ai] No prompt-gen provider ...` format.
  * @example
  * ```ts
- * throw unknownProviderError("openai", []);
+ * unknownProviderError("acme", ["openai"]).message; // '[ai] No prompt-gen provider named "acme" is registered.\n  Available: openai.'
  * ```
  */
 function unknownProviderError(provider: string, available: string[]): Error {
@@ -40,7 +56,7 @@ function unknownProviderError(provider: string, available: string[]): Error {
  * @returns True when `value` has function-typed `estimate` and `execute` members.
  * @example
  * ```ts
- * if (!hasPromptGenHandlerShape(resolved)) throw new Error("malformed handler");
+ * hasPromptGenHandlerShape({ estimate: 123, execute: "nope" }); // false
  * ```
  */
 function hasPromptGenHandlerShape(value: unknown): boolean {
@@ -54,19 +70,26 @@ function hasPromptGenHandlerShape(value: unknown): boolean {
 }
 
 /**
- * Resolves the provider to use for a request: the caller's explicit
+ * Resolves the provider at the head of the chain: the caller's explicit
  * override, else the plugin's configured default.
  *
  * @param ctx - The promptGen plugin context.
  * @param requestedProvider - An explicit provider override, if given.
- * @returns The provider name to resolve against the registry.
- * @example
- * ```ts
- * const provider = resolveProviderName(ctx, undefined); // => ctx.config.defaultProvider
- * ```
+ * @returns The provider name to try first.
  */
 function resolveProviderName(ctx: PromptGenContext, requestedProvider: string | undefined): string {
   return requestedProvider ?? ctx.config.defaultProvider;
+}
+
+/**
+ * Tells whether `provider` has a registration for the "prompt-gen" task.
+ *
+ * @param registry - The registry API.
+ * @param provider - The provider name to look up.
+ * @returns True when a handler is registered under `provider`.
+ */
+function isRegistered(registry: RegistryApi, provider: string): boolean {
+  return registry.resolve(PROMPT_GEN_TASK, provider) !== undefined;
 }
 
 /**
@@ -78,10 +101,6 @@ function resolveProviderName(ctx: PromptGenContext, requestedProvider: string | 
  * @param provider - The provider name to resolve.
  * @returns The resolved `PromptGenHandler`.
  * @throws {Error} When `provider` is unregistered, or the registered value is malformed.
- * @example
- * ```ts
- * const handler = resolveHandler(ctx, "openai");
- * ```
  */
 function resolveHandler(ctx: PromptGenContext, provider: string): PromptGenHandler {
   const registry = ctx.require(registryPlugin);
@@ -104,83 +123,207 @@ function resolveHandler(ctx: PromptGenContext, provider: string): PromptGenHandl
 }
 
 /**
- * Builds the `execute()` options object from `generate()`'s caller-supplied
- * options, omitting `signal` entirely rather than setting it to `undefined`
- * (required under `exactOptionalPropertyTypes`).
+ * Builds the options forwarded to `limits.acquire` and `execute()`, omitting
+ * `signal` entirely rather than setting it to `undefined` (required under
+ * `exactOptionalPropertyTypes`).
  *
  * @param opts - The caller-supplied generate options, if any.
  * @param opts.signal - Optional abort signal to cancel the request.
- * @returns The options object to forward to `PromptGenHandler.execute`.
+ * @returns The signal options.
  * @example
  * ```ts
- * const executeOptions = toExecuteOptions({ signal: controller.signal });
+ * toSignalOptions({ provider: "codex" }); // {}
  * ```
  */
-function toExecuteOptions(opts?: { signal?: AbortSignal }): { signal?: AbortSignal } {
+function toSignalOptions(opts?: { signal?: AbortSignal }): SignalOptions {
   return opts?.signal === undefined ? {} : { signal: opts.signal };
+}
+
+/**
+ * The fallback providers that follow `head`: de-duplicated (first occurrence
+ * kept), without `head`, and without unregistered names, each of which is
+ * skipped with a `prompt-gen:fallback-skip` warn.
+ *
+ * @param ctx - The promptGen plugin context.
+ * @param head - The provider tried first.
+ * @returns The registered fallback providers, in order.
+ */
+function registeredFallback(ctx: PromptGenContext, head: string): string[] {
+  const registry = ctx.require(registryPlugin);
+  const later: string[] = [];
+
+  for (const provider of new Set(ctx.config.fallback)) {
+    if (provider === head) continue;
+    if (isRegistered(registry, provider)) {
+      later.push(provider);
+      continue;
+    }
+    ctx.log.warn("prompt-gen:fallback-skip", { provider, reason: "unregistered" });
+  }
+
+  return later;
+}
+
+/**
+ * Type guard: the chain still has a provider to try.
+ *
+ * @param chain - The remaining provider names.
+ * @returns True when `chain` has at least one name.
+ * @example
+ * ```ts
+ * hasNext(["codex"]); // true
+ * ```
+ */
+function hasNext(chain: string[]): chain is ProviderChain {
+  return chain.length > 0;
+}
+
+/**
+ * The `limits` lane of a provider's direct calls: the same key the runner uses.
+ *
+ * @param provider - The provider name.
+ * @returns The lane key.
+ * @example
+ * ```ts
+ * laneOf("claude"); // "prompt-gen/claude/default"
+ * ```
+ */
+function laneOf(provider: string): string {
+  return `${PROMPT_GEN_TASK}/${provider}/default`;
+}
+
+/**
+ * Tells whether an error is the `limits` rejection for an open breaker.
+ *
+ * @param error - Any thrown value.
+ * @returns True when `error.reason` is `"breaker-open"`.
+ * @example
+ * ```ts
+ * isBreakerOpen({ reason: "breaker-open" }); // true
+ * ```
+ */
+function isBreakerOpen(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return "reason" in error && error.reason === "breaker-open";
+}
+
+/**
+ * Tells whether the chain may move on after `error`: the caller did not
+ * abort, and the provider is unavailable or its lane's breaker is open.
+ *
+ * @param error - The error of the failed attempt.
+ * @param signal - The caller's abort signal, if any.
+ * @returns True when the next provider may be tried.
+ * @example
+ * ```ts
+ * canFallBack({ status: 429 }, undefined); // true
+ * ```
+ */
+function canFallBack(error: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted === true) return false;
+  return isBreakerOpen(error) || isPromptGenUnavailable(error);
+}
+
+/**
+ * The `reason` logged with a provider switch: `error.reason` when set, else
+ * `http-<status>`, else `"unavailable"`.
+ *
+ * @param error - The error that made the chain move on.
+ * @returns The reason text.
+ * @example
+ * ```ts
+ * fallbackReason({ status: 429 }); // "http-429"
+ * ```
+ */
+function fallbackReason(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "unavailable";
+  if ("reason" in error && typeof error.reason === "string") return error.reason;
+  if ("status" in error && typeof error.status === "number") return `http-${error.status}`;
+  return "unavailable";
+}
+
+/**
+ * One attempt: resolves the provider's handler, waits for its lane, executes,
+ * and releases the lane whatever happens. Never reports an outcome: breaker
+ * state stays owned by the runner.
+ *
+ * @param ctx - The promptGen plugin context.
+ * @param provider - The provider to ask.
+ * @param request - The prompt-gen request.
+ * @param options - The caller's abort signal.
+ * @returns The result, with `meta.provider` set to `provider`.
+ */
+async function attempt(
+  ctx: PromptGenContext,
+  provider: string,
+  request: PromptGenRequest,
+  options: SignalOptions
+): Promise<PromptGenResult> {
+  const handler = resolveHandler(ctx, provider);
+  const { release } = await ctx.limits.acquire(laneOf(provider), options);
+
+  try {
+    const result = await handler.execute(request, options);
+    return { ...result, meta: { ...result.meta, provider } };
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Walks the chain from its head: returns the first answer, moves on only
+ * while providers are unavailable, and rethrows the last error.
+ *
+ * @param ctx - The promptGen plugin context.
+ * @param chain - The providers left to try, head first.
+ * @param request - The prompt-gen request.
+ * @param options - The caller's abort signal.
+ * @returns The answering provider's result.
+ */
+async function generateFrom(
+  ctx: PromptGenContext,
+  chain: ProviderChain,
+  request: PromptGenRequest,
+  options: SignalOptions
+): Promise<PromptGenResult> {
+  const [provider, ...rest] = chain;
+
+  try {
+    return await attempt(ctx, provider, request, options);
+  } catch (error) {
+    if (!hasNext(rest) || !canFallBack(error, options.signal)) throw error;
+
+    ctx.log.warn("prompt-gen:fallback", {
+      from: provider,
+      to: rest[0],
+      reason: fallbackReason(error)
+    });
+    return generateFrom(ctx, rest, request, options);
+  }
 }
 
 /**
  * Creates the prompt-gen API surface (`generate`/`estimate`/`providers`).
  *
- * @param ctx - Plugin context: config plus a `registry`-narrowed `require`.
+ * @param ctx - Plugin context: config, a `registry`-narrowed `require`, `log` and `limits`.
  * @returns The `app.promptGen` API.
- * @example
- * ```ts
- * const api = createPromptGenApi(ctx);
- * const result = await api.generate({ prompt: "Describe a sunset." });
- * ```
  */
 export function createPromptGenApi(ctx: PromptGenContext): PromptGenApi {
   return {
-    /**
-     * One-off text generation. NOT journaled — the durable, resumable path
-     * is `app.runner.run()`.
-     *
-     * @param request - The prompt-gen request.
-     * @param opts - Optional abort signal and provider override.
-     * @param opts.signal - Optional abort signal to cancel the request.
-     * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
-     * @returns The generated text, cost, and metadata.
-     * @example
-     * ```ts
-     * await app.promptGen.generate({ prompt: "Describe a sunset." });
-     * ```
-     */
     generate: async (
       request: PromptGenRequest,
       opts?: { signal?: AbortSignal; provider?: string }
     ) => {
-      const provider = resolveProviderName(ctx, opts?.provider);
-      const handler = resolveHandler(ctx, provider);
-      return handler.execute(request, toExecuteOptions(opts));
+      const head = resolveProviderName(ctx, opts?.provider);
+      const chain: ProviderChain = [head, ...registeredFallback(ctx, head)];
+      return generateFrom(ctx, chain, request, toSignalOptions(opts));
     },
-    /**
-     * Cost estimate without executing.
-     *
-     * @param request - The prompt-gen request to estimate.
-     * @param opts - Optional provider override.
-     * @param opts.provider - Provider override; defaults to `config.defaultProvider`.
-     * @returns The estimated cost in USD.
-     * @example
-     * ```ts
-     * app.promptGen.estimate({ prompt: "Describe a sunset." });
-     * ```
-     */
+
     estimate: (request: PromptGenRequest, opts?: { provider?: string }) => {
       const provider = resolveProviderName(ctx, opts?.provider);
-      const handler = resolveHandler(ctx, provider);
-      return handler.estimate(request);
+      return resolveHandler(ctx, provider).estimate(request);
     },
-    /**
-     * Registered prompt-gen providers.
-     *
-     * @returns Provider names in registration order.
-     * @example
-     * ```ts
-     * app.promptGen.providers(); // ["openai"]
-     * ```
-     */
+
     providers: (): string[] => ctx.require(registryPlugin).providers(PROMPT_GEN_TASK)
   };
 }
