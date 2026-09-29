@@ -70,6 +70,63 @@ const STANDALONE_JPEG_MARKERS: ReadonlySet<number> = new Set([
 /** C0-CF markers that are not a start-of-frame (DHT, JPG, DAC). */
 const NON_SOF_MARKERS: ReadonlySet<number> = new Set([0xc4, 0xc8, 0xcc]);
 
+/** First byte of every JPEG marker; repeated, it is a fill byte. */
+const JPEG_MARKER_PREFIX = 0xff;
+
+/** Start-of-image marker code: the second byte of every JPEG file. */
+const JPEG_SOI = 0xd8;
+
+/** Bytes in a marker: the prefix and the code. */
+const JPEG_MARKER_BYTES = 2;
+
+/** Bytes a segment needs to be walked: its marker and its 16-bit length. */
+const JPEG_SEGMENT_HEADER_BYTES = 4;
+
+/** Offset of a segment's big-endian length, from its marker. */
+const JPEG_SEGMENT_LENGTH_OFFSET = 2;
+
+/** Offset of the frame height in a start-of-frame segment, from its marker. */
+const JPEG_SOF_HEIGHT_OFFSET = 5;
+
+/** Offset of the frame width in a start-of-frame segment, from its marker. */
+const JPEG_SOF_WIDTH_OFFSET = 7;
+
+/** First marker code of the C0-CF start-of-frame range. */
+const JPEG_SOF_FIRST = 0xc0;
+
+/** Last marker code of the C0-CF start-of-frame range. */
+const JPEG_SOF_LAST = 0xcf;
+
+/** Length of a RIFF FourCC tag. */
+const FOURCC_BYTES = 4;
+
+/** Offset of the `WEBP` form type in the RIFF header. */
+const WEBP_FORM_OFFSET = 8;
+
+/** Offset of the first WebP chunk's FourCC. */
+const WEBP_CHUNK_OFFSET = 12;
+
+/** Lossy and lossless WebP store each side in 14 bits. */
+const WEBP_SIDE_MASK = 0x3f_ff;
+
+/** Offset of the lossy (`VP8 `) frame width. */
+const VP8_WIDTH_OFFSET = 26;
+
+/** Offset of the lossy (`VP8 `) frame height. */
+const VP8_HEIGHT_OFFSET = 28;
+
+/** Offset of the lossless (`VP8L`) 32-bit size word, after its 0x2f signature byte. */
+const VP8L_SIZE_OFFSET = 21;
+
+/** Bits of the lossless width field, where the height field starts. */
+const VP8L_WIDTH_BITS = 14;
+
+/** Offset of the extended (`VP8X`) canvas width minus one. */
+const VP8X_WIDTH_OFFSET = 24;
+
+/** Offset of the extended (`VP8X`) canvas height minus one. */
+const VP8X_HEIGHT_OFFSET = 27;
+
 /**
  * Reads the ASCII text of `length` bytes at `offset`.
  *
@@ -162,6 +219,21 @@ function uint32BE(bytes: Uint8Array, offset: number): number {
 }
 
 /**
+ * Reads a little-endian 32-bit integer.
+ *
+ * @param bytes - File bytes.
+ * @param offset - Offset.
+ * @returns The value.
+ * @example
+ * ```ts
+ * uint32LE(new Uint8Array([0x00, 0x04, 0x00, 0x00]), 0); // => 1024
+ * ```
+ */
+function uint32LE(bytes: Uint8Array, offset: number): number {
+  return uint16LE(bytes, offset) + uint16LE(bytes, offset + 2) * 0x1_00_00;
+}
+
+/**
  * Keeps a size only when both sides are positive.
  *
  * @param width - Width in pixels.
@@ -189,6 +261,20 @@ function pngSize(bytes: Uint8Array): ImageSize | undefined {
 }
 
 /**
+ * Whether the bytes start with the JPEG start-of-image marker.
+ *
+ * @param bytes - File bytes.
+ * @returns True for a JPEG.
+ * @example
+ * ```ts
+ * isJpeg(new Uint8Array([0xff, 0xd8, 0xff])); // => true
+ * ```
+ */
+function isJpeg(bytes: Uint8Array): boolean {
+  return byteAt(bytes, 0) === JPEG_MARKER_PREFIX && byteAt(bytes, 1) === JPEG_SOI;
+}
+
+/**
  * JPEG size from the first start-of-frame marker, skipping every segment
  * before it (APP0/APP1 EXIF, DQT, DHT, ...).
  *
@@ -196,28 +282,69 @@ function pngSize(bytes: Uint8Array): ImageSize | undefined {
  * @returns The size, or undefined when this is not a JPEG or has no SOF.
  */
 function jpegSize(bytes: Uint8Array): ImageSize | undefined {
-  if (byteAt(bytes, 0) !== 0xff || byteAt(bytes, 1) !== 0xd8) return undefined;
+  if (!isJpeg(bytes)) return undefined;
 
-  let offset = 2;
-  while (offset + 3 < bytes.length) {
-    if (byteAt(bytes, offset) !== 0xff) return undefined;
+  // Walk the segments to the first start-of-frame: step over fill bytes and
+  // standalone markers, jump over every other segment by its length.
+  let offset = JPEG_MARKER_BYTES;
+  while (offset + JPEG_SEGMENT_HEADER_BYTES <= bytes.length) {
+    if (byteAt(bytes, offset) !== JPEG_MARKER_PREFIX) return undefined;
     const marker = byteAt(bytes, offset + 1);
-    if (marker === 0xff) {
+    if (marker === JPEG_MARKER_PREFIX) {
       offset += 1;
       continue;
     }
     if (STANDALONE_JPEG_MARKERS.has(marker)) {
-      offset += 2;
+      offset += JPEG_MARKER_BYTES;
       continue;
     }
 
-    const isStartOfFrame = marker >= 0xc0 && marker <= 0xcf && !NON_SOF_MARKERS.has(marker);
+    const isStartOfFrame =
+      marker >= JPEG_SOF_FIRST && marker <= JPEG_SOF_LAST && !NON_SOF_MARKERS.has(marker);
     if (isStartOfFrame) {
-      return positiveSize(uint16BE(bytes, offset + 7), uint16BE(bytes, offset + 5));
+      return positiveSize(
+        uint16BE(bytes, offset + JPEG_SOF_WIDTH_OFFSET),
+        uint16BE(bytes, offset + JPEG_SOF_HEIGHT_OFFSET)
+      );
     }
-    offset += 2 + uint16BE(bytes, offset + 2);
+    offset += JPEG_MARKER_BYTES + uint16BE(bytes, offset + JPEG_SEGMENT_LENGTH_OFFSET);
   }
   return undefined;
+}
+
+/**
+ * Whether the bytes are a RIFF container of form type `WEBP`.
+ *
+ * @param bytes - File bytes.
+ * @returns True for a WebP.
+ * @example
+ * ```ts
+ * isWebp(new TextEncoder().encode("RIFF\0\0\0\0WEBP")); // => true
+ * ```
+ */
+function isWebp(bytes: Uint8Array): boolean {
+  return (
+    ascii(bytes, 0, FOURCC_BYTES) === "RIFF" &&
+    ascii(bytes, WEBP_FORM_OFFSET, FOURCC_BYTES) === "WEBP"
+  );
+}
+
+/**
+ * Lossless WebP size from the bit-packed `VP8L` header.
+ *
+ * @param bytes - File bytes (a WebP whose first chunk is `VP8L`).
+ * @returns The size.
+ * @example
+ * ```ts
+ * losslessWebpSize(new Uint8Array(25)); // => { width: 1, height: 1 }
+ * ```
+ */
+function losslessWebpSize(bytes: Uint8Array): ImageSize | undefined {
+  // One little-endian 32-bit word: width - 1 in bits 0-13, height - 1 in bits 14-27, then alpha and version.
+  const bits = uint32LE(bytes, VP8L_SIZE_OFFSET);
+  const width = 1 + (bits & WEBP_SIDE_MASK);
+  const height = 1 + ((bits >>> VP8L_WIDTH_BITS) & WEBP_SIDE_MASK);
+  return positiveSize(width, height);
 }
 
 /**
@@ -228,23 +355,21 @@ function jpegSize(bytes: Uint8Array): ImageSize | undefined {
  * @returns The size, or undefined when this is not a WebP.
  */
 function webpSize(bytes: Uint8Array): ImageSize | undefined {
-  if (ascii(bytes, 0, 4) !== "RIFF" || ascii(bytes, 8, 4) !== "WEBP") return undefined;
+  if (!isWebp(bytes)) return undefined;
 
-  const chunk = ascii(bytes, 12, 4);
+  const chunk = ascii(bytes, WEBP_CHUNK_OFFSET, FOURCC_BYTES);
   if (chunk === "VP8 ") {
-    return positiveSize(uint16LE(bytes, 26) & 0x3f_ff, uint16LE(bytes, 28) & 0x3f_ff);
+    return positiveSize(
+      uint16LE(bytes, VP8_WIDTH_OFFSET) & WEBP_SIDE_MASK,
+      uint16LE(bytes, VP8_HEIGHT_OFFSET) & WEBP_SIDE_MASK
+    );
   }
-  if (chunk === "VP8L") {
-    const b0 = byteAt(bytes, 21);
-    const b1 = byteAt(bytes, 22);
-    const b2 = byteAt(bytes, 23);
-    const b3 = byteAt(bytes, 24);
-    const width = 1 + (((b1 & 0x3f) << 8) | b0);
-    const height = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
-    return positiveSize(width, height);
-  }
+  if (chunk === "VP8L") return losslessWebpSize(bytes);
   if (chunk === "VP8X") {
-    return positiveSize(1 + uint24LE(bytes, 24), 1 + uint24LE(bytes, 27));
+    return positiveSize(
+      1 + uint24LE(bytes, VP8X_WIDTH_OFFSET),
+      1 + uint24LE(bytes, VP8X_HEIGHT_OFFSET)
+    );
   }
   return undefined;
 }
@@ -293,6 +418,7 @@ function isSideInRange(side: number): boolean {
  * ```
  */
 export function checkAssetImage(bytes: Uint8Array, mimeType: string, name: string): ImageSize {
+  // Refuse a wrong file type or an oversized file before parsing any header.
   if (!ASSET_IMAGE_MIME_TYPES.includes(mimeType)) {
     throw new Error(
       `[ai] ark asset image "${name}" is ${mimeType}.\n  Use a PNG, JPEG or WebP file.`
@@ -300,8 +426,9 @@ export function checkAssetImage(bytes: Uint8Array, mimeType: string, name: strin
   }
   if (bytes.length >= MAX_ASSET_IMAGE_BYTES) {
     const megabytes = (bytes.length / BYTES_PER_MB).toFixed(1);
+    const maxMegabytes = MAX_ASSET_IMAGE_BYTES / BYTES_PER_MB;
     throw new Error(
-      `[ai] ark asset image "${name}" is ${megabytes} MB; it must be under 30 MB.\n  Use a smaller file.`
+      `[ai] ark asset image "${name}" is ${megabytes} MB; it must be under ${maxMegabytes} MB.\n  Use a smaller file.`
     );
   }
 
@@ -313,6 +440,7 @@ export function checkAssetImage(bytes: Uint8Array, mimeType: string, name: strin
     );
   }
 
+  // Hold the size to the documented limits: each side, then the width/height ratio.
   const { width, height } = size;
   if (!isSideInRange(width) || !isSideInRange(height)) {
     throw new Error(

@@ -89,7 +89,7 @@ const framework = createCore(coreConfig, {
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // Provider keys (FAL_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY) and PATH:
+    // Provider keys (FAL_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
     // the process environment first, then `.env.local` in the working directory.
     env: { providers: [processEnv(), dotenv(".env.local")] }
   }

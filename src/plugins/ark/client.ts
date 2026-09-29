@@ -130,6 +130,15 @@ const UNREADABLE_STATUS = 502;
 /** Status used for an OpenAPI envelope error inside a 2xx response. */
 const ENVELOPE_ERROR_STATUS = 400;
 
+/** HTTP 429 Too Many Requests: retryable, honouring Retry-After. */
+const HTTP_TOO_MANY_REQUESTS = 429;
+
+/** Lowest HTTP server-error status: every 5xx is retryable. */
+const HTTP_SERVER_ERROR_MIN = 500;
+
+/** Milliseconds in a second, for a Retry-After given in seconds. */
+const MS_PER_SECOND = 1000;
+
 /** HTTP statuses on which a SensitiveContent code is a refusal. */
 const REFUSAL_STATUSES: ReadonlySet<number> = new Set([400, 422]);
 
@@ -266,7 +275,7 @@ export function describeArkError(body: unknown): ArkErrorInfo {
 function retryAfterMsOf(value: string | null): number | undefined {
   if (value === null) return undefined;
   const seconds = Number(value);
-  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * 1000));
+  if (!Number.isNaN(seconds)) return Math.max(0, Math.round(seconds * MS_PER_SECOND));
   const dateMs = Date.parse(value);
   return Number.isNaN(dateMs) ? undefined : Math.max(0, dateMs - Date.now());
 }
@@ -394,29 +403,31 @@ function failureOf(
   info: ArkErrorInfo,
   localImage: boolean
 ): ArkProviderError {
+  // Rate limits and server errors are retryable, whatever the body says.
   const retryAfterMs = retryAfterMsOf(headers.get("retry-after"));
-  if (status === 429) {
+  if (status === HTTP_TOO_MANY_REQUESTS) {
     return new RetryableProviderError(`[ai] ark rate-limited ${label} (HTTP 429).`, {
       status,
       retryAfterMs
     });
   }
-  if (status >= 500) {
+  if (status >= HTTP_SERVER_ERROR_MIN) {
     return new RetryableProviderError(`[ai] ark returned HTTP ${status} for ${label}.`, { status });
   }
 
   // A 4xx: ark's code decides.
   const code = info.code ?? "";
-  if (REFUSAL_STATUSES.has(status) && code.includes("SensitiveContent")) {
-    return flaggedError(code, localImage);
-  }
-  if (info.envelope && isThrottlingCode(code)) {
+  const isRefusal = REFUSAL_STATUSES.has(status) && code.includes("SensitiveContent");
+  const isThrottled = info.envelope && isThrottlingCode(code);
+  const isEntitlement = info.envelope && isEntitlementCode(code);
+  if (isRefusal) return flaggedError(code, localImage);
+  if (isThrottled) {
     return new RetryableProviderError(
       `[ai] ark ${label} was throttled (${code}).\n  The runner retries it.`,
-      { status: 429, retryAfterMs }
+      { status: HTTP_TOO_MANY_REQUESTS, retryAfterMs }
     );
   }
-  if (info.envelope && isEntitlementCode(code)) {
+  if (isEntitlement) {
     return terminalFailure(label, status, info, ENTITLEMENT_HINT);
   }
   return terminalFailure(label, status, info);

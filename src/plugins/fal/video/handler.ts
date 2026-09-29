@@ -140,7 +140,7 @@ function rejectAssetReferences(request: VideoRequest): void {
 
   throw new TerminalProviderError(
     "[ai] fal cannot use asset references.\n  Use provider ark (or another asset provider) for items that $ref an asset.",
-    400
+    BAD_REQUEST
   );
 }
 

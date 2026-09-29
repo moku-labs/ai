@@ -249,7 +249,7 @@ app.asset.providers(); // => ["ark"]
 
 ### Module-level export (not on `app.asset`)
 
-- `isAssetHandler(candidate)`: the runtime guard of the one audited cast. It checks that
+- `isAssetHandler(candidate)`: the runtime guard that narrows the registry value, with no cast. It checks that
   `estimate`, `submit` and `poll` are all functions.
 
 ## Errors

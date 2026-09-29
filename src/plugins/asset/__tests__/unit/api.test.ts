@@ -296,8 +296,13 @@ describe("standard tier: asset plugin", () => {
       expectTypeOf<AssetApi["register"]>().returns.resolves.toEqualTypeOf<AssetRecord>();
     });
 
-    it("estimate returns { usd: number }", () => {
+    it("estimate accepts AssetRequest and returns { usd: number }", () => {
+      expectTypeOf<AssetApi["estimate"]>().parameter(0).toEqualTypeOf<AssetRequest>();
       expectTypeOf<AssetApi["estimate"]>().returns.toEqualTypeOf<{ usd: number }>();
+    });
+
+    it("providers returns string[]", () => {
+      expectTypeOf<AssetApi["providers"]>().returns.toEqualTypeOf<string[]>();
     });
 
     it("rejects a request without an image", () => {

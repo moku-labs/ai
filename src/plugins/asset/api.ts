@@ -1,10 +1,10 @@
 /**
  * @file asset plugin — API factory (`app.asset.*`).
  *
- * Owns the ONE audited cast for the "asset" task: registry transports
- * providers' `AssetHandler` values as `unknown` (spec/09 R9's "genuine
- * dynamic boundary"), and this file narrows them back behind a runtime
- * shape guard. Registration is async upstream, so the facade always runs an
+ * Owns the narrowing for the "asset" task: registry transports providers'
+ * `AssetHandler` values as `unknown` (spec/09 R9's "genuine dynamic
+ * boundary"), and this file narrows them back behind a runtime shape guard,
+ * with no cast. Registration is async upstream, so the facade always runs an
  * in-memory, abortable submit/poll loop and parses the done `body`.
  */
 import { registryPlugin } from "../registry";
@@ -23,13 +23,13 @@ import type { AssetApi, AssetContext, AssetHandler, AssetRecord, AssetRequest } 
  * ```
  */
 function hasFunction(candidate: object, key: string): boolean {
-  return typeof (candidate as Record<string, unknown>)[key] === "function";
+  return typeof Reflect.get(candidate, key) === "function";
 }
 
 /**
  * Runtime shape guard narrowing the registry's opaque `unknown` into an
  * `AssetHandler`: `estimate`, `submit` and `poll` are all functions.
- * This is the ONE audited cast site for the asset task (spec/09 R9).
+ * This is the one narrowing site for the asset task (spec/09 R9); it uses no cast.
  *
  * @param candidate - The raw value returned by `registry.resolve()`.
  * @returns True when `candidate` structurally satisfies `AssetHandler`.

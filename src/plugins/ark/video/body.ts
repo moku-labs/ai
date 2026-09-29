@@ -467,10 +467,13 @@ export function checkVideoRequest(
   model: ArkVideoModel,
   request: VideoRequest
 ): CheckedVideoRequest {
+  // Check clip, ratio and params against the model.
   const clip = checkClip(model, request);
   const ratio = checkRatio(request.aspect);
   const params = request.params ?? {};
   const passthrough = checkParameters(model, params);
+
+  // Check refs, then assemble the checked request.
   checkReferences(model, request.refs ?? []);
   const media = mediaItemsOf(model, params.refUrls);
   return {

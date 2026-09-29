@@ -45,6 +45,12 @@ const TASKS_PATH = "/contents/generations/tasks";
 /** Task statuses while ark is still working. */
 const PENDING_STATUSES: ReadonlySet<string> = new Set(["queued", "running"]);
 
+/** Task status of a task whose clip is ready. */
+const SUCCEEDED_STATUS = "succeeded";
+
+/** Task status of a task that ended with an error. */
+const FAILED_STATUS = "failed";
+
 /** Task statuses of a task ark stopped without a result. */
 const ENDED_STATUSES: ReadonlySet<string> = new Set(["expired", "cancelled"]);
 
@@ -252,6 +258,23 @@ function taskFailed(
 }
 
 /**
+ * Fails an expired or cancelled task as terminal 410: only a new task can
+ * produce the clip.
+ *
+ * @param ctx - Plugin context (log).
+ * @param taskId - The task id.
+ * @param status - The ended status (`expired` or `cancelled`).
+ * @returns The failed poll.
+ */
+function endedPoll(ctx: ArkContext, taskId: string, status: string): VideoJobPoll {
+  const ended = new TerminalProviderError(
+    `[ai] ark task ${taskId} is ${status}.\n  Run the item again to submit a new task.`,
+    ENDED_TASK_STATUS
+  );
+  return failedPoll(ctx, taskId, ended);
+}
+
+/**
  * Downloads a succeeded task's clip (without the key) and prices it from the
  * completion tokens; the request's values fill in what the task body lacks.
  *
@@ -338,15 +361,9 @@ async function pollTask(
 
   // Map the status.
   if (PENDING_STATUSES.has(status)) return PENDING;
-  if (status === "succeeded") return downloadClip(ctx, taskId, task, request, signal);
-  if (status === "failed") return taskFailed(ctx, taskId, task, request);
-  if (ENDED_STATUSES.has(status)) {
-    const ended = new TerminalProviderError(
-      `[ai] ark task ${taskId} is ${status}.\n  Run the item again to submit a new task.`,
-      ENDED_TASK_STATUS
-    );
-    return failedPoll(ctx, taskId, ended);
-  }
+  if (status === SUCCEEDED_STATUS) return downloadClip(ctx, taskId, task, request, signal);
+  if (status === FAILED_STATUS) return taskFailed(ctx, taskId, task, request);
+  if (ENDED_STATUSES.has(status)) return endedPoll(ctx, taskId, status);
   ctx.log.warn("ark:poll:unknown-status", { taskId, status });
   return PENDING;
 }
