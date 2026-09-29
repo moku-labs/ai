@@ -1102,7 +1102,7 @@ export function requestSeconds(request: EstimateRequest): number {
  * @returns The resolution, or undefined.
  * @example
  * ```ts
- * modelResolution(resolveFalModel("minimax-h3"), request); // => "768P"
+ * modelResolution(resolveFalModel("minimax-h3"), { model: "minimax-h3", prompt: "p" }); // => "768P"
  * ```
  */
 export function modelResolution(model: FalModel, request: EstimateRequest): string | undefined {
@@ -1117,7 +1117,7 @@ export function modelResolution(model: FalModel, request: EstimateRequest): stri
  * @returns True when the clip gets native audio.
  * @example
  * ```ts
- * modelAudio(resolveFalModel("kling-o3-ref"), { ...request, audio: true }); // => true
+ * modelAudio(resolveFalModel("kling-o3-ref"), { model: "kling-o3-ref", prompt: "p", audio: true }); // => true
  * ```
  */
 export function modelAudio(model: FalModel, request: EstimateRequest): boolean {
@@ -1135,7 +1135,8 @@ export function modelAudio(model: FalModel, request: EstimateRequest): boolean {
  * @returns The request body.
  * @example
  * ```ts
- * buildFalBody(resolveFalModel("minimax-h3"), request, { image: "https://cdn/a.png", refs: [], audioRefs: [], videoRefs: [] });
+ * buildFalBody(resolveFalModel("minimax-h3"), { model: "minimax-h3", prompt: "push-in", seconds: 5 }, { image: "https://cdn/a.png", refs: [], audioRefs: [], videoRefs: [] });
+ * // => { prompt: "push-in", image_url: "https://cdn/a.png", duration: 5, resolution: "768P" }
  * ```
  */
 export function buildFalBody(

@@ -105,10 +105,6 @@ export function toDataUri(bytes: Uint8Array, mimeType: string): string {
  * @param file - The input file.
  * @returns The bytes.
  * @throws {Error} A plain (terminal) error when the file cannot be read.
- * @example
- * ```ts
- * const bytes = await readInput(file);
- * ```
  */
 async function readInput(file: VideoFile): Promise<Uint8Array> {
   try {
@@ -144,10 +140,6 @@ function statusOf(error: unknown): number | undefined {
  * @param options - Key and caller signal.
  * @returns The presigned PUT URL and the public file URL.
  * @throws {Error} Any failure (the caller decides whether to fall back).
- * @example
- * ```ts
- * const target = await initiate(ctx, file, options);
- * ```
  */
 async function initiate(
   ctx: FalContext,
@@ -182,7 +174,7 @@ async function initiate(
  * @returns `storage:<mime>:<sha256 hex>`.
  * @example
  * ```ts
- * uploadKey("image/png", bytes); // => "storage:image/png:9f86d0..."
+ * uploadKey("image/png", new TextEncoder().encode("test")); // => "storage:image/png:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
  * ```
  */
 function uploadKey(mimeType: string, bytes: Uint8Array): string {
@@ -197,10 +189,6 @@ function uploadKey(mimeType: string, bytes: Uint8Array): string {
  * @param ctx - Plugin context (log).
  * @param session - The call's upload mode.
  * @param error - What the upload threw.
- * @example
- * ```ts
- * fallBack(ctx, session, error);
- * ```
  */
 function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void {
   if (session.mode === "storage") ctx.log.warn("fal:upload:fallback", { status: statusOf(error) });
@@ -218,10 +206,6 @@ function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void
  * @param bytes - The file bytes.
  * @param options - Key and caller signal.
  * @returns The public file URL, or undefined to fall back to a data URI.
- * @example
- * ```ts
- * const url = await uploadToStorage(ctx, session, file, bytes, options);
- * ```
  */
 async function uploadToStorage(
   ctx: FalContext,
@@ -265,10 +249,6 @@ async function uploadToStorage(
  * @param file - The input file.
  * @param options - Key and caller signal.
  * @returns A file URL or a data URI.
- * @example
- * ```ts
- * const url = await uploadOne(ctx, session, file, options);
- * ```
  */
 async function uploadOne(
   ctx: FalContext,
@@ -305,7 +285,7 @@ async function uploadOne(
  * @returns The results, in item order.
  * @example
  * ```ts
- * const urls = await mapInSlots(files, 4, file => uploadOne(ctx, session, file, options));
+ * await mapInSlots([1, 2, 3], 2, async n => n * 10); // => [10, 20, 30]
  * ```
  */
 async function mapInSlots<Item, Result>(

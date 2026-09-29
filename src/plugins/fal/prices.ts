@@ -131,10 +131,6 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
  *
  * @param ctx - Plugin context (`config.priceOverrides`, `state.prices`).
  * @returns The effective price table.
- * @example
- * ```ts
- * const prices = resolvePrices(ctx);
- * ```
  */
 export function resolvePrices(ctx: FalContext): Record<string, number> {
   if (ctx.state.prices === null) {
@@ -307,7 +303,7 @@ function referenceImageCount(request: EstimateRequest): number {
  * @returns Surcharge in USD (unrounded).
  * @example
  * ```ts
- * refImageCostUsd(mergePrices({}), "minimax-h3-ref", request); // => 0.08 for six images
+ * refImageCostUsd(mergePrices({}), "minimax-h3-ref", { model: "minimax-h3-ref", prompt: "p", refs: Array.from({ length: 6 }, () => ({ $ref: "face" })) }); // => 0.08
  * ```
  */
 function refImageCostUsd(
@@ -354,7 +350,7 @@ function referenceTokens(request: EstimateRequest): number {
  * @returns Surcharge in USD (unrounded).
  * @example
  * ```ts
- * refTokenCostUsd(mergePrices({}), "minimax-h3-max-ref", request); // => 0.02048 for five square images
+ * refTokenCostUsd(mergePrices({}), "minimax-h3-max-ref", { model: "minimax-h3-max-ref", prompt: "p", image: { $ref: "a" }, refs: [{ $ref: "b" }] }); // => 0.02048
  * ```
  */
 function refTokenCostUsd(
@@ -381,10 +377,6 @@ function refTokenCostUsd(
  * @param request - The video request.
  * @returns Cost in USD, rounded to micro-dollars.
  * @throws {Error} For an unknown alias or a variant without a price.
- * @example
- * ```ts
- * videoCostUsd(ctx, { model: "minimax-h3", prompt: "push-in", seconds: 5 }); // => 0.3
- * ```
  */
 export function videoCostUsd(ctx: FalContext, request: EstimateRequest): number {
   const model = resolveFalModel(request.model);

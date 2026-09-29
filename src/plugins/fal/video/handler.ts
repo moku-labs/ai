@@ -59,10 +59,6 @@ const RETRY_STATUS = 503;
  * @param ctx - Plugin context.
  * @returns The key.
  * @throws {Error} A plain (terminal) two-line error when the key is not set.
- * @example
- * ```ts
- * const apiKey = resolveApiKey(ctx);
- * ```
  */
 function resolveApiKey(ctx: FalContext): string {
   const apiKey = ctx.env.get(ctx.config.apiKeyEnv);
@@ -83,7 +79,8 @@ function resolveApiKey(ctx: FalContext): string {
  * @throws {Error} A plain (terminal) two-line error when there is no image.
  * @example
  * ```ts
- * const image = requireImage(model, request);
+ * requireImage(resolveFalModel("minimax-h3"), { model: "minimax-h3", prompt: "p" });
+ * // throws: [ai] fal model "minimax-h3" needs an image.
  * ```
  */
 function requireImage(model: ResolvedFalModel, request: VideoRequest): VideoFile {
@@ -170,7 +167,8 @@ function isImageReference(file: VideoFile): boolean {
  * @returns A plain (terminal) error.
  * @example
  * ```ts
- * throw tooManyReferencesError(model, "reference images", 4, 6);
+ * tooManyReferencesError(resolveFalModel("kling-o3-ref"), "reference images", 4, 6).message;
+ * // => '[ai] fal model "kling-o3-ref" takes at most 4 reference images, got 6.\n  Remove refs from input.refs, or use a model that takes more.'
  * ```
  */
 function tooManyReferencesError(
@@ -197,7 +195,7 @@ function tooManyReferencesError(
  * @throws {Error} A plain (terminal) two-line error when a limit is exceeded.
  * @example
  * ```ts
- * splitReferences(resolveFalModel("kling-o3-ref"), [{ mime: "video/mp4", bytes }]);
+ * splitReferences(resolveFalModel("kling-o3-ref"), [{ path: "t.mp4", mimeType: "video/mp4", hash: "h" }]);
  * // throws: [ai] fal model "kling-o3-ref" takes no video references, got 1.
  * ```
  */
@@ -230,7 +228,7 @@ export function splitReferences(
  * @returns Redacted log fields.
  * @example
  * ```ts
- * ctx.log.warn("fal:video:failed", { requestId, ...redacted(error) });
+ * redacted(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => { errorType: "terminal", status: 400 }
  * ```
  */
 function redacted(error: FalProviderError): {
@@ -314,10 +312,6 @@ function isJobVerdict(error: unknown): error is FlaggedProviderError | TerminalP
  * @param apiKey - The fal key (result call only; the CDN download goes without it).
  * @param signal - Caller abort signal.
  * @returns A done or failed poll.
- * @example
- * ```ts
- * return fetchResult(ctx, job, request, apiKey, signal);
- * ```
  */
 async function fetchResult(
   ctx: FalContext,
@@ -361,10 +355,6 @@ async function fetchResult(
  * @param job - The job.
  * @param error - What the result or download call threw.
  * @returns The error to throw.
- * @example
- * ```ts
- * throw asRetryable(ctx, job, error);
- * ```
  */
 function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
   if (!(error instanceof TerminalProviderError)) return error;
@@ -385,10 +375,6 @@ function asRetryable(ctx: FalContext, job: FalJob, error: unknown): unknown {
  * @param request - The request the job was submitted with.
  * @param signal - Caller abort signal.
  * @returns The poll result.
- * @example
- * ```ts
- * const status = await pollJob(ctx, jobId, request, signal);
- * ```
  */
 async function pollJob(
   ctx: FalContext,
@@ -432,10 +418,6 @@ async function pollJob(
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate, submit and poll.
- * @example
- * ```ts
- * registry.register("video", "fal", createVideoHandler(ctx));
- * ```
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
