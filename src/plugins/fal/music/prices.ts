@@ -19,7 +19,10 @@ const MICRO_DOLLARS = 1_000_000;
  * musicPrices["elevenlabs-music-v2.5"]; // => 0.8
  * ```
  */
-export const musicPrices: Readonly<Record<string, number>> = {};
+export const musicPrices: Readonly<Record<string, number>> = {
+  "elevenlabs-music-v2.5": 0.8,
+  "stable-audio-2.5": 0.2
+};
 
 /**
  * The unit price of a music model: `music:<alias>` from the merged table.
