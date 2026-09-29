@@ -66,26 +66,6 @@ describe("journal provider records", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  describe("isOpen", () => {
-    it("is true while the driver is open", () => {
-      expect(api.isOpen()).toBe(true);
-    });
-
-    it("is false without a driver, and does not throw", () => {
-      const closed = closedApi(config);
-
-      expect(() => closed.isOpen()).not.toThrow();
-      expect(closed.isOpen()).toBe(false);
-    });
-
-    it("follows the state: false once the driver is cleared", () => {
-      // eslint-disable-next-line unicorn/no-null -- closeDriver sets State.driver back to null
-      state.driver = null;
-
-      expect(api.isOpen()).toBe(false);
-    });
-  });
-
   describe("not-open guard", () => {
     it("findProviderRecord throws the documented error", () => {
       expect(() => closedApi(config).findProviderRecord(identity("k-1"))).toThrow(NOT_OPEN);

@@ -110,6 +110,8 @@ const framework = createCore(coreConfig, {
 /**
  * Creates a Layer-3 consumer app composed on `@moku-labs/ai`.
  *
+ * @param options - Extra `plugins`, `pluginConfigs` overrides, and the `onReady` / `onError` / `onStart` / `onStop` callbacks.
+ * @returns The app, with every plugin API mounted by name (`app.runner`, `app.journal`, ...).
  * @example
  * ```ts
  * const app = createApp({});
@@ -121,6 +123,9 @@ export const createApp = framework.createApp;
 /**
  * Plugin factory for Layer-3 consumers authoring custom plugins against this framework.
  *
+ * @param name - Unique plugin name; the app mounts its API under this key.
+ * @param spec - Plugin spec: `config`, `depends`, `createState`, `api`, `hooks` and lifecycle.
+ * @returns The plugin instance, ready for `createApp({ plugins: [...] })`.
  * @example
  * ```ts
  * const myPlugin = createPlugin("my", { api: () => ({}) });

@@ -167,7 +167,6 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
       totals: ZERO_TOTALS,
       recentItems: []
     }),
-    checkpoint: vi.fn(),
     findDoneArtifact: vi.fn(),
     reuseDone: vi.fn(),
     setAttemptJob: vi.fn(),

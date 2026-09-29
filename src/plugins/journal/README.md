@@ -260,14 +260,6 @@ Reads a point-in-time snapshot — `{ run, totals, recentItems }` (up to 20 most
 const snapshot = ctx.journal.readSnapshot(run.id);
 ```
 
-#### `checkpoint(): void`
-
-Runs a manual `PRAGMA wal_checkpoint(TRUNCATE)` on the primary connection. The same checkpoint also runs automatically every `checkpointIntervalMs` and once on `onStop`.
-
-```ts
-ctx.journal.checkpoint();
-```
-
 ## Events
 
 None. The journal is a Core plugin — it declares no events, emits nothing, and listens to nothing. Event-driven progress reporting is the `runner` plugin's job, which computes payloads from `ctx.journal.totals()`.

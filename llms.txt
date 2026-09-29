@@ -183,7 +183,7 @@ src/
   bin.ts                  # `moku` bin — Layer-3 consumer: createApp → start → cli.dispatch → stop → exit
   plugins/
     index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image, Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose, Cli)
-    journal/              # index.ts, types.ts, api.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
+    journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, provider-records.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
     registry/             # index.ts only (Nano — no types.ts, by design)
@@ -210,7 +210,7 @@ Runtime deps: @moku-labs/common, @moku-labs/core, better-sqlite3, openai, yaml, 
 ## Plugins
 
 Core (registered in createCoreConfig; no events, no depends; injected as ctx.*):
-- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot, checkpoint | events: none
+- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot | events: none
 - store: content-addressed artifact store (never lose a byte, never serve a wrong one) | Standard | put, has, pathOf, read, hashOf, gc | events: none
 - limits: per-lane token bucket + FIFO concurrency + circuit breaker (timer-free lazy math) | Standard | acquire, reportOutcome, laneConfig, snapshot, lanes | events: none
 

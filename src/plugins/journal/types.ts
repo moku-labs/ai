@@ -6,6 +6,11 @@ import type { SqliteDriver } from "./driver/types";
 /**
  * Journal core plugin configuration: durable file path, checkpoint cadence,
  * and SQLite busy-timeout tuning.
+ *
+ * @example
+ * ```ts
+ * const app = createApp({ pluginConfigs: { journal: { path: ".moku/journal.db" } } });
+ * ```
  */
 export type Config = {
   /** Path to the journal database file. */
@@ -201,6 +206,19 @@ export type ProviderRecord = {
   /** Opaque provider id, e.g. `"asset://asset-1"`. */
   value: string;
 };
+
+/**
+ * Identity of one provider record: its primary key, without the value. Used to
+ * look up or delete a record.
+ *
+ * @example
+ * ```ts
+ * const query: ProviderRecordQuery = {
+ *   provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset", key: "9b74c9897bac770ffc029102a200c5de"
+ * };
+ * ```
+ */
+export type ProviderRecordQuery = Omit<ProviderRecord, "value">;
 
 /**
  * The journal's public API surface, injected as `ctx.journal` on every
@@ -521,17 +539,6 @@ export type JournalApi = {
    */
   readSnapshot(runId: string): RunSnapshot;
   /**
-   * Runs `wal_checkpoint(TRUNCATE)` on the primary connection. The same checkpoint runs every
-   * `checkpointIntervalMs` and once on stop.
-   *
-   * @example
-   * ```ts
-   * // A backup plugin copies .moku/journal.db: fold the WAL into the main file first
-   * ctx.journal.checkpoint(); // journal.db holds every committed write; journal.db-wal stays, truncated
-   * ```
-   */
-  checkpoint(): void;
-  /**
    * True between onStart and onStop. The only method that does not throw when the journal is closed.
    *
    * @returns Whether the journal connection is open.
@@ -557,12 +564,7 @@ export type JournalApi = {
    * ctx.journal.findProviderRecord({ provider: "apimodels", account: "3f9a0c1b2d4e", kind: "asset", key: file.hash }); // "asset://…" | undefined
    * ```
    */
-  findProviderRecord(q: {
-    provider: string;
-    account: string;
-    kind: string;
-    key: string;
-  }): string | undefined;
+  findProviderRecord(q: ProviderRecordQuery): string | undefined;
   /**
    * Upserts records in ONE BEGIN IMMEDIATE transaction (INSERT … ON CONFLICT DO UPDATE value, created_at).
    * Empty array is a no-op. A failing row rolls back the whole batch.
@@ -592,5 +594,5 @@ export type JournalApi = {
    * ctx.journal.deleteProviderRecord({ provider: "apimodels", account, kind: "asset", key: anna.hash });
    * ```
    */
-  deleteProviderRecord(q: { provider: string; account: string; kind: string; key: string }): void;
+  deleteProviderRecord(q: ProviderRecordQuery): void;
 };

@@ -1,6 +1,7 @@
 /**
  * @file journal driver seam — structural SQLite driver contract.
  */
+import type { ItemStatus, RunStatus } from "../types";
 
 /** Minimal structural SQLite driver surface both backends implement. */
 export type SqliteDriver = {
@@ -22,4 +23,35 @@ export type SqliteDriver = {
 export type DriverOpenOptions = {
   path: string;
   busyTimeoutMs: number;
+};
+
+/** Raw `items` row shape, matching the SQL schema column-for-column. */
+export type ItemDatabaseRow = {
+  id: string;
+  run_id: string;
+  build_file: string;
+  planning_key: string;
+  task: string;
+  provider: string;
+  pack_version: string | null;
+  artifact_key: string | null;
+  content_hash: string | null;
+  status: ItemStatus;
+  estimated_cost_usd: number;
+  actual_cost_usd: number | null;
+  attempt_count: number;
+  updated_at: number;
+  label: string | null;
+  build_name: string | null;
+  mime_type: string | null;
+};
+
+/** Raw `runs` row shape, matching the SQL schema column-for-column. */
+export type RunDatabaseRow = {
+  id: string;
+  created_at: number;
+  status: RunStatus;
+  glob: string;
+  max_cost_usd: number | null;
+  finished_at: number | null;
 };

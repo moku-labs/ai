@@ -282,9 +282,6 @@ export function createFakeRunnerContext(
       totals: ZERO_TOTALS,
       recentItems: []
     }),
-    checkpoint: (): void => {
-      log.push("journal.checkpoint");
-    },
     findDoneArtifact: (): undefined => undefined,
     reuseDone: (itemId: string): void => {
       log.push(`journal.reuseDone(${itemId})`);
