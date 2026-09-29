@@ -79,11 +79,26 @@ type VideoJobPoll =
   | { state: "failed"; error: unknown };
 ```
 
+### `EstimateRequest`
+
+`estimate` runs at plan time, before the runner resolves build-file references. So its request is a
+`VideoRequest` whose `image`, `endImage` and `refs` may still be `{ $ref }` or `{ $file }`. Every
+`VideoRequest` is an `EstimateRequest`.
+
+```ts
+type EstimateInput = VideoFile | { $ref: string } | { $file: string };
+type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
+  image?: EstimateInput;
+  endImage?: EstimateInput;
+  refs?: EstimateInput[];
+};
+```
+
 ### `VideoHandler`
 
 ```ts
 export type VideoHandler = {
-  estimate(request: VideoRequest): { usd: number };
+  estimate(request: EstimateRequest): { usd: number };
   execute?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoResult>;
   submit?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
   poll?(jobId: string, request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoJobPoll>;

@@ -8,39 +8,9 @@ import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { JournalApi } from "../journal/types";
 import type { RegistryApi, registryPlugin } from "../registry";
-import type { VideoFile, VideoRequest } from "../video/contract";
 
-/**
- * A request image, end frame or ref at estimate time: a resolved file, or
- * still the build-file reference the runner resolves before submit (the
- * runner estimates the unresolved request).
- *
- * @example
- * ```ts
- * const input: EstimateInput = { $file: "cast/anna.png" };
- * ```
- */
-export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
-
-/**
- * A video request at estimate time: its first frame, end frame and refs may
- * still be build-file references. Every `VideoRequest` is one.
- *
- * @example
- * ```ts
- * const request: EstimateRequest = {
- *   model: "seedance-2.5", prompt: "p", image: { $file: "cast/anna.png" }, params: { assets: ["image"] }
- * };
- * ```
- */
-export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
-  /** First frame, resolved or not. */
-  image?: EstimateInput;
-  /** End frame, resolved or not. */
-  endImage?: EstimateInput;
-  /** Refs, resolved or not. */
-  refs?: EstimateInput[];
-};
+/** The estimate-time request types — declared once in `../video/contract` and re-exported for `Apimodels.*` consumers. */
+export type { EstimateInput, EstimateRequest } from "../video/contract";
 
 /**
  * apimodels plugin configuration: API key env var, base URL, asset group
@@ -139,23 +109,29 @@ export type ApimodelsApi = {
  *
  * @example
  * ```ts
- * const hint: RetryHint = { status: 429, retryAfterMs: 2000 };
+ * const hint: RetryHint = { status: 503, kind: "resubmit" };
  * ```
  */
 export type RetryHint = {
   /** HTTP status code, when the failure came from an HTTP response (5xx or 429). */
   status?: number | undefined;
-  /** Explicit classification hint for a non-HTTP retryable failure. */
-  kind?: "timeout" | "network" | undefined;
+  /**
+   * `"timeout"` / `"network"` for a transport failure. `"resubmit"` when the job
+   * must be submitted again (a stale asset id, a task apimodels lost, a dead
+   * result URL): the runner retries it like its status says, without counting
+   * it against the lane breaker.
+   */
+  kind?: "timeout" | "network" | "resubmit" | undefined;
   /** Provider-supplied Retry-After delay, ms. */
   retryAfterMs?: number | undefined;
 };
 
 /**
  * Retryable transport or provider failure: HTTP 5xx, HTTP 429 (with an
- * optional `Retry-After` hint), a request timeout, a network failure, or a
- * task apimodels failed with a retryable code. Carries the structural fields
- * the runner's `classifyError` reads (`status`/`kind`/`retryAfterMs`).
+ * optional `Retry-After` hint), a request timeout, a network failure, a
+ * task apimodels failed with a retryable code, or a job that must be
+ * submitted again (`kind: "resubmit"`). Carries the structural fields the
+ * runner's `classifyError` reads (`status`/`kind`/`retryAfterMs`).
  *
  * @example
  * ```ts
@@ -165,8 +141,8 @@ export type RetryHint = {
 export class RetryableProviderError extends Error {
   /** HTTP status code, when the failure came from an HTTP response (5xx or 429). */
   readonly status: number | undefined;
-  /** Explicit classification hint for a non-HTTP retryable failure. */
-  readonly kind: "timeout" | "network" | undefined;
+  /** `"timeout"` / `"network"` for a transport failure; `"resubmit"` for a job to submit again. */
+  readonly kind: "timeout" | "network" | "resubmit" | undefined;
   /** Provider-supplied Retry-After delay, ms. */
   readonly retryAfterMs: number | undefined;
 

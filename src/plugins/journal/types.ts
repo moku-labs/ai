@@ -538,7 +538,7 @@ export type JournalApi = {
    * @example
    * ```ts
    * // a provider called from app.video.generate() before app.start(): skip durable writes
-   * if (!ctx.journal.isOpen()) ctx.log.warn("apimodels:journal:closed");
+   * if (!ctx.journal.isOpen()) ctx.log.warn("apimodels:journal:closed", { tier: "state" });
    * ```
    */
   isOpen(): boolean;

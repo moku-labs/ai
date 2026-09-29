@@ -13,7 +13,7 @@
  * |---|---|---|
  * | journal (core) | `path` · `checkpointIntervalMs` · `busyTimeoutMs` | `".moku/journal.db"` · `30_000` · `5000` |
  * | store (core) | `dir` · `algo` | `".moku/store"` · `"sha256"` |
- * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 } }` (set at `createCore` only) |
+ * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 } }` . A `lanes` override replaces the whole map: repeat this lane. |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
  * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` | `3` · `1000` · `10_000` · `5000` · `1_800_000` |

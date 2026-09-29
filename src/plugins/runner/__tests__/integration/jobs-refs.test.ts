@@ -4,12 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { coreConfig, createCore, createPlugin } from "../../../../config";
 import { buildfilePlugin } from "../../../buildfile";
+import type { LaneConfig } from "../../../limits/types";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../index";
 import type {
   ExecutableHandler,
   HandlerRequest,
   JobPoll,
+  ProviderErrorHint,
   ResolvedFile,
   RunEvent
 } from "../../types";
@@ -17,11 +19,12 @@ import type {
 /**
  * Framework with registry + buildfile + runner, core plugins pinned under
  * `tempDir`, fast polling and backoff, the given fake providers, and a probe
- * exposing `ctx.journal` / `ctx.store`.
+ * exposing `ctx.journal` / `ctx.store` / `ctx.limits`.
  *
  * @param tempDir - Per-test directory.
  * @param providers - Fake providers as `[task, provider, handler]`.
  * @param runnerConfig - Runner config overrides.
+ * @param lanes - Per-lane `limits` overrides.
  * @returns A started app.
  * @example
  * ```ts
@@ -31,7 +34,8 @@ import type {
 async function startApp(
   tempDir: string,
   providers: Array<[string, string, ExecutableHandler]>,
-  runnerConfig: Record<string, number> = {}
+  runnerConfig: Record<string, number> = {},
+  lanes: Record<string, Partial<LaneConfig>> = {}
 ) {
   const providerPlugin = createPlugin("fakeProviders", {
     depends: [registryPlugin],
@@ -42,7 +46,7 @@ async function startApp(
     }
   });
   const probePlugin = coreConfig.createPlugin("probe", {
-    api: ctx => ({ journal: ctx.journal, store: ctx.store })
+    api: ctx => ({ journal: ctx.journal, store: ctx.store, limits: ctx.limits })
   });
 
   const framework = createCore(coreConfig, {
@@ -50,6 +54,7 @@ async function startApp(
     pluginConfigs: {
       journal: { path: path.join(tempDir, "journal.db") },
       store: { dir: path.join(tempDir, "store") },
+      limits: { lanes },
       runner: { retryBaseMs: 1, pollIntervalMs: 1, ...runnerConfig }
     }
   });
@@ -458,6 +463,61 @@ describe("runner: flat requests, jobs, references, export, reuse", () => {
 
     expect(third.totals).toMatchObject({ done: 2, failed: 0 });
     expect(video.submits).toHaveLength(2);
+  });
+
+  /**
+   * Runs the chain on a video lane whose breaker opens after one retryable
+   * error, with job-1 failed by the provider with `error`.
+   *
+   * @param error - The error job-1 fails with.
+   * @returns The run result, the video handler logs and the video lane's breaker phase.
+   * @example
+   * ```ts
+   * const { breaker } = await runOnTightBreaker({ status: 503 }); // "open"
+   * ```
+   */
+  async function runOnTightBreaker(error: ProviderErrorHint) {
+    const video = jobHandler({
+      polls: jobId => (jobId === "job-1" ? { state: "failed", error } : done("clip"))
+    });
+    const image = imageHandler();
+    const app = await startApp(
+      tempDir,
+      [
+        ["image", "fake", image.handler],
+        ["video", "fake", video.handler]
+      ],
+      {},
+      { "video/fake": { breakerThreshold: 1, breakerCooldownMs: 60_000 } }
+    );
+    stops.push(() => app.stop());
+    await writeFile(path.join(tempDir, "chain.moku.yaml"), CHAIN_YAML);
+
+    const result = await app.runner.run({ files });
+
+    return { result, video, breaker: app.probe.limits.snapshot("video/fake/default").breaker };
+  }
+
+  describe("D8: a job the provider failed with kind:resubmit", () => {
+    it("is submitted again and leaves the lane breaker closed", async () => {
+      const hint: ProviderErrorHint = { kind: "resubmit", status: 503 };
+      const { result, video, breaker } = await runOnTightBreaker(
+        Object.assign(new Error("task lost"), hint)
+      );
+
+      expect(result.totals).toMatchObject({ done: 2, failed: 0 });
+      expect(video.submits).toHaveLength(2);
+      expect(breaker).toBe("closed");
+    });
+
+    it("unlike a plain 503, which opens the breaker so the retry never reaches the provider", async () => {
+      const busy = Object.assign(new Error("busy"), { status: 503 });
+      const { result, video, breaker } = await runOnTightBreaker(busy);
+
+      expect(result.totals).toMatchObject({ done: 1, queued: 1 });
+      expect(video.submits).toHaveLength(1);
+      expect(breaker).toBe("open");
+    });
   });
 
   describe("D8: a job adopted after it expired", () => {

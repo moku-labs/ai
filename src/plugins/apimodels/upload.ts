@@ -66,6 +66,9 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
 /** Status of an unreadable input or an incomplete response: terminal, retrying cannot help. */
 const BAD_REQUEST = 400;
 
+/** Hash characters kept in an uploaded file name. */
+const NAME_HASH_LENGTH = 16;
+
 /**
  * Upload file name: the first 16 hash characters plus an extension from the
  * MIME type, else from the path, else `bin`.
@@ -80,7 +83,7 @@ const BAD_REQUEST = 400;
 export function fileNameOf(file: VideoFile): string {
   const fromPath = path.extname(file.path).slice(1).toLowerCase();
   const extension = EXTENSIONS[file.mimeType] ?? (fromPath === "" ? "bin" : fromPath);
-  return `${file.hash.slice(0, 16)}.${extension}`;
+  return `${file.hash.slice(0, NAME_HASH_LENGTH)}.${extension}`;
 }
 
 /**

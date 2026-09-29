@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VideoFile, VideoRequest } from "../../../video/contract";
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { EstimateRequest, VideoFile, VideoRequest } from "../../../video/contract";
 import {
   accountOf,
   invalidateStaleAssets,
@@ -13,7 +13,6 @@ import {
   selectAssetFiles,
   usedAssetsOf
 } from "../../assets";
-import type { EstimateRequest } from "../../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
 import { fileNameOf } from "../../upload";
 import type { TempFiles } from "./fixtures";
@@ -655,7 +654,7 @@ describe("stale assets", () => {
     ).not.toBe(used.requestKey);
   });
 
-  it("first time: drops both tiers and returns a retryable 503; second time: terminal 400", () => {
+  it("first time: drops both tiers and returns a retryable 503, kind resubmit; second time: terminal 400", () => {
     const journal = createFakeJournal();
     journal.records.set(assetRecordKey(anna), "asset://a1");
     journal.records.set(assetRecordKey(ben), "asset://b1");
@@ -667,7 +666,7 @@ describe("stale assets", () => {
     const first = invalidateStaleAssets(ctx, seen, used);
 
     expect(first).toBeInstanceOf(RetryableProviderError);
-    expect(first).toMatchObject({ status: 503 });
+    expect(first).toMatchObject({ status: 503, kind: "resubmit" });
     expect(first.message).toBe(
       "[ai] apimodels no longer knows an asset id this request used.\n  Its records were dropped; the next attempt registers the inputs again."
     );
@@ -697,5 +696,17 @@ describe("stale assets", () => {
 
     expect(ctx.state.assets.size).toBe(0);
     expect(journal.deleteProviderRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe("types", () => {
+  it("the context's journal refuses a provider record without value", () => {
+    const { journal } = createTestCtx();
+    const record = { provider: "apimodels", account: ACCOUNT, kind: "asset", key: anna.hash };
+
+    // @ts-expect-error -- ProviderRecord.value is required: a record keeps an id
+    expectTypeOf(journal.putProviderRecords).toBeCallableWith([record]);
+    expectTypeOf(journal.putProviderRecords).toBeCallableWith([{ ...record, value: "asset://a1" }]);
+    expect(journal.putProviderRecords).not.toHaveBeenCalled();
   });
 });

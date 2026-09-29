@@ -13,10 +13,10 @@
  */
 import { createHash } from "node:crypto";
 import type { ProviderRecord } from "../journal/types";
-import type { VideoFile, VideoRequest } from "../video/contract";
+import type { EstimateRequest, VideoFile, VideoRequest } from "../video/contract";
 import { apiData, readField, withRateLimitWait } from "./client";
 import { assetPriceUsd, roundUsd } from "./prices";
-import type { ApimodelsContext, EstimateRequest } from "./types";
+import type { ApimodelsContext } from "./types";
 import { RetryableProviderError, TerminalProviderError } from "./types";
 import type { UploadOptions } from "./upload";
 import { mapInSlots, SLOTS, shareInFlight, uploadFiles } from "./upload";
@@ -135,7 +135,7 @@ const NAMES_GROUP = /group/i;
 /** Status of a validation refusal or a final stale answer. */
 const BAD_REQUEST = 400;
 
-/** Status of a first stale answer, so the runner classifies it retryable (5xx). */
+/** Status of a first stale answer, so the runner classifies it retryable (5xx); sent with `kind: "resubmit"`. */
 const RETRY_STATUS = 503;
 
 /**
@@ -498,9 +498,8 @@ function forgetGroup(ctx: ApimodelsContext, registration: Registration, groupId:
   const { account, durable } = registration;
   if (ctx.state.groups.get(account) === groupId) ctx.state.groups.delete(account);
   const query = groupQueryOf(ctx, account);
-  if (durable && ctx.journal.findProviderRecord(query) === groupId) {
-    ctx.journal.deleteProviderRecord(query);
-  }
+  const isStillJournaled = durable && ctx.journal.findProviderRecord(query) === groupId;
+  if (isStillJournaled) ctx.journal.deleteProviderRecord(query);
   ctx.log.warn("apimodels:asset-group:stale", { account });
 }
 
@@ -688,9 +687,8 @@ export async function resolveAssets(
   } catch (error) {
     failure = { error };
   }
-  if (registration.durable && registration.records.length > 0) {
-    ctx.journal.putProviderRecords(registration.records);
-  }
+  const hasRecordsToWrite = registration.durable && registration.records.length > 0;
+  if (hasRecordsToWrite) ctx.journal.putProviderRecords(registration.records);
   if (failure !== undefined) throw failure.error;
 
   // A registration a concurrent submit made is free here.
@@ -776,8 +774,9 @@ export function isStaleAssetRejection(error: unknown): boolean {
 
 /**
  * Handles a stale asset answer: drops every asset record the request used
- * from both tiers, then returns a retryable 503 (the next attempt registers
- * again) the first time for this request key, a terminal 400 the second.
+ * from both tiers, then returns a retryable 503 with `kind: "resubmit"` (the
+ * next attempt registers again; the lane breaker does not count it) the
+ * first time for this request key, a terminal 400 the second.
  *
  * @param ctx - Plugin context (state, journal, log).
  * @param seen - Request keys already answered stale in this process.
@@ -814,6 +813,6 @@ export function invalidateStaleAssets(
   seen.add(used.requestKey);
   return new RetryableProviderError(
     "[ai] apimodels no longer knows an asset id this request used.\n  Its records were dropped; the next attempt registers the inputs again.",
-    { status: RETRY_STATUS }
+    { status: RETRY_STATUS, kind: "resubmit" }
   );
 }

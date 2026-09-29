@@ -9,6 +9,7 @@
  */
 import type { UpstreamFailure } from "./types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./types";
+import type { SubmitBody } from "./video/models";
 
 /**
  * HTTP method used against apimodels.
@@ -26,8 +27,12 @@ export type ApiRequest = {
   method: ApiMethod;
   /** API key; omitted for the result download (a third-party host). Never logged. */
   apiKey?: string | undefined;
-  /** JSON body (open by contract because `params` is pass-through). */
-  json?: Record<string, unknown> | undefined;
+  /**
+   * JSON body: the video submit body (typed; open only through the
+   * pass-through `request.params`), or a flat text body (asset group, asset
+   * registration).
+   */
+  json?: SubmitBody | Readonly<Record<string, string>> | undefined;
   /** Multipart body (file upload). */
   form?: FormData | undefined;
   /** Per-request timeout, ms. */

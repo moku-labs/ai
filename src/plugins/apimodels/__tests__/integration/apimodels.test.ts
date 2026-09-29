@@ -9,9 +9,16 @@ import { buildfilePlugin } from "../../../buildfile";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../../runner";
 import { videoPlugin } from "../../../video";
-import type { VideoHandler } from "../../../video/contract";
+import type { EstimateInput, EstimateRequest, VideoHandler } from "../../../video/contract";
 import { apimodelsPlugin } from "../../index";
-import type { ApimodelsApi, ApimodelsContext, ApimodelsInfo, Config } from "../../types";
+import type {
+  ApimodelsApi,
+  ApimodelsContext,
+  EstimateInput as ApimodelsEstimateInput,
+  EstimateRequest as ApimodelsEstimateRequest,
+  ApimodelsInfo,
+  Config
+} from "../../types";
 import { createVideoHandler } from "../../video/handler";
 import { CLIP, completedTask, envelope, jsonResponse, stubApi } from "../unit/fixtures";
 
@@ -251,6 +258,23 @@ describe("apimodels integration", () => {
     it("app.apimodels.info() is typed", () => {
       const app = buildFramework(dir).createApp();
       expectTypeOf(app.apimodels.info).returns.toEqualTypeOf<ApimodelsInfo>();
+    });
+
+    it("app.apimodels has no other method: video work goes through app.video", () => {
+      const app = buildFramework(dir).createApp();
+
+      // @ts-expect-error -- no generate on app.apimodels; use app.video.generate(…, { provider: "apimodels" })
+      expectTypeOf(app.apimodels.generate).toBeFunction();
+      expect(app.apimodels).not.toHaveProperty("generate");
+    });
+
+    it("Apimodels.EstimateInput / EstimateRequest are the video contract's types", () => {
+      expectTypeOf<ApimodelsEstimateInput>().toEqualTypeOf<EstimateInput>();
+      expectTypeOf<ApimodelsEstimateRequest>().toEqualTypeOf<EstimateRequest>();
+      expectTypeOf(createVideoHandler)
+        .returns.toHaveProperty("estimate")
+        .parameter(0)
+        .toEqualTypeOf<EstimateRequest>();
     });
 
     it("createVideoHandler returns the async VideoHandler form for an ApimodelsContext", () => {

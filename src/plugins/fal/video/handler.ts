@@ -6,13 +6,19 @@
  * the runner and the `video` facade both drive `submit` + `poll`. Cost comes from the shared price table
  * (`../prices.ts`), so estimate and actual cost always agree.
  */
-import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
+import type {
+  EstimateRequest,
+  VideoFile,
+  VideoHandler,
+  VideoJobPoll,
+  VideoRequest
+} from "../../video/contract";
 import type { FalResponse } from "../client";
 import { falFetch, jobFailure, parseJson, readString } from "../client";
 import type { ResolvedFalModel, SplitReferences } from "../models";
 import { buildFalBody, endFrameAliases, requestSeconds, resolveFalModel } from "../models";
 import { videoCostUsd } from "../prices";
-import type { EstimateRequest, FalContext, FalProviderError } from "../types";
+import type { FalContext, FalProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import { uploadInputs } from "../upload";
 import type { FalJob } from "./job";
@@ -489,7 +495,7 @@ async function pollJob(
  */
 export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   return {
-    estimate: (request: VideoRequest): { usd: number } => {
+    estimate: (request: EstimateRequest): { usd: number } => {
       requireEndFrameSupport(resolveFalModel(request.model), request);
       return { usd: videoCostUsd(ctx, request) };
     },

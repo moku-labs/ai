@@ -39,7 +39,7 @@ Set via `createApp({ pluginConfigs: { apimodels: { ... } } })`.
 | `seedance-2.0-ref` | `seedance-2.0-official` | `reference_image_urls[0]` | refused | as 2.5-ref, images 9 with the image | 480p, 720p, 1080p | 4-15 | 0.092 / 0.197 / 0.492 |
 
 Body: `{ model, prompt, resolution, duration: seconds, aspect_ratio: aspect, generate_audio: audio, <input fields> }`.
-Defaults: `seconds` 5, `aspect` `"9:16"`, `audio` true, `resolution` 720p. `aspect_ratio` is not sent with
+Defaults: `seconds` 5, `aspect` `"9:16"`, `audio` false (the video contract default), `resolution` 720p. `aspect_ratio` is not sent with
 `first_frame_url` (upstream forces adaptive). `negative` is not supported upstream: it is dropped and logged
 at debug level (`apimodels:negative:ignored`, without the text). `request.params` is merged last, after the
 reserved key `assets` is removed.
@@ -99,8 +99,8 @@ by itself. Name only portraits: props, locations and sketch sheets never need to
 - **Moderation.** A 422 on `POST /assets` (moderation, or a URL apimodels cannot fetch; not charged) is flagged
   before any clip is paid. 402 is terminal. 429 and 5xx are retryable.
 - **Stale ids.** A submit or poll that fails with `INVALID_INPUT` naming an asset drops every asset record the
-  request used, from both tiers. `submit` throws a retryable 503, `poll` returns `failed` with a retryable 503, so
-  the next attempt registers again. The second stale answer for the same item (account, model, prompt, seconds and
+  request used, from both tiers. `submit` throws a retryable 503, `poll` returns `failed` with a retryable 503,
+  both with `kind: "resubmit"`, so the next attempt registers again and the lane breaker does not count it. The second stale answer for the same item (account, model, prompt, seconds and
   inputs) in one process is a terminal 400. Two items that share a face each get their own retry.
 - **Slots.** Uploads and registrations of one submit run 4 at a time. A 429 among them waits `Retry-After` once
   (capped at `timeoutMs`, 1 s without the header), then is thrown.
@@ -120,13 +120,14 @@ by itself. Name only portraits: props, locations and sketch sheets never need to
 | --- | --- |
 | `pending`, `processing`, or an unknown state | `pending` |
 | `completed`, clip downloads | `done` with `video`, `mimeType`, `costUsd`, `meta: { taskId, model, seconds }` |
-| `completed`, download 403/404/410, or poll 404 (task unknown) | `failed`, retryable 503: the runner submits anew |
+| `completed`, download 403/404/410, or poll 404 (task unknown) | `failed`, retryable 503, `kind: "resubmit"`: the runner submits anew; the lane breaker does not count it |
 | `failed`, `CONTENT_MODERATION` | `failed`, flagged |
-| `failed`, `INVALID_INPUT` naming an asset | records dropped, `failed` retryable 503; the second time terminal 400 |
+| `failed`, `INVALID_INPUT` naming an asset | records dropped, `failed` retryable 503, `kind: "resubmit"`; the second time terminal 400 |
 | `failed`, `retryable: true`, or `UPSTREAM_BUSY` / `UPSTREAM_FAILED` / `TIMEOUT` / `INTERNAL_ERROR` / `OTHER` | `failed`, retryable 503 |
 | `failed`, anything else | `failed`, terminal 400 |
 | HTTP 429 / 5xx / timeout / network on the poll | thrown retryable: the runner keeps the job pending |
 | Key missing at poll time, or HTTP 401/403 on the poll | thrown plain error, no status: the runner marks the job expired; fix the key and the next run adopts the same task |
+| Corrupt job id | thrown plain error, no status: the runner marks the job expired, not failed |
 
 `data.retryable` wins over the failCode when present.
 
@@ -148,6 +149,8 @@ clip is paid again. A dead result counts as one failed attempt: an item with one
 | 429 | Retryable, `Retry-After` honoured |
 | 5xx, unreadable JSON (502) | Retryable |
 | Timeout / network failure | Retryable, `kind: "timeout"` / `"network"` |
+| Stale asset id, task unknown to apimodels (poll 404), dead result URL | Retryable 503, `kind: "resubmit"`: submitted again, not counted against the lane breaker |
+| Corrupt job id at poll | Plain error, no status: the job is marked expired |
 | Caller abort | Rethrown unchanged (clean pause) |
 | Envelope `code` other than 200 on an HTTP 200 | Read like that HTTP status |
 

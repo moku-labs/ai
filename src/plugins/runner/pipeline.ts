@@ -11,7 +11,13 @@ import { registryPlugin } from "../registry";
 import { claimArtifact, OPEN_VERDICT, tryReuse } from "./claim";
 import { canonicalJson, sha256Hex } from "./keys";
 import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
-import { backoffMs, classifyError, isRetryableErrorClass, retryAfterMsOf } from "./retry";
+import {
+  backoffMs,
+  classifyError,
+  isResubmitVerdict,
+  isRetryableErrorClass,
+  retryAfterMsOf
+} from "./retry";
 import type {
   ActiveRun,
   ClaimVerdict,
@@ -279,8 +285,10 @@ function outcomeOf(errorClass: ErrorClass): AttemptOutcome {
  * Classifies a failed attempt's error, records it on the attempt row,
  * transitions the item for the two outcomes it can fully decide
  * (`flagged`, terminal `failed`), and reports the breaker outcome for
- * retryable failures. The retryable-vs-exhausted decision is left to the
- * caller, which tracks the cross-attempt count.
+ * retryable failures. A provider's `kind: "resubmit"` verdict retries like
+ * its status says but never feeds the lane breaker. The
+ * retryable-vs-exhausted decision is left to the caller, which tracks the
+ * cross-attempt count.
  *
  * @param ctx - Runner domain context.
  * @param item - The item the failed attempt belongs to.
@@ -314,7 +322,9 @@ function handleAttemptError(
     return { kind: "terminal-failed", errorClass };
   }
 
-  ctx.limits.reportOutcome(lane, "retryable-error");
+  // Retryable: a lane failure feeds the breaker; a "submit again" verdict does not.
+  const isLaneFailure = !isResubmitVerdict(error);
+  if (isLaneFailure) ctx.limits.reportOutcome(lane, "retryable-error");
   return { kind: "retryable", errorClass, retryAfterMs: retryAfterMsOf(error) };
 }
 

@@ -5,10 +5,10 @@
  * at an unknown price (D13).
  */
 import { readFileSync } from "node:fs";
-import type { VideoFile } from "../video/contract";
+import type { EstimateInput, EstimateRequest, VideoFile } from "../video/contract";
 import { imageSize } from "./image-size";
 import { modelAudio, modelResolution, requestSeconds, resolveFalModel } from "./models";
-import type { EstimateInput, EstimateRequest, FalContext } from "./types";
+import type { FalContext } from "./types";
 
 /**
  * Bundled USD-per-second prices from the fal model pages. Keys are

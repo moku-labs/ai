@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
-import type { VideoFile, VideoRequest } from "../../../video/contract";
-import type { EstimateInput, EstimateRequest } from "../../types";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type {
+  EstimateInput,
+  EstimateRequest,
+  VideoFile,
+  VideoRequest
+} from "../../../video/contract";
 import { TerminalProviderError } from "../../types";
-import type { InputUrls } from "../../video/models";
+import type { InputUrls, SeedanceBody } from "../../video/models";
 import {
   apimodelsAliases,
   buildBody,
@@ -103,7 +107,7 @@ describe("buildBody field mapping", () => {
       prompt: PROMPT,
       resolution: "720p",
       duration: 5,
-      generate_audio: true,
+      generate_audio: false,
       first_frame_url: "https://files/anna.png",
       last_frame_url: "https://files/end.png"
     });
@@ -143,7 +147,7 @@ describe("buildBody field mapping", () => {
       resolution: "720p",
       duration: 5,
       aspect_ratio: "9:16",
-      generate_audio: true,
+      generate_audio: false,
       reference_image_urls: ["asset://asset-1", "https://files/ben.png"],
       reference_audio_urls: ["https://files/voice.mp3"],
       reference_video_urls: ["https://files/tail.mp4"]
@@ -163,9 +167,17 @@ describe("buildBody field mapping", () => {
       resolution: "720p",
       duration: 5,
       aspect_ratio: "1:1",
-      generate_audio: true,
+      generate_audio: false,
       reference_image_urls: ["https://files/anna.png"]
     });
+  });
+
+  it("sends generate_audio: false by default (video contract), true only when the request asks", () => {
+    const request: VideoRequest = { model: "seedance-2.5", prompt: PROMPT, image: IMAGE };
+    const model = resolveModel("seedance-2.5");
+
+    expect(buildBody(model, request, URLS).generate_audio).toBe(false);
+    expect(buildBody(model, { ...request, audio: true }, URLS).generate_audio).toBe(true);
   });
 
   it("merges params last and strips the reserved assets key", () => {
@@ -191,6 +203,34 @@ describe("buildBody field mapping", () => {
     expect(JSON.stringify(buildBody(resolveModel("seedance-2.5"), request, URLS))).not.toContain(
       "blur"
     );
+  });
+});
+
+describe("SeedanceBody", () => {
+  it("types the fixed body fields; only the merged params stay open", () => {
+    const body = buildBody(
+      resolveModel("seedance-2.5"),
+      { model: "seedance-2.5", prompt: "p" },
+      URLS
+    );
+
+    expectTypeOf(body).toMatchTypeOf<SeedanceBody>();
+    expectTypeOf(body.duration).toEqualTypeOf<number>();
+    expectTypeOf(body.generate_audio).toEqualTypeOf<boolean>();
+    expectTypeOf<SeedanceBody["reference_image_urls"]>().toEqualTypeOf<string[] | undefined>();
+    expect(body.first_frame_url).toBe("https://files/anna.png");
+  });
+
+  it("refuses a fixed field of the wrong type", () => {
+    const body: SeedanceBody = {
+      model: "seedance-2.5",
+      prompt: "p",
+      resolution: "720p",
+      // @ts-expect-error -- duration is a number of seconds, never text
+      duration: "5",
+      generate_audio: false
+    };
+    expect(body.duration).toBe("5");
   });
 });
 

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { TerminalProviderError } from "../../types";
 import { decodeJobId, encodeJobId, readChargeUsd, readTask } from "../../video/job";
 import { thrownBy } from "./fixtures";
 
@@ -19,10 +18,11 @@ describe("encodeJobId / decodeJobId", () => {
     ["assetUsd not a number", JSON.stringify({ taskId: "t", model: "m", assetUsd: "0" })],
     ["negative assetUsd", JSON.stringify({ taskId: "t", model: "m", assetUsd: -1 })],
     ["a JSON array", "[]"]
-  ])("throws a terminal 400 for a malformed id (%s)", (_label, jobId) => {
+  ])("throws a plain error with no status or kind for a malformed id (%s): a poll marks the job expired", (_label, jobId) => {
     const error = thrownBy(() => decodeJobId(jobId));
-    expect(error).toBeInstanceOf(TerminalProviderError);
-    expect((error as TerminalProviderError).status).toBe(400);
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(error).not.toHaveProperty("status");
+    expect(error).not.toHaveProperty("kind");
     expect((error as Error).message).toMatch(
       /^\[ai\] apimodels job id ".*" is not valid\.\n {2}Expected the JSON job id returned by apimodels submit\.$/
     );

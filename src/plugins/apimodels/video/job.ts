@@ -4,7 +4,6 @@
  * narrowing of apimodels' task and records payloads.
  */
 import { readField, readString } from "../client";
-import { TerminalProviderError } from "../types";
 
 /**
  * A submitted apimodels task: everything `poll` needs besides the request,
@@ -82,11 +81,13 @@ function jobFrom(value: unknown): ApimodelsJob | undefined {
 }
 
 /**
- * Decodes the job id `submit` returned.
+ * Decodes the job id `submit` returned. A corrupt id is thrown as a plain
+ * `Error` with no `status` or `kind`, like fal's: the runner classifies it
+ * `unknown`, so a poll marks the job expired instead of failed.
  *
  * @param jobId - The journaled job id.
  * @returns The job.
- * @throws {TerminalProviderError} A 400 when the id is not an apimodels job id.
+ * @throws {Error} A plain error when the id is not an apimodels job id.
  * @example
  * ```ts
  * decodeJobId("nope"); // throws: [ai] apimodels job id "nope" is not valid.
@@ -102,9 +103,8 @@ export function decodeJobId(jobId: string): ApimodelsJob {
 
   const job = jobFrom(parsed);
   if (job === undefined) {
-    throw new TerminalProviderError(
-      `[ai] apimodels job id "${jobId.slice(0, MAX_QUOTED_ID)}" is not valid.\n  Expected the JSON job id returned by apimodels submit.`,
-      400
+    throw new Error(
+      `[ai] apimodels job id "${jobId.slice(0, MAX_QUOTED_ID)}" is not valid.\n  Expected the JSON job id returned by apimodels submit.`
     );
   }
   return job;

@@ -149,12 +149,29 @@ export type ExecutableHandler = {
  * retry taxonomy (`classifyError`/backoff in retry.ts) can classify it
  * without depending on a concrete HTTP client. All fields optional; an
  * error with none of them classifies as `"unknown"` (terminal).
+ *
+ * A poll error with no hint marks the job expired, so the next run adopts
+ * it (used for a lost or rejected key). `kind: "resubmit"` retries like its
+ * status says but does not feed the lane breaker.
+ *
+ * @example
+ * ```ts
+ * // apimodels lost the task (poll 404): submit it again, but the lane is healthy.
+ * return {
+ *   state: "failed",
+ *   error: Object.assign(new Error("[ai] apimodels lost the task."), { status: 503, kind: "resubmit" })
+ * };
+ * ```
  */
 export type ProviderErrorHint = {
   /** HTTP status code, when the failure came from an HTTP response. */
   status?: number;
-  /** Explicit classification hint that overrides status-based inference. */
-  kind?: "timeout" | "network" | "content-policy";
+  /**
+   * Explicit classification hint. `timeout`, `network` and `content-policy`
+   * override status-based inference; `resubmit` keeps the status class and
+   * only keeps the failure off the lane breaker.
+   */
+  kind?: "timeout" | "network" | "content-policy" | "resubmit";
   /** Provider-supplied Retry-After delay, ms (honored when larger than computed backoff). */
   retryAfterMs?: number;
 };

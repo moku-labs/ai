@@ -4,7 +4,8 @@
  * lookups estimate and actual cost share. A key without a price throws: a
  * paid job never runs at an unknown price.
  */
-import type { ApimodelsContext, EstimateRequest } from "./types";
+import type { EstimateRequest } from "../video/contract";
+import type { ApimodelsContext } from "./types";
 import { TerminalProviderError } from "./types";
 import { requestResolution, requestSeconds, resolveModel } from "./video/models";
 
@@ -37,6 +38,9 @@ const ASSET_PRICE_KEY = "asset";
 
 /** Cost precision: results are rounded to micro-dollars so 0.1 + 0.2 is 0.3. */
 const MICRO_DOLLARS = 1_000_000;
+
+/** Status of a missing price: terminal, a paid job never runs at an unknown price. */
+const BAD_REQUEST = 400;
 
 /**
  * Merges the bundled table with config overrides (an override replaces its key).
@@ -89,7 +93,7 @@ export function lookupPerSecond(
   if (price === undefined) {
     throw new TerminalProviderError(
       `[ai] No price for apimodels model "${alias}" at ${resolution}.\n  Add "${key}" to apimodels priceOverrides.`,
-      400
+      BAD_REQUEST
     );
   }
   return price;
@@ -140,7 +144,7 @@ export function assetPriceUsd(ctx: ApimodelsContext): number {
   if (price === undefined) {
     throw new TerminalProviderError(
       '[ai] No price for apimodels asset registration.\n  Add "asset" to apimodels priceOverrides.',
-      400
+      BAD_REQUEST
     );
   }
   return price;

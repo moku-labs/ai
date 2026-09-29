@@ -10,7 +10,13 @@
  * refused at poll time throws a plain error: the runner marks the job
  * expired, and the next run adopts the same task.
  */
-import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
+import type {
+  EstimateRequest,
+  VideoFile,
+  VideoHandler,
+  VideoJobPoll,
+  VideoRequest
+} from "../../video/contract";
 import {
   invalidateStaleAssets,
   isStaleAssetFailure,
@@ -24,7 +30,7 @@ import {
 import type { ApiResponse } from "../client";
 import { apiData, apiFetch, cleanText, suffixOf } from "../client";
 import { assetPriceUsd, roundUsd, videoCostUsd } from "../prices";
-import type { ApimodelsContext, ApimodelsProviderError, EstimateRequest } from "../types";
+import type { ApimodelsContext, ApimodelsProviderError } from "../types";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../types";
 import type { UploadOptions } from "../upload";
 import { uploadFiles } from "../upload";
@@ -171,6 +177,7 @@ function estimateUsd(ctx: ApimodelsContext, request: EstimateRequest): number {
  * ```
  */
 function splitUrls(request: VideoRequest, urlBySelector: ReadonlyMap<string, string>): InputUrls {
+  // One list per ref kind; a ref of unknown kind goes with the images.
   const urlOf = (selector: string): string => urlBySelector.get(selector) ?? "";
   const imageUrls: string[] = [];
   const audioUrls: string[] = [];
@@ -182,9 +189,12 @@ function splitUrls(request: VideoRequest, urlBySelector: ReadonlyMap<string, str
     unknown: imageUrls
   };
 
+  // Each ref's URL into the list of its kind, in request order.
   for (const [index, ref] of (request.refs ?? []).entries()) {
     lists[referenceKindOf(ref)].push(urlOf(`refs.${index}`));
   }
+
+  // The frames, then the three ref lists.
   const endImage = request.endImage === undefined ? undefined : urlOf("endImage");
   return {
     image: urlOf("image"),
@@ -462,7 +472,8 @@ function isTaskUnknown(error: unknown): boolean {
 
 /**
  * The poll for a task apimodels does not know (poll 404): failed with a
- * retryable 503, so the runner submits anew.
+ * retryable 503, `kind: "resubmit"`, so the runner submits anew without
+ * counting it against the lane breaker.
  *
  * @param ctx - Plugin context (log).
  * @param job - The job.
@@ -471,14 +482,15 @@ function isTaskUnknown(error: unknown): boolean {
 function lostTaskPoll(ctx: ApimodelsContext, job: ApimodelsJob): VideoJobPoll {
   const lost = new RetryableProviderError(
     `[ai] apimodels does not know task "${job.taskId}" (HTTP 404).\n  The runner submits it again, and it is paid again.`,
-    { status: RETRY_STATUS }
+    { status: RETRY_STATUS, kind: "resubmit" }
   );
   return failedPoll(ctx, job, lost);
 }
 
 /**
  * The poll for a download that failed: a dead result URL (7 days passed)
- * returns failed with a retryable 503, so the runner submits anew; another
+ * returns failed with a retryable 503, `kind: "resubmit"`, so the runner
+ * submits anew; another
  * 4xx is thrown as a retryable 503 (poll again, the clip is paid for); any
  * other failure is thrown as is.
  *
@@ -497,7 +509,7 @@ function downloadFailure(ctx: ApimodelsContext, job: ApimodelsJob, error: unknow
       job,
       new RetryableProviderError(
         `[ai] apimodels finished the task, but its result is gone (HTTP ${error.status}).\n  Results live 7 days; the runner submits the task again, and it is paid again.`,
-        { status: RETRY_STATUS }
+        { status: RETRY_STATUS, kind: "resubmit" }
       )
     );
   }
@@ -614,10 +626,10 @@ async function finishTask(
 /**
  * Polls a task once: pending, failed with the classified error, or done
  * with the downloaded clip. A poll 404 (task unknown) returns failed with a
- * retryable 503; a 429, 5xx, timeout or network failure is thrown, so the
- * runner keeps the job pending. A key missing or refused (401/403) is thrown
- * as a plain error, so the runner marks the job expired and a later run
- * adopts the same task.
+ * retryable 503, `kind: "resubmit"`; a 429, 5xx, timeout or network failure
+ * is thrown, so the runner keeps the job pending. A corrupt job id, or a key
+ * missing or refused (401/403), is thrown as a plain error, so the runner
+ * marks the job expired and a later run adopts the same task.
  *
  * @param ctx - Plugin context.
  * @param staleSeen - Request keys already answered stale in this process.
@@ -682,7 +694,7 @@ async function pollJob(
 export function createVideoHandler(ctx: ApimodelsContext): ApimodelsVideoHandler {
   const staleSeen = new Set<string>();
   return {
-    estimate: (request: VideoRequest): { usd: number } => ({ usd: estimateUsd(ctx, request) }),
+    estimate: (request: EstimateRequest): { usd: number } => ({ usd: estimateUsd(ctx, request) }),
     submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
       submitJob(ctx, staleSeen, request, opts.signal),
     poll: (

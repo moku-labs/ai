@@ -7,6 +7,8 @@ import type { RegistryApi, registryPlugin } from "../registry";
 import type { VideoRequest, VideoResult } from "./contract";
 
 export type {
+  EstimateInput,
+  EstimateRequest,
   VideoFile,
   VideoHandler,
   VideoJobPoll,

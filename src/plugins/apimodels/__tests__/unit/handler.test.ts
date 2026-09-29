@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { VideoFile, VideoJobPoll, VideoRequest } from "../../../video/contract";
+import type {
+  EstimateRequest,
+  VideoFile,
+  VideoJobPoll,
+  VideoRequest
+} from "../../../video/contract";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../types";
 import { fileNameOf } from "../../upload";
 import { createVideoHandler } from "../../video/handler";
@@ -110,15 +115,14 @@ describe("estimate", () => {
     const handler = createVideoHandler(createTestCtx({ env: createFakeEnv({}) }));
 
     expect(handler.estimate(shot()).usd).toBe(2.16);
-    expect(
-      handler.estimate({
-        model: "seedance-2.5",
-        prompt: "p",
-        image: { $file: "cast/anna.png" },
-        seconds: 8,
-        params: { assets: ["image"] }
-      } as unknown as VideoRequest).usd
-    ).toBe(2.17);
+    const unresolved: EstimateRequest = {
+      model: "seedance-2.5",
+      prompt: "p",
+      image: { $file: "cast/anna.png" },
+      seconds: 8,
+      params: { assets: ["image"] }
+    };
+    expect(handler.estimate(unresolved).usd).toBe(2.17);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -165,7 +169,7 @@ describe("submit", () => {
         prompt: PROMPT,
         resolution: "720p",
         duration: 8,
-        generate_audio: true,
+        generate_audio: false,
         first_frame_url: "anna",
         last_frame_url: "end"
       }
@@ -179,7 +183,7 @@ describe("submit", () => {
         resolution: "480p",
         duration: 8,
         aspect_ratio: "9:16",
-        generate_audio: true,
+        generate_audio: false,
         reference_image_urls: ["anna", "ben"],
         reference_audio_urls: ["voice"],
         reference_video_urls: ["tail"]
@@ -206,7 +210,7 @@ describe("submit", () => {
         resolution: "720p",
         duration: 8,
         aspect_ratio: "16:9",
-        generate_audio: true,
+        generate_audio: false,
         reference_image_urls: ["anna", "ben"]
       }
     ]
@@ -409,7 +413,7 @@ describe("submit", () => {
     const first = await rejectionOf(() => handler.submit(request, {}));
 
     expect(first).toBeInstanceOf(RetryableProviderError);
-    expect(first).toMatchObject({ status: 503 });
+    expect(first).toMatchObject({ status: 503, kind: "resubmit" });
     expect(jsonBodyOf(api.calls("submit")[0]).first_frame_url).toBe("asset://old");
     expect(journal.records.has(key)).toBe(false);
     expect(ctx.state.assets.size).toBe(0);
@@ -433,7 +437,7 @@ describe("submit", () => {
 
     expect(firstError).toBeInstanceOf(RetryableProviderError);
     expect(secondError).toBeInstanceOf(RetryableProviderError);
-    expect(secondError).toMatchObject({ status: 503 });
+    expect(secondError).toMatchObject({ status: 503, kind: "resubmit" });
     expect(api.count("submit")).toBe(2);
   });
 
@@ -573,14 +577,14 @@ describe("poll", () => {
     [403],
     [404],
     [410]
-  ])("a dead result URL (HTTP %d) returns failed with a retryable 503", async status => {
+  ])("a dead result URL (HTTP %d) returns failed with a retryable 503, kind resubmit", async status => {
     stubApi({ poll: completedTask, download: () => new Response("gone", { status }) });
     const ctx = createTestCtx();
 
     const error = failedError(await createVideoHandler(ctx).poll(jobIdOf(), shot(), {}));
 
     expect(error).toBeInstanceOf(RetryableProviderError);
-    expect(error).toMatchObject({ status: 503 });
+    expect(error).toMatchObject({ status: 503, kind: "resubmit" });
     expect((error as Error).message).toBe(
       `[ai] apimodels finished the task, but its result is gone (HTTP ${status}).\n  Results live 7 days; the runner submits the task again, and it is paid again.`
     );
@@ -600,7 +604,7 @@ describe("poll", () => {
       createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
     );
     expect(error).toBeInstanceOf(RetryableProviderError);
-    expect(error).toMatchObject({ status: 503 });
+    expect(error).toMatchObject({ status: 503, kind: undefined });
   });
 
   it("completed without a result URL is thrown retryable (poll again)", async () => {
@@ -609,23 +613,24 @@ describe("poll", () => {
       createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
     );
     expect(error).toBeInstanceOf(RetryableProviderError);
-    expect(error).toMatchObject({ status: 503 });
+    expect(error).toMatchObject({ status: 503, kind: undefined });
   });
 
-  it("an unknown task (HTTP 404, or envelope code 404) returns failed with a retryable 503", async () => {
+  it("an unknown task (HTTP 404, or envelope code 404) returns failed with a retryable 503, kind resubmit", async () => {
     stubApi({ poll: () => jsonResponse(404, { code: 404, msg: "task not found" }) });
     const handler = createVideoHandler(createTestCtx());
     const error = failedError(await handler.poll(jobIdOf(), shot(), {}));
     expect(error).toBeInstanceOf(RetryableProviderError);
-    expect(error).toMatchObject({ status: 503 });
+    expect(error).toMatchObject({ status: 503, kind: "resubmit" });
     expect((error as Error).message).toBe(
       '[ai] apimodels does not know task "task-1" (HTTP 404).\n  The runner submits it again, and it is paid again.'
     );
 
     stubApi({ poll: () => envelope(undefined, 404) });
-    expect(failedError(await handler.poll(jobIdOf(), shot(), {}))).toBeInstanceOf(
-      RetryableProviderError
-    );
+    expect(failedError(await handler.poll(jobIdOf(), shot(), {}))).toMatchObject({
+      status: 503,
+      kind: "resubmit"
+    });
   });
 
   it("failed with CONTENT_MODERATION returns flagged", async () => {
@@ -648,13 +653,13 @@ describe("poll", () => {
     ["TIMEOUT"],
     ["INTERNAL_ERROR"],
     ["OTHER"]
-  ])("failed with the retryable code %s returns a retryable 503", async failCode => {
+  ])("failed with the retryable code %s returns a retryable 503, no kind", async failCode => {
     stubApi({ poll: () => failedTask({ failCode, failMsg: "try later" }) });
     const error = failedError(
       await createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
     );
     expect(error).toBeInstanceOf(RetryableProviderError);
-    expect(error).toMatchObject({ status: 503 });
+    expect(error).toMatchObject({ status: 503, kind: undefined });
     expect((error as Error).message).toBe(
       `[ai] apimodels task failed (${failCode}): try later.\n  The runner submits it again.`
     );
@@ -711,7 +716,7 @@ describe("poll", () => {
     const first = failedError(await handler.poll(jobIdOf("task-1", 0.01), request, {}));
 
     expect(first).toBeInstanceOf(RetryableProviderError);
-    expect(first).toMatchObject({ status: 503 });
+    expect(first).toMatchObject({ status: 503, kind: "resubmit" });
     expect(journal.records.has(key)).toBe(false);
     expect(ctx.state.assets.size).toBe(0);
 
@@ -742,15 +747,21 @@ describe("poll", () => {
   });
 
   it.each([
-    ["HTTP 429", () => jsonResponse(429, {}, { "retry-after": "1" })],
-    ["HTTP 503", () => jsonResponse(503, {})],
-    ["a network failure", () => Promise.reject(new TypeError("fetch failed"))]
-  ])("%s on the poll itself is thrown retryable (the runner keeps the job pending)", async (_label, poll) => {
+    ["HTTP 429", () => jsonResponse(429, {}, { "retry-after": "1" }), { status: 429 }],
+    ["HTTP 503", () => jsonResponse(503, {}), { status: 503 }],
+    [
+      "a network failure",
+      () => Promise.reject(new TypeError("fetch failed")),
+      { status: undefined, kind: "network" }
+    ]
+  ])("%s on the poll itself is thrown retryable with its own hint (the runner keeps the job pending)", async (_label, poll, hint) => {
     stubApi({ poll });
     const error = await rejectionOf(() =>
       createVideoHandler(createTestCtx()).poll(jobIdOf(), shot(), {})
     );
     expect(error).toBeInstanceOf(RetryableProviderError);
+    expect(error).toMatchObject(hint);
+    expect((error as RetryableProviderError).kind).not.toBe("resubmit");
   });
 
   it.each([
@@ -784,13 +795,17 @@ describe("poll", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("a malformed job id is thrown terminal 400, before any fetch", async () => {
+  it("a malformed job id is thrown as a plain error with no status (the runner marks the job expired), before any fetch", async () => {
     const fetchMock = stubFetch();
     const error = await rejectionOf(() =>
       createVideoHandler(createTestCtx()).poll("nope", shot(), {})
     );
-    expect(error).toBeInstanceOf(TerminalProviderError);
-    expect(error).toMatchObject({ status: 400 });
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(error).not.toHaveProperty("status");
+    expect(error).not.toHaveProperty("kind");
+    expect((error as Error).message).toBe(
+      '[ai] apimodels job id "nope" is not valid.\n  Expected the JSON job id returned by apimodels submit.'
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

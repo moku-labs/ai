@@ -6,8 +6,7 @@
  * Seedance 2.5 and Seedance 2.0 official. Every refusal is a terminal 400
  * raised before any upload or charge.
  */
-import type { VideoFile, VideoRequest } from "../../video/contract";
-import type { EstimateInput, EstimateRequest } from "../types";
+import type { EstimateInput, EstimateRequest, VideoFile, VideoRequest } from "../../video/contract";
 import { TerminalProviderError } from "../types";
 
 /**
@@ -100,6 +99,67 @@ export type InputUrls = {
 };
 
 /**
+ * The typed fields of the JSON body POSTed to `/video/generations`, before
+ * `request.params` is merged in. A frames alias sends `first_frame_url` (and
+ * `last_frame_url`); a reference alias sends `aspect_ratio` and the
+ * `reference_*_urls` lists.
+ *
+ * @example
+ * ```ts
+ * const body: SeedanceBody = {
+ *   model: "seedance-2.5", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: false, first_frame_url: "asset://a1"
+ * };
+ * ```
+ */
+export type SeedanceBody = {
+  /** Upstream model id, e.g. "seedance-2.0-official". */
+  model: string;
+  /** Motion and scene prompt. */
+  prompt: string;
+  /** Output resolution, e.g. "720p". */
+  resolution: string;
+  /** Clip length, seconds. */
+  duration: number;
+  /** Whether upstream generates native audio. */
+  generate_audio: boolean;
+  /** Aspect ratio; reference aliases only (a first frame makes upstream adaptive). */
+  aspect_ratio?: string;
+  /** First frame (https or `asset://`); frames aliases only. */
+  first_frame_url?: string;
+  /** Last frame; frames aliases with an end frame only. */
+  last_frame_url?: string;
+  /** `input.image` first (`@image1`), then the image refs; reference aliases only. */
+  reference_image_urls?: string[];
+  /** Audio refs, only when the request has some. */
+  reference_audio_urls?: string[];
+  /** Video refs, only when the request has some. */
+  reference_video_urls?: string[];
+};
+
+/**
+ * The body as POSTed: the typed {@link SeedanceBody} fields, then
+ * `request.params` (without `assets`) merged last. Only the params are open:
+ * they pass through by contract.
+ *
+ * @example
+ * ```ts
+ * const body: SubmitBody = {
+ *   model: "seedance-2.5", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: false, output_format: "mov"
+ * };
+ * ```
+ */
+export type SubmitBody = SeedanceBody & Record<string, unknown>;
+
+/** The input fields of a frames alias. */
+type FrameFields = Pick<SeedanceBody, "first_frame_url" | "last_frame_url">;
+
+/** The input fields of a reference alias. */
+type ReferenceFields = Pick<
+  SeedanceBody,
+  "aspect_ratio" | "reference_image_urls" | "reference_audio_urls" | "reference_video_urls"
+>;
+
+/**
  * Kind of a ref: by MIME once resolved, unknown before.
  *
  * @example
@@ -120,6 +180,12 @@ const DEFAULT_RESOLUTION = "720p";
 
 /** Clip length used when the request names none, seconds. */
 const DEFAULT_SECONDS = 5;
+
+/** Shortest clip every alias takes, seconds. */
+const MIN_SECONDS = 4;
+
+/** Native audio when the request names none: off, as the video contract says. */
+const DEFAULT_AUDIO = false;
 
 /** Aspect ratio used when the request names none (ignored with a first frame). */
 const DEFAULT_ASPECT = "9:16";
@@ -155,7 +221,7 @@ function framesModel(
     mode: "frames",
     resolutions,
     defaultResolution: DEFAULT_RESOLUTION,
-    minSeconds: 4,
+    minSeconds: MIN_SECONDS,
     maxSeconds,
     maxImages: 1,
     maxAudioRefs: 0,
@@ -422,18 +488,20 @@ function checkReferenceLimits(model: ResolvedModel, references: readonly Estimat
  */
 function checkInputs(model: ResolvedModel, request: EstimateRequest): void {
   const references = request.refs ?? [];
+  const hasRefusedEndFrame = request.endImage !== undefined && model.mode === "references";
+  const hasRefusedReferences = references.length > 0 && model.mode === "frames";
 
   if (request.image === undefined) {
     throw refusal(
       `[ai] apimodels model "${model.alias}" needs an image.\n  Set input.image to a $ref or $file.`
     );
   }
-  if (request.endImage !== undefined && model.mode === "references") {
+  if (hasRefusedEndFrame) {
     throw refusal(
       `[ai] apimodels model "${model.alias}" takes no end frame.\n  Remove input.endImage, or use a model that takes one: ${aliasesOf("frames").join(", ")}.`
     );
   }
-  if (references.length > 0 && model.mode === "frames") {
+  if (hasRefusedReferences) {
     throw refusal(
       `[ai] apimodels model "${model.alias}" takes no refs.\n  Remove input.refs, or use a model that takes them: ${aliasesOf("references").join(", ")}.`
     );
@@ -520,8 +588,8 @@ function passThroughParameters(
  * frameFields({ image: "u1", endImage: "u2", imageRefs: [], audioRefs: [], videoRefs: [] }); // => { first_frame_url: "u1", last_frame_url: "u2" }
  * ```
  */
-function frameFields(urls: InputUrls): Record<string, unknown> {
-  const fields: Record<string, unknown> = { first_frame_url: urls.image };
+function frameFields(urls: InputUrls): FrameFields {
+  const fields: FrameFields = { first_frame_url: urls.image };
   if (urls.endImage !== undefined) fields.last_frame_url = urls.endImage;
   return fields;
 }
@@ -539,8 +607,8 @@ function frameFields(urls: InputUrls): Record<string, unknown> {
  * referenceFields({ image: "u1", imageRefs: ["u2"], audioRefs: [], videoRefs: [] }, "9:16"); // => { aspect_ratio: "9:16", reference_image_urls: ["u1", "u2"] }
  * ```
  */
-function referenceFields(urls: InputUrls, aspect: string): Record<string, unknown> {
-  const fields: Record<string, unknown> = {
+function referenceFields(urls: InputUrls, aspect: string): ReferenceFields {
+  const fields: ReferenceFields = {
     aspect_ratio: aspect,
     reference_image_urls: [urls.image, ...urls.imageRefs]
   };
@@ -552,7 +620,8 @@ function referenceFields(urls: InputUrls, aspect: string): Record<string, unknow
 /**
  * Builds the JSON body POSTed to `/video/generations`: the model fields,
  * the input fields of its mode, then `request.params` (without `assets`)
- * merged last. `negative` is not supported upstream and never sent.
+ * merged last. `generate_audio` is false unless the request asks for audio.
+ * `negative` is not supported upstream and never sent.
  *
  * @param model - The resolved catalog row.
  * @param request - The validated request.
@@ -561,29 +630,26 @@ function referenceFields(urls: InputUrls, aspect: string): Record<string, unknow
  * @example
  * ```ts
  * buildBody(resolveModel("seedance-2.0"), { model: "seedance-2.0", prompt: "push-in" }, { image: "asset://a1", imageRefs: [], audioRefs: [], videoRefs: [] });
- * // => { model: "seedance-2.0-official", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: true, first_frame_url: "asset://a1" }
+ * // => { model: "seedance-2.0-official", prompt: "push-in", resolution: "720p", duration: 5, generate_audio: false, first_frame_url: "asset://a1" }
  * ```
  */
 export function buildBody(
   model: ResolvedModel,
   request: VideoRequest,
   urls: InputUrls
-): Record<string, unknown> {
-  const base = {
-    model: model.apiModel,
-    prompt: request.prompt,
-    resolution: requestResolution(model, request),
-    duration: requestSeconds(request)
-  };
+): SubmitBody {
   const inputs =
     model.mode === "frames"
       ? frameFields(urls)
       : referenceFields(urls, request.aspect ?? DEFAULT_ASPECT);
-
-  return {
-    ...base,
-    generate_audio: request.audio ?? true,
-    ...inputs,
-    ...passThroughParameters(request.params)
+  const body: SeedanceBody = {
+    model: model.apiModel,
+    prompt: request.prompt,
+    resolution: requestResolution(model, request),
+    duration: requestSeconds(request),
+    generate_audio: request.audio ?? DEFAULT_AUDIO,
+    ...inputs
   };
+
+  return { ...body, ...passThroughParameters(request.params) };
 }
