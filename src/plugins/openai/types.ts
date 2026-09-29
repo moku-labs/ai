@@ -5,6 +5,11 @@
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
+import type {
+  FlaggedProviderError as FlaggedProviderErrorClass,
+  RetryableProviderError as RetryableProviderErrorClass,
+  TerminalProviderError as TerminalProviderErrorClass
+} from "./errors";
 
 /**
  * openai plugin configuration: which env var holds the API key, an optional
@@ -196,8 +201,15 @@ export type OpenaiApi = {
 
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";
-/** The runtime error classes live in `./errors`; re-exported here as types only. */
-export type { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
+// Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
+// class re-export back into `declare class`, so `Openai.X` would pass tsc as a value that is
+// `undefined` at runtime. The classes ship as values in `OpenaiErrors` from the package root.
+/** Instance type of the retryable provider error; the class is `OpenaiErrors.RetryableProviderError`. */
+export type RetryableProviderError = RetryableProviderErrorClass;
+/** Instance type of the terminal provider error; the class is `OpenaiErrors.TerminalProviderError`. */
+export type TerminalProviderError = TerminalProviderErrorClass;
+/** Instance type of the content-policy provider error; the class is `OpenaiErrors.FlaggedProviderError`. */
+export type FlaggedProviderError = FlaggedProviderErrorClass;
 
 /**
  * Domain context for the openai plugin's extracted files (api.ts, client.ts,

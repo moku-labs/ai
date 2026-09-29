@@ -5,6 +5,10 @@
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
+import type {
+  RetryableProviderError as RetryableProviderErrorClass,
+  TerminalProviderError as TerminalProviderErrorClass
+} from "./errors";
 
 /**
  * codex plugin configuration: which CLI to run, which model and reasoning
@@ -96,8 +100,13 @@ export type CodexApi = {
 
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";
-/** The runtime error classes live in `./errors`; re-exported here as types only. */
-export type { RetryableProviderError, TerminalProviderError } from "./errors";
+// Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
+// class re-export back into `declare class`, so `Codex.X` would pass tsc as a value that is
+// `undefined` at runtime. The classes ship as values in `CodexErrors` from the package root.
+/** Instance type of the retryable provider error; the class is `CodexErrors.RetryableProviderError`. */
+export type RetryableProviderError = RetryableProviderErrorClass;
+/** Instance type of the terminal provider error; the class is `CodexErrors.TerminalProviderError`. */
+export type TerminalProviderError = TerminalProviderErrorClass;
 
 /**
  * Domain context shared by `api.ts`, `prices.ts` and `image/handler.ts`:

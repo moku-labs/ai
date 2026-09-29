@@ -6,7 +6,11 @@ import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
 import type { VideoFile, VideoRequest } from "../video/contract";
-import type { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
+import type {
+  FlaggedProviderError as FlaggedProviderErrorClass,
+  RetryableProviderError as RetryableProviderErrorClass,
+  TerminalProviderError as TerminalProviderErrorClass
+} from "./errors";
 
 /**
  * A request image, end frame or ref at estimate time: a resolved file, or
@@ -140,16 +144,18 @@ export type FalApi = {
   info(): FalInfo;
 };
 
-/**
- * The provider error classes and the retryable class's hint, declared in `./errors`.
- * Re-exported here as types only; the values ship as `FalErrors` from the package root.
- */
-export type {
-  FlaggedProviderError,
-  RetryableProviderError,
-  RetryHint,
-  TerminalProviderError
-} from "./errors";
+/** Structural retry hint of {@link RetryableProviderError}, declared in `./errors`. */
+export type { RetryHint } from "./errors";
+
+// Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
+// class re-export back into `declare class`, so `Fal.X` would pass tsc as a value that is
+// `undefined` at runtime. The classes ship as values in `FalErrors` from the package root.
+/** Instance type of the retryable provider error; the class is `FalErrors.RetryableProviderError`. */
+export type RetryableProviderError = RetryableProviderErrorClass;
+/** Instance type of the terminal provider error; the class is `FalErrors.TerminalProviderError`. */
+export type TerminalProviderError = TerminalProviderErrorClass;
+/** Instance type of the content-policy provider error; the class is `FalErrors.FlaggedProviderError`. */
+export type FlaggedProviderError = FlaggedProviderErrorClass;
 
 /**
  * Any of this plugin's classified provider errors.

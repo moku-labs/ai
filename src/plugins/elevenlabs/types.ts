@@ -1,11 +1,16 @@
 /**
- * @file elevenlabs provider plugin — types (Config/State/API), type-only
- * re-exports of the `errors.ts` provider error classes, and the domain
+ * @file elevenlabs provider plugin — types (Config/State/API), type aliases
+ * of the `errors.ts` provider error classes, and the domain
  * context type shared by `api.ts` and `voiceover/handler.ts`.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
+import type {
+  FlaggedProviderError as FlaggedProviderErrorClass,
+  RetryableProviderError as RetryableProviderErrorClass,
+  TerminalProviderError as TerminalProviderErrorClass
+} from "./errors";
 
 /**
  * elevenlabs plugin configuration: API key env var, base URL, default
@@ -78,11 +83,15 @@ export type ElevenlabsApi = {
 /** The registry's public surface — declared once in `../registry` and re-exported for this plugin's consumers. */
 export type { RegistryApi } from "../registry";
 
-/**
- * The provider error classes, re-exported type-only. The runtime values live
- * in `errors.ts`; consumers reach them as `ElevenlabsErrors` from `@moku-labs/ai`.
- */
-export type { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
+// Type aliases, not `export type { … } from "./errors"`: the .d.ts bundler turns a type-only
+// class re-export back into `declare class`, so `Elevenlabs.X` would pass tsc as a value that is
+// `undefined` at runtime. The classes ship as values in `ElevenlabsErrors` from the package root.
+/** Instance type of the retryable provider error; the class is `ElevenlabsErrors.RetryableProviderError`. */
+export type RetryableProviderError = RetryableProviderErrorClass;
+/** Instance type of the terminal provider error; the class is `ElevenlabsErrors.TerminalProviderError`. */
+export type TerminalProviderError = TerminalProviderErrorClass;
+/** Instance type of the content-policy provider error; the class is `ElevenlabsErrors.FlaggedProviderError`. */
+export type FlaggedProviderError = FlaggedProviderErrorClass;
 
 /**
  * Domain context shared by `api.ts` (`info()`) and `voiceover/handler.ts`

@@ -160,7 +160,11 @@ export {
 } from "./plugins";
 
 // ─── Errors (per-provider runtime classes: `FalErrors.RetryableProviderError`, …) ──
+/** Codex provider error classes as runtime values, for `instanceof` checks. */
 export * as CodexErrors from "./plugins/codex/errors";
+/** Elevenlabs provider error classes as runtime values, for `instanceof` checks. */
 export * as ElevenlabsErrors from "./plugins/elevenlabs/errors";
+/** Fal provider error classes as runtime values, for `instanceof` checks. */
 export * as FalErrors from "./plugins/fal/errors";
+/** Openai provider error classes as runtime values, for `instanceof` checks. */
 export * as OpenaiErrors from "./plugins/openai/errors";
