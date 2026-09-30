@@ -60,21 +60,11 @@ export const ARK_PARAMS = [
 
 /**
  * A `params` key ark takes.
- *
- * @example
- * ```ts
- * const key: ArkParameterName = "watermark";
- * ```
  */
 export type ArkParameterName = (typeof ARK_PARAMS)[number];
 
 /**
  * A `params` key passed through to the body as given.
- *
- * @example
- * ```ts
- * const key: ArkPassthroughKey = "return_last_frame";
- * ```
  */
 export type ArkPassthroughKey = Exclude<ArkParameterName, "refUrls" | "draft" | "generation">;
 
@@ -156,11 +146,6 @@ export type ArkVideoBody = ArkPassthrough & {
 
 /**
  * A request checked against the model, with defaults applied.
- *
- * @example
- * ```ts
- * const checked: CheckedVideoRequest = { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {}, draft: false };
- * ```
  */
 export type CheckedVideoRequest = {
   /** Clip length, seconds. */
@@ -182,21 +167,11 @@ export type CheckedVideoRequest = {
 /**
  * One request input read from disk: a plain local image as a data URI, or an
  * asset ref as its record.
- *
- * @example
- * ```ts
- * const input: ReadInput = { kind: "image", url: "data:image/png;base64,AQID" };
- * ```
  */
 export type ReadInput = { kind: "image"; url: string } | { kind: "asset"; record: AssetRecord };
 
 /**
  * Every input of a request, read.
- *
- * @example
- * ```ts
- * const inputs: ReadInputs = { image: { kind: "image", url: "data:image/png;base64,AQID" }, endImage: undefined, refs: [] };
- * ```
  */
 export type ReadInputs = {
   /** First frame, when the request has one. */

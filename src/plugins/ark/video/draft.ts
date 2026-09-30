@@ -16,13 +16,6 @@ import type { ArkContext, ArkRegion, EstimateRequest } from "../types";
 
 /**
  * A draft task, as kept in the journal.
- *
- * @example
- * ```ts
- * const draft: DraftRecord = {
- *   taskId: "cgt-20260930171041-8mowm", model: "dreamina-seedance-2-5-260628", seed: 76282, createdAt: 1_790_759_442_000
- * };
- * ```
  */
 export type DraftRecord = {
   /** The draft task id a final names in `draft_task.id`. */
@@ -92,7 +85,7 @@ const DRAFT_RESOLUTION_ERROR =
  * draftModelOf("intl"); // => "dreamina-seedance-2-5-260628"
  * ```
  */
-function draftModelOf(region: ArkRegion): string {
+export function draftModelOf(region: ArkRegion): string {
   const model = arkModels.find(row => row.region === region && row.supportsDraft);
   return model?.id ?? "a Seedance 2.5 model";
 }

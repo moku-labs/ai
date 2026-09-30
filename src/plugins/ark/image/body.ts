@@ -39,13 +39,6 @@ export const ARK_IMAGE_PARAMS = ["size", "seed", "generation", "watermark"] as c
 
 /**
  * The Seedream body POSTed to ark.
- *
- * @example
- * ```ts
- * const body: ArkImageBody = {
- *   model: "seedream-5-0-lite-260128", prompt: "p", size: "1440x2560", response_format: "url", watermark: false
- * };
- * ```
  */
 export type ArkImageBody = {
   /** Ark model id. */
@@ -64,11 +57,6 @@ export type ArkImageBody = {
 
 /**
  * An image request checked against the model, with defaults applied.
- *
- * @example
- * ```ts
- * const checked: CheckedImageRequest = { size: "1440x2560", watermark: false, seed: undefined };
- * ```
  */
 export type CheckedImageRequest = {
   /** The size sent. */
@@ -87,6 +75,24 @@ const SIZE_PATTERN = /^(\d+)x(\d+)$/;
 
 /** MIME type of bytes nothing recognizes. */
 const OCTET_STREAM = "application/octet-stream";
+
+/** PNG file signature: `\x89PNG`. */
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47] as const;
+
+/** JPEG file signature: the SOI marker and the next marker byte. */
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff] as const;
+
+/** GIF file signature: `GIF8`. */
+const GIF_SIGNATURE = [0x47, 0x49, 0x46, 0x38] as const;
+
+/** RIFF container signature: `RIFF`, the start of a WebP file. */
+const RIFF_SIGNATURE = [0x52, 0x49, 0x46, 0x46] as const;
+
+/** WebP form type: `WEBP`, after the RIFF chunk size. */
+const WEBP_SIGNATURE = [0x57, 0x45, 0x42, 0x50] as const;
+
+/** Where `WEBP` starts in a RIFF file: after `RIFF` and the 4-byte chunk size. */
+const WEBP_TAG_OFFSET = 8;
 
 /** The error for a request with refs. */
 const REFS_ERROR = "[ai] ark images are text-to-image only.\n  Remove input.refs.";
@@ -170,8 +176,8 @@ function checkSize(model: ArkImageModel, value: unknown, aspect: string | undefi
 
   const pixels = Number(match[1]) * Number(match[2]);
   if (pixels >= model.minPixels) return match[0];
-  const hintAspect =
-    aspect !== undefined && ARK_IMAGE_SIZES[aspect] !== undefined ? aspect : DEFAULT_ASPECT;
+  const isKnownAspect = aspect !== undefined && ARK_IMAGE_SIZES[aspect] !== undefined;
+  const hintAspect = isKnownAspect ? aspect : DEFAULT_ASPECT;
   throw new Error(
     `[ai] ark image size ${match[0]} is below ${model.minPixels} pixels.\n  Use at least ${ARK_IMAGE_SIZES[hintAspect]} for ${hintAspect}.`
   );
@@ -263,12 +269,11 @@ function startsWith(bytes: Uint8Array, signature: readonly number[], offset: num
  * ```
  */
 export function sniffImageMime(bytes: Uint8Array): string {
-  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47], 0)) return "image/png";
-  if (startsWith(bytes, [0xff, 0xd8, 0xff], 0)) return "image/jpeg";
-  if (startsWith(bytes, [0x47, 0x49, 0x46, 0x38], 0)) return "image/gif";
+  if (startsWith(bytes, PNG_SIGNATURE, 0)) return "image/png";
+  if (startsWith(bytes, JPEG_SIGNATURE, 0)) return "image/jpeg";
+  if (startsWith(bytes, GIF_SIGNATURE, 0)) return "image/gif";
   const isWebp =
-    startsWith(bytes, [0x52, 0x49, 0x46, 0x46], 0) &&
-    startsWith(bytes, [0x57, 0x45, 0x42, 0x50], 8);
+    startsWith(bytes, RIFF_SIGNATURE, 0) && startsWith(bytes, WEBP_SIGNATURE, WEBP_TAG_OFFSET);
   return isWebp ? "image/webp" : OCTET_STREAM;
 }
 

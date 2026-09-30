@@ -37,10 +37,13 @@ import {
 
 const MODEL_25 = "dreamina-seedance-2-5-260628";
 const MODEL_20 = "dreamina-seedance-2-0-260128";
+const MODEL_MINI = "dreamina-seedance-2-0-mini-260615";
+const NO_DRAFT_MODE_MINI = `[ai] Model ${MODEL_MINI} has no draft mode.\n  Use ${MODEL_25} for drafts.`;
 const DRAFT_CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 1]);
 const FINAL_CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 2]);
 const DRAFT_HASH = createHash("sha256").update(DRAFT_CLIP).digest("hex");
 const HOUR_MS = 60 * 60 * 1000;
+const model25 = resolveArkModel(MODEL_25, "intl");
 
 let temp: TempFiles;
 let draftClip: VideoFile;
@@ -141,7 +144,7 @@ describe("draft helpers", () => {
 describe("final checks (pure)", () => {
   it("builds the exact final body: the draft task only, 1080p, watermark false", () => {
     const model = resolveArkModel(MODEL_25, "intl");
-    const checked = checkFinalRequest({});
+    const checked = checkFinalRequest(model25, {});
 
     expect(buildFinalBody(model, DRAFT_TASK_ID, checked)).toEqual({
       model: MODEL_25,
@@ -152,7 +155,7 @@ describe("final checks (pure)", () => {
   });
 
   it("passes only watermark, return_last_frame, execution_expires_after and priority", () => {
-    const checked = checkFinalRequest({
+    const checked = checkFinalRequest(model25, {
       params: {
         watermark: true,
         return_last_frame: true,
@@ -188,21 +191,21 @@ describe("final checks (pure)", () => {
       [{ params: { draft: true } }, "params.draft"]
     ];
     for (const [request, field] of cases) {
-      expect(() => checkFinalRequest(request)).toThrow(
+      expect(() => checkFinalRequest(model25, request)).toThrow(
         `[ai] ark final renders take only the draft.\n  Remove ${field}.`
       );
     }
   });
 
   it("refuses an unknown param on a final", () => {
-    expect(() => checkFinalRequest({ params: { cfg: 1 } })).toThrow(
+    expect(() => checkFinalRequest(model25, { params: { cfg: 1 } })).toThrow(
       '[ai] Unknown ark param "cfg".'
     );
   });
 
   it("takes 1080p only, the default (6)", () => {
-    expect(checkFinalRequest({ resolution: "1080p" }).resolution).toBe("1080p");
-    expect(() => checkFinalRequest({ resolution: "720p" })).toThrow(
+    expect(checkFinalRequest(model25, { resolution: "1080p" }).resolution).toBe("1080p");
+    expect(() => checkFinalRequest(model25, { resolution: "720p" })).toThrow(
       "[ai] ark finals from a draft are 1080p only.\n  Remove input.resolution or set it to 1080p."
     );
   });
@@ -222,6 +225,15 @@ describe("estimate: draft and final", () => {
 
     expect(handler.estimate(final)).toEqual({ usd: 2.866_793 });
     expect(handler.estimate({ ...final, seconds: 10 })).toEqual({ usd: 5.709_893 });
+  });
+
+  it("fails at plan time for a final on a model without a draft mode (mini), with no fetch", () => {
+    const fetchMock = stubFetch();
+    const handler = createVideoHandler(createTestCtx());
+    const final: EstimateRequest = { model: MODEL_MINI, prompt: "", fromDraft: { $ref: "d" } };
+
+    expect(() => handler.estimate(final)).toThrow(NO_DRAFT_MODE_MINI);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fails at plan time for a draft the model cannot make or a final at 720p", () => {
@@ -282,7 +294,7 @@ describe("submit a final from a draft", () => {
       ],
       [
         finalRequest({ model: MODEL_20 }),
-        `[ai] Draft ${DRAFT_TASK_ID} was made with ${MODEL_25}.\n  Set input.model to ${MODEL_25}.`
+        `[ai] Model ${MODEL_20} has no draft mode.\n  Use ${MODEL_25} for drafts.`
       ],
       [
         finalRequest({ image }),
@@ -303,6 +315,34 @@ describe("submit a final from a draft", () => {
       expect(error.constructor).toBe(Error);
       expect(fetchMock).not.toHaveBeenCalled();
     }
+  });
+
+  it("fails before any fetch for a draft made with another model", async () => {
+    freezeClock(DRAFT_CREATED_MS + HOUR_MS);
+    const fetchMock = stubFetch();
+    const otherModel = "dreamina-seedance-2-5-250101";
+    const journal = journalWithDraft({ model: otherModel });
+
+    const error = await rejectionOf(
+      createVideoHandler(createTestCtx({ journal })).submit(finalRequest(), {})
+    );
+
+    expect(error.message).toBe(
+      `[ai] Draft ${DRAFT_TASK_ID} was made with ${otherModel}.\n  Set input.model to ${otherModel}.`
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a final on a model without a draft mode (mini), with no fetch", async () => {
+    freezeClock(DRAFT_CREATED_MS + HOUR_MS);
+    const fetchMock = stubFetch();
+    const handler = createVideoHandler(createTestCtx({ journal: journalWithDraft() }));
+
+    const error = await rejectionOf(handler.submit(finalRequest({ model: MODEL_MINI }), {}));
+
+    expect(error.message).toBe(NO_DRAFT_MODE_MINI);
+    expect(error.constructor).toBe(Error);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("fails on a draft 7 days old, naming the expiry date, with no fetch (4)", async () => {

@@ -9,11 +9,6 @@ import type { ArkRegion } from "../types";
 
 /**
  * One Seedream model on Ark.
- *
- * @example
- * ```ts
- * const row: ArkImageModel = { id: "seedream-5-0-lite-260128", region: "intl", minPixels: 3_686_400, priceUsd: 0.035 };
- * ```
  */
 export type ArkImageModel = {
   /** Ark model id, sent as `model`. */

@@ -209,7 +209,7 @@ async function submitFinal(
 ): Promise<{ jobId: string }> {
   // Refuse what a final cannot carry, then find its draft: all before any call.
   checkDraftFile(fromDraft);
-  const checked = checkFinalRequest(request);
+  const checked = checkFinalRequest(model, request);
   const apiKey = ctx.env.require(ctx.config.apiKeyEnv);
   const draft = resolveDraft(ctx, model, fromDraft.hash);
 
@@ -404,17 +404,20 @@ async function downloadClip(
   const model = resolveArkModel(request.model, ctx.config.region);
   if (isDraftTask(task)) recordDraft(ctx, taskId, task, model.id, download.body);
 
-  // Price the completion tokens; fall back to the estimate when ark sent none.
+  // Read what the task reports; the request fills in what it lacks.
   const seconds = readNumber(task, "duration") ?? request.seconds ?? DEFAULT_SECONDS;
   const resolution =
     readString(task, "resolution") ??
     request.resolution ??
     defaultResolutionOf(request, DEFAULT_RESOLUTION);
-  const completionTokens = completionTokensOf(ctx, taskId, task, { resolution, seconds });
-  const withVideoInput = hasVideoReferenceUrl(request);
   const seed = readNumber(task, "seed");
   const lastFrameUrl = readString(content, "last_frame_url");
 
+  // Price the completion tokens; fall back to the estimate when ark sent none.
+  const completionTokens = completionTokensOf(ctx, taskId, task, { resolution, seconds });
+  const withVideoInput = hasVideoReferenceUrl(request);
+
+  // Report the clip as done.
   ctx.log.info("ark:video:done", { taskId, bytes: download.body.length });
   return {
     state: "done",
@@ -485,7 +488,7 @@ async function pollTask(
 function estimateVideo(ctx: ArkContext, request: EstimateRequest): number {
   const model = resolveArkModel(request.model, ctx.config.region);
   if (request.fromDraft !== undefined) {
-    const { resolution } = checkFinalRequest(request);
+    const { resolution } = checkFinalRequest(model, request);
     const tokens = estimateTokens(resolution, request.seconds ?? DEFAULT_SECONDS);
     return costUsd(ctx.config, model, tokens, false, resolution);
   }

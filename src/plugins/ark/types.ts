@@ -7,7 +7,6 @@ import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { JournalApi } from "../journal/types";
 import type { RegistryApi, registryPlugin } from "../registry";
-import type { VideoFile, VideoRequest } from "../video/contract";
 import type {
   FlaggedProviderError as FlaggedProviderErrorClass,
   RetryableProviderError as RetryableProviderErrorClass,
@@ -145,39 +144,8 @@ export type ArkApi = {
   info(): ArkInfo;
 };
 
-/**
- * A request image, end frame, ref or draft clip at estimate time: a resolved
- * file, or still the build-file reference the runner resolves before submit
- * (the runner estimates the unresolved request).
- *
- * @example
- * ```ts
- * const input: EstimateInput = { $ref: "face-mira" };
- * ```
- */
-export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
-
-/**
- * A video request at estimate time: its first frame, end frame, refs and
- * draft clip may still be build-file references. Every `VideoRequest` is one.
- *
- * @example
- * ```ts
- * const request: EstimateRequest = {
- *   model: "dreamina-seedance-2-5-260628", prompt: "", fromDraft: { $ref: "e01.s04.draft" }
- * };
- * ```
- */
-export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs" | "fromDraft"> & {
-  /** First frame, resolved or not. */
-  image?: EstimateInput;
-  /** End frame, resolved or not. */
-  endImage?: EstimateInput;
-  /** Refs, resolved or not. */
-  refs?: EstimateInput[];
-  /** Draft clip this final is rendered from, resolved or not. */
-  fromDraft?: EstimateInput;
-};
+/** Estimate-time request types — declared once in `../video/contract` and re-exported for this plugin's consumers. */
+export type { EstimateInput, EstimateRequest } from "../video/contract";
 
 /** Structural retry hint of {@link RetryableProviderError}, declared in `./errors`. */
 export type { RetryHint } from "./errors";

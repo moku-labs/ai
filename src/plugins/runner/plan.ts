@@ -161,10 +161,6 @@ function fileMimeType(ctx: RunnerContext, absolute: string, bytes: Uint8Array): 
  * @param buildFile - The build file, for the error message.
  * @returns Resolved files keyed by the path as written in the build file.
  * @throws {Error} When a `$file` does not exist.
- * @example
- * ```ts
- * const files = await resolveItemFiles(ctx, item, dir, cache, "e01.s01", "e01.moku.yaml");
- * ```
  */
 async function resolveItemFiles(
   ctx: RunnerContext,

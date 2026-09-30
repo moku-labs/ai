@@ -12,15 +12,10 @@ import type { ArkContext, EstimateRequest } from "../types";
 import type { ArkContentItem } from "./body";
 import { isArkParameter, unknownParameterError } from "./body";
 import type { DraftRecord } from "./draft";
-import { DRAFT_TTL_MS, FINAL_RESOLUTION, findDraft } from "./draft";
+import { DRAFT_TTL_MS, draftModelOf, FINAL_RESOLUTION, findDraft } from "./draft";
 
 /**
  * A `params` key a final passes through to ark as given.
- *
- * @example
- * ```ts
- * const key: FinalPassthroughKey = "return_last_frame";
- * ```
  */
 export type FinalPassthroughKey =
   | "watermark"
@@ -30,21 +25,11 @@ export type FinalPassthroughKey =
 
 /**
  * The passthrough params of a final. Values go to ark as given: ark validates them.
- *
- * @example
- * ```ts
- * const params: FinalPassthrough = { watermark: true, priority: 1 };
- * ```
  */
 export type FinalPassthrough = Partial<Record<FinalPassthroughKey, unknown>>;
 
 /**
  * A final request checked, with defaults applied.
- *
- * @example
- * ```ts
- * const checked: CheckedFinalRequest = { resolution: "1080p", params: {} };
- * ```
  */
 export type CheckedFinalRequest = {
   /** Always 1080p. */
@@ -55,15 +40,6 @@ export type CheckedFinalRequest = {
 
 /**
  * The task body of a final from a draft.
- *
- * @example
- * ```ts
- * const body: ArkFinalBody = {
- *   model: "dreamina-seedance-2-5-260628",
- *   content: [{ type: "draft_task", draft_task: { id: "cgt-20260930171041-8mowm" } }],
- *   resolution: "1080p", watermark: false
- * };
- * ```
  */
 export type ArkFinalBody = FinalPassthrough & {
   /** Ark model id: the draft's model. */
@@ -77,11 +53,6 @@ export type ArkFinalBody = FinalPassthrough & {
 /**
  * The parts of a request a final checks: they may still be build-file
  * references at estimate time.
- *
- * @example
- * ```ts
- * const shape: FinalShape = { params: { watermark: true } };
- * ```
  */
 export type FinalShape = Pick<
   EstimateRequest,
@@ -174,18 +145,26 @@ function checkFinalParameters(params: Record<string, unknown>): FinalPassthrough
 }
 
 /**
- * Checks a final with no I/O: no frames, refs, `refUrls`, `seed` or `draft`;
- * known params only; 1080p (the default). Works on an estimate request too.
+ * Checks a final with no I/O: a model with a draft mode; no frames, refs,
+ * `refUrls`, `seed` or `draft`; known params only; 1080p (the default). Works
+ * on an estimate request too.
  *
+ * @param model - The request's catalog row.
  * @param request - The request, files resolved or not.
  * @returns The checked final.
  * @throws {Error} The first broken rule, as a plain two-line error.
  * @example
  * ```ts
- * checkFinalRequest({ params: { watermark: true } }); // => { resolution: "1080p", params: { watermark: true } }
+ * const model = resolveArkModel("dreamina-seedance-2-5-260628", "intl");
+ * checkFinalRequest(model, { params: { watermark: true } }); // => { resolution: "1080p", params: { watermark: true } }
  * ```
  */
-export function checkFinalRequest(request: FinalShape): CheckedFinalRequest {
+export function checkFinalRequest(model: ArkVideoModel, request: FinalShape): CheckedFinalRequest {
+  if (!model.supportsDraft) {
+    throw new Error(
+      `[ai] Model ${model.id} has no draft mode.\n  Use ${draftModelOf(model.region)} for drafts.`
+    );
+  }
   checkFinalInputs(request);
   const params = checkFinalParameters(request.params ?? {});
   const resolution = request.resolution ?? FINAL_RESOLUTION;
