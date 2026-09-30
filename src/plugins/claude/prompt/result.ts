@@ -1,7 +1,8 @@
 /**
  * @file claude result parsing — pure. Reads the `--output-format json`
  * result of a finished run, maps every failure to the right error class
- * (unavailable vs terminal), and validates a schema answer.
+ * (unavailable vs terminal), and validates a schema answer: the
+ * `structured_output` of a `--json-schema` run, or else the answer text.
  */
 import type { ZodType } from "zod";
 import { z } from "zod";
@@ -13,6 +14,8 @@ import { TerminalProviderError } from "../errors";
 export type ClaudeAnswer = {
   /** The answer text (`result`). */
   text: string;
+  /** The schema answer (`structured_output`) of a `--json-schema` run; undefined otherwise. */
+  structured: unknown;
   /** The CLI's list-price figure (`total_cost_usd`); the plan bills $0. */
   listCostUsd: number;
   /** Input tokens (`usage.input_tokens`). */
@@ -25,6 +28,7 @@ export type ClaudeAnswer = {
 const claudeOutputSchema = z.object({
   is_error: z.boolean(),
   result: z.string().optional(),
+  structured_output: z.unknown().optional(),
   api_error_status: z.number().nullable().optional(),
   total_cost_usd: z.number().optional(),
   usage: z
@@ -181,9 +185,9 @@ function exitError(run: ClaudeRun): Error {
  * exit: the not-logged-in result exits 1 with valid JSON.
  *
  * @param run - The finished run.
- * @returns The answer text, list price and token usage.
+ * @returns The answer text, the structured output if any, list price and token usage.
  * @throws {PromptGenUnavailableError} With reason "auth" or "limit" when claude cannot serve.
- * @throws {TerminalProviderError} For a reported error, a failed exit, or an empty answer.
+ * @throws {TerminalProviderError} For a reported error, a failed exit, or a blank answer without structured output.
  * @example
  * ```ts
  * parseClaudeResult({ code: 0, exitSignal: null, stdout: '{"is_error":false,"result":"ok"}', stderr: "" }).text; // => "ok"
@@ -195,11 +199,13 @@ export function parseClaudeResult(run: ClaudeRun): ClaudeAnswer {
   if (output.is_error) throw reportedError(output);
 
   const text = output.result ?? "";
-  if (text.trim() === "")
+  const structured = output.structured_output;
+  if (text.trim() === "" && structured === undefined)
     throw new TerminalProviderError(`[ai] Claude wrote no answer.\n  ${BY_HAND}`);
 
   return {
     text,
+    structured,
     listCostUsd: output.total_cost_usd ?? 0,
     inputTokens: output.usage?.input_tokens ?? 0,
     outputTokens: output.usage?.output_tokens ?? 0
@@ -207,8 +213,32 @@ export function parseClaudeResult(run: ClaudeRun): ClaudeAnswer {
 }
 
 /**
- * Validates a schema answer: strips one surrounding code fence, parses the
- * JSON, and checks it against the validator.
+ * Checks a parsed answer against the validator.
+ *
+ * @param value - The parsed answer.
+ * @param validator - Validator built from `params.responseSchema`.
+ * @returns The answer, stringified compactly.
+ * @throws {TerminalProviderError} When it does not match; never unavailable.
+ * @example
+ * ```ts
+ * checkSchemaValue({ score: 7 }, z.fromJSONSchema({ type: "object" })); // => '{"score":7}'
+ * ```
+ */
+function checkSchemaValue(value: unknown, validator: ZodType): string {
+  const parsed = validator.safeParse(value);
+  const issue = parsed.error?.issues[0];
+  if (issue !== undefined) {
+    const where = issue.path.length === 0 ? "(root)" : issue.path.join(".");
+    throw new TerminalProviderError(
+      `${SCHEMA_MISMATCH}\n  ${where}: ${withoutPeriod(issue.message)}.`
+    );
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Validates a schema answer text: strips one surrounding code fence, parses
+ * the JSON, and checks it against the validator.
  *
  * @param text - The answer text.
  * @param validator - Validator built from `params.responseSchema`.
@@ -229,14 +259,24 @@ export function parseSchemaAnswer(text: string, validator: ZodType): string {
   } catch {
     throw new TerminalProviderError(`${SCHEMA_MISMATCH}\n  The answer is not valid JSON.`);
   }
+  return checkSchemaValue(value, validator);
+}
 
-  const parsed = validator.safeParse(value);
-  const issue = parsed.error?.issues[0];
-  if (issue !== undefined) {
-    const where = issue.path.length === 0 ? "(root)" : issue.path.join(".");
-    throw new TerminalProviderError(
-      `${SCHEMA_MISMATCH}\n  ${where}: ${withoutPeriod(issue.message)}.`
-    );
-  }
-  return JSON.stringify(value);
+/**
+ * The schema answer of a run: `structured_output` when the CLI returned one,
+ * else the answer text, both checked with the validator.
+ *
+ * @param answer - The parsed run answer.
+ * @param validator - Validator built from `params.responseSchema`.
+ * @returns The validated JSON, stringified compactly.
+ * @throws {TerminalProviderError} When the answer is not JSON or does not match; never unavailable.
+ * @example
+ * ```ts
+ * schemaAnswerOf({ text: "", structured: { score: 7 }, listCostUsd: 0, inputTokens: 0, outputTokens: 0 }, z.fromJSONSchema({ type: "object" })); // => '{"score":7}'
+ * ```
+ */
+export function schemaAnswerOf(answer: ClaudeAnswer, validator: ZodType): string {
+  return answer.structured === undefined
+    ? parseSchemaAnswer(answer.text, validator)
+    : checkSchemaValue(answer.structured, validator);
 }

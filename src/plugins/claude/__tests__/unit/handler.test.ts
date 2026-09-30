@@ -181,7 +181,39 @@ describe("createPromptGenHandler", () => {
       expect(recordedArgs()).toContain("--allowedTools");
     });
 
-    it("returns the validated schema answer re-stringified", async () => {
+    it("passes the schema as --json-schema, not in the prompt, and returns structured_output", async () => {
+      const answer = claudeJson({ result: '{"score": 7}', structured_output: { score: 7 } });
+      const bin = writeFakeClaude(root, printStdout(answer));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+
+      const result = await handler.execute(
+        { prompt: "Score.", params: { responseSchema: SCORE_SCHEMA } },
+        {}
+      );
+
+      expect(result.text).toBe('{"score":7}');
+      expect(recordedArgs().slice(-2)).toEqual(["--json-schema", JSON.stringify(SCORE_SCHEMA)]);
+      expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toBe("Score.");
+    });
+
+    it("puts a non-object root schema in the prompt, without --json-schema", async () => {
+      const bin = writeFakeClaude(root, printStdout(claudeJson({ result: "[1,2]" })));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+      const schema = { type: "array", items: { type: "number" } };
+
+      const result = await handler.execute(
+        { prompt: "List.", params: { responseSchema: schema } },
+        {}
+      );
+
+      expect(result.text).toBe("[1,2]");
+      expect(recordedArgs()).not.toContain("--json-schema");
+      expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toContain(
+        `It must match this JSON Schema:\n${JSON.stringify(schema)}`
+      );
+    });
+
+    it("falls back to the validated answer text when there is no structured_output", async () => {
       const answer = claudeJson({ result: '```json\n{ "score": 7 }\n```' });
       const bin = writeFakeClaude(root, printStdout(answer));
       const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
@@ -192,7 +224,6 @@ describe("createPromptGenHandler", () => {
       );
 
       expect(result.text).toBe('{"score":7}');
-      expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toContain('"required": [');
     });
 
     it("throws terminal, never unavailable, on an off-schema answer and removes the dir", async () => {

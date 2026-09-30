@@ -62,7 +62,7 @@ describe("createPromptGenHandler", () => {
       expect(result).toEqual({
         text: "ok",
         costUsd: 0,
-        meta: { provider: "codex", reasoningEffort: "low" }
+        meta: { provider: "codex", effort: "low" }
       });
       expect(log.info).toHaveBeenCalledWith("codex:prompt-gen:done", {
         model: "default",
@@ -97,7 +97,7 @@ describe("createPromptGenHandler", () => {
         provider: "codex",
         model: "gpt-6-sol",
         modelRequested: "openai/gpt-6-sol",
-        reasoningEffort: "low"
+        effort: "low"
       });
     });
 
@@ -139,7 +139,7 @@ describe("createPromptGenHandler", () => {
       expect(recordedArgs()).toContain('model_reasoning_effort="high"');
       expect(result.meta).toEqual({
         provider: "codex",
-        reasoningEffort: "high",
+        effort: "high",
         ignored: ["temperature"]
       });
     });

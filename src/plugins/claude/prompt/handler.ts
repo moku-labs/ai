@@ -2,8 +2,10 @@
  * @file claude prompt-gen handler — implements the task-owned contract
  * (`../../promptGen/contract.ts`). Each call owns a temp dir under
  * `config.workDir` (or `os.tmpdir()`): images are copied in, `claude -p`
- * runs there with the prompt on stdin, the JSON result is read back, and the
- * dir is removed in `finally`.
+ * runs there with the prompt on stdin and the response schema, if any, as
+ * `--json-schema` (in the prompt when its root is not an object); the JSON
+ * result is read back and its answer checked with zod; the dir is removed in
+ * `finally`.
  */
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,7 +19,7 @@ import type { PromptParameters } from "./params";
 import { readParameters } from "./params";
 import { buildClaudePrompt } from "./prompt";
 import type { ClaudeAnswer } from "./result";
-import { parseClaudeResult, parseSchemaAnswer } from "./result";
+import { parseClaudeResult, schemaAnswerOf } from "./result";
 
 /** Prefix of every per-call temp dir. */
 const CALL_DIR_PREFIX = "moku-claude-";
@@ -68,16 +70,18 @@ async function answerIn(
 ): Promise<ClaudeAnswer> {
   // Stage images and build the stdin prompt and argv
   const imageNames = await copyImages(call.params.images, call.dir);
+  const { schema } = call.params;
   const prompt = buildClaudePrompt({
     prompt: request.prompt,
     imageNames,
-    schemaText: call.params.schema?.text
+    schemaText: schema?.viaFlag === false ? schema.text : undefined
   });
   const args = buildClaudeArguments({
     system: request.system,
     withImages: imageNames.length > 0,
     model: call.model,
-    effort: call.effort
+    effort: call.effort,
+    jsonSchema: schema?.viaFlag === true ? schema.text : undefined
   });
 
   // Run the CLI once and parse its JSON result
@@ -104,7 +108,7 @@ async function answerIn(
  * @returns The `meta` record.
  * @example
  * ```ts
- * buildMeta({ prompt: "p" }, { model: undefined, effort: "low" }, { text: "ok", listCostUsd: 0.1, inputTokens: 1, outputTokens: 1 });
+ * buildMeta({ prompt: "p" }, { model: undefined, effort: "low" }, { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 1, outputTokens: 1 });
  * // => { provider: "claude", effort: "low", listCostUsd: 0.1, usage: { inputTokens: 1, outputTokens: 1 } }
  * ```
  */
@@ -157,7 +161,7 @@ export function createPromptGenHandler(ctx: ClaudeContext): PromptGenHandler {
         const text =
           params.schema === undefined
             ? answer.text
-            : parseSchemaAnswer(answer.text, params.schema.validator);
+            : schemaAnswerOf(answer, params.schema.validator);
 
         ctx.log.info("claude:prompt-gen:done", { model: model ?? "default", chars: text.length });
         return { text, costUsd: 0, meta: buildMeta(request, { model, effort }, answer) };

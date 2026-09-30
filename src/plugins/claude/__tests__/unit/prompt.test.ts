@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildClaudePrompt } from "../../prompt/prompt";
 
 describe("buildClaudePrompt", () => {
-  it("is the request prompt alone without images or schema", () => {
+  it("is the request prompt alone without images or schema text", () => {
     expect(buildClaudePrompt({ prompt: "Say ok.", imageNames: [] })).toBe("Say ok.");
   });
 
@@ -17,19 +17,17 @@ describe("buildClaudePrompt", () => {
     );
   });
 
-  it("appends the schema block last, after the image line", () => {
-    const schemaText = JSON.stringify({ type: "object" }, undefined, 2);
-
+  it("appends the schema block last, after the image line, when given a schema text", () => {
     const prompt = buildClaudePrompt({
-      prompt: "Score this frame.",
+      prompt: "List frames.",
       imageNames: ["image-1.png"],
-      schemaText
+      schemaText: '{"type":"array"}'
     });
 
     const blocks = prompt.split("\n\n");
     expect(blocks).toHaveLength(3);
     expect(blocks[2]).toBe(
-      `Answer with one JSON value only, no prose, no code fence. It must match this JSON Schema:\n${schemaText}`
+      'Answer with one JSON value only, no prose, no code fence. It must match this JSON Schema:\n{"type":"array"}'
     );
   });
 });

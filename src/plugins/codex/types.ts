@@ -68,6 +68,30 @@ export type CodexInfo = {
 };
 
 /**
+ * `meta` of every codex prompt-gen result: the provider, the mapped model
+ * and the requested id when known, the effort passed to codex, and the
+ * request fields codex ignored. Same keys as `ClaudePromptMeta` where the
+ * two providers share a concept.
+ *
+ * @example
+ * ```ts
+ * const meta: CodexPromptMeta = { provider: "codex", model: "gpt-6-sol", modelRequested: "openai/gpt-6-sol", effort: "low" };
+ * ```
+ */
+export type CodexPromptMeta = {
+  /** Provider name. */
+  provider: "codex";
+  /** Mapped model passed as `-m`. Absent: codex's own default model. */
+  model?: string;
+  /** Model id as the request named it. */
+  modelRequested?: string;
+  /** Effort passed as `-c model_reasoning_effort`. */
+  effort: string;
+  /** Request fields codex ignores, e.g. `["temperature"]`. */
+  ignored?: string[];
+};
+
+/**
  * Public API surface of the `codex` plugin, exposed as `app.codex`. The real
  * capability surface is the registered `ImageHandler`, used through
  * `app.image` and `app.runner`.

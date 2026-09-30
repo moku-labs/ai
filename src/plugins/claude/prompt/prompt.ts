@@ -1,6 +1,7 @@
 /**
  * @file claude prompt builder — pure. Turns the request prompt, the copied
- * image names and the schema text into the stdin text claude receives.
+ * image names and, only for a schema `--json-schema` cannot take, the
+ * schema text into the stdin text claude receives.
  */
 
 /** Inputs for {@link buildClaudePrompt}. */
@@ -9,7 +10,7 @@ export type ClaudePromptInput = {
   prompt: string;
   /** File names of the images copied into the call dir, e.g. ["image-1.png"]. */
   imageNames: string[];
-  /** The response schema as pretty JSON, when the request has one. */
+  /** The response schema as JSON, only when it cannot go to `--json-schema`. */
   schemaText?: string | undefined;
 };
 
@@ -22,8 +23,8 @@ const SCHEMA_LINE =
 
 /**
  * Builds the stdin prompt: the request prompt; then, with images, a line
- * listing them by relative path; then, with a schema, the answer rule and
- * the schema. Blocks are separated by a blank line.
+ * listing them by relative path; then, with a schema text, the answer rule
+ * and the schema. Blocks are separated by a blank line.
  *
  * @param input - Prompt, image names and schema text.
  * @returns The full prompt text.
