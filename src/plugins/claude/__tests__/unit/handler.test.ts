@@ -196,6 +196,23 @@ describe("createPromptGenHandler", () => {
       expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toBe("Score.");
     });
 
+    it("puts a non-object root schema in the prompt, without --json-schema", async () => {
+      const bin = writeFakeClaude(root, printStdout(claudeJson({ result: "[1,2]" })));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+      const schema = { type: "array", items: { type: "number" } };
+
+      const result = await handler.execute(
+        { prompt: "List.", params: { responseSchema: schema } },
+        {}
+      );
+
+      expect(result.text).toBe("[1,2]");
+      expect(recordedArgs()).not.toContain("--json-schema");
+      expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toContain(
+        `It must match this JSON Schema:\n${JSON.stringify(schema)}`
+      );
+    });
+
     it("falls back to the validated answer text when there is no structured_output", async () => {
       const answer = claudeJson({ result: '```json\n{ "score": 7 }\n```' });
       const bin = writeFakeClaude(root, printStdout(answer));

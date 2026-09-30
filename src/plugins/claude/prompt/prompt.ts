@@ -1,7 +1,7 @@
 /**
- * @file claude prompt builder — pure. Turns the request prompt and the
- * copied image names into the stdin text claude receives. A response schema
- * is not in the prompt: it goes to `--json-schema` (see `../cli.ts`).
+ * @file claude prompt builder — pure. Turns the request prompt, the copied
+ * image names and, only for a schema `--json-schema` cannot take, the
+ * schema text into the stdin text claude receives.
  */
 
 /** Inputs for {@link buildClaudePrompt}. */
@@ -10,16 +10,23 @@ export type ClaudePromptInput = {
   prompt: string;
   /** File names of the images copied into the call dir, e.g. ["image-1.png"]. */
   imageNames: string[];
+  /** The response schema as JSON, only when it cannot go to `--json-schema`. */
+  schemaText?: string | undefined;
 };
 
 /** Line that introduces the attached images. */
 const IMAGES_LINE = "Attached images, read each with the Read tool before answering:";
 
+/** Line that introduces the response schema. */
+const SCHEMA_LINE =
+  "Answer with one JSON value only, no prose, no code fence. It must match this JSON Schema:";
+
 /**
- * Builds the stdin prompt: the request prompt; then, with images, a blank
- * line and a line listing them by relative path.
+ * Builds the stdin prompt: the request prompt; then, with images, a line
+ * listing them by relative path; then, with a schema text, the answer rule
+ * and the schema. Blocks are separated by a blank line.
  *
- * @param input - Prompt and image names.
+ * @param input - Prompt, image names and schema text.
  * @returns The full prompt text.
  * @example
  * ```ts
@@ -28,8 +35,13 @@ const IMAGES_LINE = "Attached images, read each with the Read tool before answer
  * ```
  */
 export function buildClaudePrompt(input: ClaudePromptInput): string {
-  if (input.imageNames.length === 0) return input.prompt;
+  const blocks = [input.prompt];
 
-  const paths = input.imageNames.map(name => `./${name}`).join(", ");
-  return `${input.prompt}\n\n${IMAGES_LINE} ${paths}.`;
+  if (input.imageNames.length > 0) {
+    const paths = input.imageNames.map(name => `./${name}`).join(", ");
+    blocks.push(`${IMAGES_LINE} ${paths}.`);
+  }
+  if (input.schemaText !== undefined) blocks.push(`${SCHEMA_LINE}\n${input.schemaText}`);
+
+  return blocks.join("\n\n");
 }

@@ -185,9 +185,9 @@ function exitError(run: ClaudeRun): Error {
  * exit: the not-logged-in result exits 1 with valid JSON.
  *
  * @param run - The finished run.
- * @returns The answer text, list price and token usage.
+ * @returns The answer text, the structured output if any, list price and token usage.
  * @throws {PromptGenUnavailableError} With reason "auth" or "limit" when claude cannot serve.
- * @throws {TerminalProviderError} For a reported error, a failed exit, or an empty answer.
+ * @throws {TerminalProviderError} For a reported error, a failed exit, or a blank answer without structured output.
  * @example
  * ```ts
  * parseClaudeResult({ code: 0, exitSignal: null, stdout: '{"is_error":false,"result":"ok"}', stderr: "" }).text; // => "ok"

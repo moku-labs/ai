@@ -42,6 +42,8 @@ claude -p --output-format json --no-session-persistence
 - `--json-schema` carries `params.responseSchema` as compact JSON, without a top-level `$schema`. The CLI rejects
   that key. It accepts `propertyNames`, record maps and optional keys (checked live with 2.1.280). The schema is
   not in the prompt.
+- The flag takes only a root `type: "object"`. Any other root, an array for example, goes in the prompt instead,
+  with the answer rule. The zod check is the same.
 
 ## Params
 

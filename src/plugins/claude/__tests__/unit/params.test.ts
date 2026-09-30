@@ -27,6 +27,7 @@ describe("readParameters", () => {
     const params = readParameters({ responseSchema: schema });
 
     expect(params.schema?.text).toBe(JSON.stringify(schema));
+    expect(params.schema?.viaFlag).toBe(true);
     expect(params.schema?.validator.safeParse({ score: 1 }).success).toBe(true);
     expect(params.schema?.validator.safeParse({ score: "1" }).success).toBe(false);
   });
@@ -46,6 +47,13 @@ describe("readParameters", () => {
     );
     expect(params.schema?.validator.safeParse({ t1: "a" }).success).toBe(true);
     expect(params.schema?.validator.safeParse({ t1: 1 }).success).toBe(false);
+  });
+
+  it.each([
+    ["an array root", { type: "array", items: { type: "number" } }],
+    ["a root without type", { properties: { score: { type: "number" } } }]
+  ])("sends %s through the prompt, as --json-schema takes only type object", (_label, schema) => {
+    expect(readParameters({ responseSchema: schema }).schema?.viaFlag).toBe(false);
   });
 
   it("rejects images that are not image files", () => {
