@@ -36,7 +36,7 @@ export type ImageSize = {
  *
  * @example
  * ```ts
- * const input: ImageBodyInput = { prompt: "hero", aspect: "9:16", resolution: "2K", imageUrls: [], quality: undefined };
+ * const input: ImageBodyInput = { prompt: "hero", aspect: "9:16", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined };
  * ```
  */
 export type ImageBodyInput = {
@@ -50,6 +50,8 @@ export type ImageBodyInput = {
   imageUrls: readonly string[];
   /** `params.quality` when it is a string (gpt-image only). */
   quality: string | undefined;
+  /** `params.output_format` when it is a string: gpt-image maps it, nano keeps png, seedream gets it as a pass-through param. */
+  outputFormat: string | undefined;
 };
 
 /**
@@ -156,8 +158,21 @@ const GPT_2K_SIZES: Readonly<Record<string, ImageSize>> = {
 /** Seedream's own size for `2K`: fal picks the 2K size of the aspect. */
 const SEEDREAM_2K_SIZE = "auto_2K";
 
-/** GPT Image qualities fal accepts. */
-const GPT_QUALITIES: ReadonlySet<string> = new Set(["low", "medium", "high"]);
+/** GPT Image qualities fal accepts (fal schema, checked 2026-09-30). */
+const GPT_QUALITIES: ReadonlySet<string> = new Set([
+  "auto",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+]);
+
+/** GPT Image output formats fal accepts (fal schema, checked 2026-09-30). */
+const GPT_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["jpeg", "png", "webp"]);
+
+/** GPT Image output format when `params.output_format` is not one of {@link GPT_OUTPUT_FORMATS}. */
+const DEFAULT_GPT_OUTPUT_FORMAT = "jpeg";
 
 /** GPT Image quality when `params.quality` is not one of {@link GPT_QUALITIES}. */
 const DEFAULT_GPT_QUALITY = "high";
@@ -186,7 +201,7 @@ function imageUrlsField(imageUrls: readonly string[]): { image_urls?: readonly s
  * @returns The mapped body.
  * @example
  * ```ts
- * nanoBananaBody({ prompt: "p", aspect: "9:16", resolution: "1K", imageUrls: [], quality: undefined }).resolution; // => "1K"
+ * nanoBananaBody({ prompt: "p", aspect: "9:16", resolution: "1K", imageUrls: [], quality: undefined, outputFormat: undefined }).resolution; // => "1K"
  * ```
  */
 function nanoBananaBody(input: ImageBodyInput): Record<string, unknown> {
@@ -229,7 +244,7 @@ function seedreamSize(
  * @returns The mapped body.
  * @example
  * ```ts
- * seedreamBody({ prompt: "p", aspect: "1:1", resolution: "2K", imageUrls: [], quality: undefined }).image_size; // => "auto_2K"
+ * seedreamBody({ prompt: "p", aspect: "1:1", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined }).image_size; // => "auto_2K"
  * ```
  */
 function seedreamBody(input: ImageBodyInput): Record<string, unknown> {
@@ -244,25 +259,29 @@ function seedreamBody(input: ImageBodyInput): Record<string, unknown> {
 }
 
 /**
- * GPT Image 2.5 body: the 2K size object or the preset name, quality, one JPEG.
+ * GPT Image 2.5 body: the 2K size object or the preset name, quality, one
+ * image in the caller's `output_format`, JPEG by default.
  *
  * @param input - Planned fields.
  * @returns The mapped body.
  * @example
  * ```ts
- * gptImageBody({ prompt: "p", aspect: "9:16", resolution: undefined, imageUrls: [], quality: "ultra" }).quality; // => "high"
+ * gptImageBody({ prompt: "p", aspect: "9:16", resolution: undefined, imageUrls: [], quality: "ultra", outputFormat: "png" }).output_format; // => "png"
  * ```
  */
 function gptImageBody(input: ImageBodyInput): Record<string, unknown> {
   const sizes = input.resolution === "2K" ? GPT_2K_SIZES : PRESET_SIZES;
   const hasKnownQuality = input.quality !== undefined && GPT_QUALITIES.has(input.quality);
   const quality = hasKnownQuality ? input.quality : DEFAULT_GPT_QUALITY;
+  const hasKnownFormat =
+    input.outputFormat !== undefined && GPT_OUTPUT_FORMATS.has(input.outputFormat);
+  const outputFormat = hasKnownFormat ? input.outputFormat : DEFAULT_GPT_OUTPUT_FORMAT;
   return {
     prompt: input.prompt,
     image_size: sizes[input.aspect],
     quality,
     num_images: 1,
-    output_format: "jpeg",
+    output_format: outputFormat,
     ...imageUrlsField(input.imageUrls)
   };
 }

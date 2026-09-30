@@ -113,7 +113,8 @@ describe("body builders", () => {
     aspect: "9:16",
     resolution: undefined,
     imageUrls: [],
-    quality: undefined
+    quality: undefined,
+    outputFormat: undefined
   };
 
   it("nano-banana-pro sends aspect_ratio and its native resolution", () => {
@@ -176,13 +177,32 @@ describe("body builders", () => {
   });
 
   it.each([
+    ["auto", "auto"],
     ["low", "low"],
     ["medium", "medium"],
     ["high", "high"],
+    ["xhigh", "xhigh"],
+    ["max", "max"],
     ["ultra", "high"],
     [undefined, "high"]
   ])("gpt-image quality %s → %s", (quality, sent) => {
     expect(GPT.body({ ...input, quality })).toMatchObject({ quality: sent });
+  });
+
+  it.each([
+    ["png", "png"],
+    ["webp", "webp"],
+    ["jpeg", "jpeg"],
+    ["gif", "jpeg"],
+    [undefined, "jpeg"]
+  ])("gpt-image output_format %s → %s", (outputFormat, sent) => {
+    expect(GPT.body({ ...input, outputFormat })).toMatchObject({ output_format: sent });
+  });
+
+  it("nano-banana-pro keeps png whatever output_format the caller asks", () => {
+    expect(NANO.body({ ...input, resolution: "1K", outputFormat: "jpeg" })).toMatchObject({
+      output_format: "png"
+    });
   });
 });
 
