@@ -1,8 +1,10 @@
 /**
- * @file ark test fixtures. Two parts:
+ * @file ark test fixtures. Three parts:
  * 1. Documented examples: request bodies and responses of the Ark video task
  *    API and the Ark asset OpenAPI, each with a `// source:` URL. What no
- *    source confirms carries an `// unverified:` note. A doc field the
+ *    source confirms carries an `// unverified:` note. Live captures (task
+ *    bodies, errors and the Seedream response from a real BytePlus intl run)
+ *    carry `// source: live BytePlus intl 2026-09-30`; their URLs are redacted. A doc field the
  *    handler does not use stays in the fixture, so the fixture stays a copy
  *    of the doc. Outgoing bodies are asserted with `toEqual` against
  *    these; incoming ones are fed through the handlers.
@@ -17,9 +19,10 @@ import type { EnvApi, LogApi } from "@moku-labs/common";
 import { vi } from "vitest";
 import type { AssetRecord } from "../../asset/contract";
 import { ASSET_MIME, encodeAssetRecord } from "../../asset/contract";
+import type { ProviderRecord, ProviderRecordQuery } from "../../journal/types";
 import type { VideoFile } from "../../video/contract";
 import type { OpenApiBodies } from "../client";
-import type { ArkContext, Config, RegistryApi, State } from "../types";
+import type { ArkContext, ArkJournal, Config, RegistryApi, State } from "../types";
 
 // ─── Documented examples: Ark video generation task API (data plane) ────────
 
@@ -332,6 +335,105 @@ export const ERROR_INTERNAL = {
   }
 };
 
+// ─── Live captures: BytePlus intl, 2026-09-30 (URLs redacted) ───────────────
+
+/** Task id of the live Seedance 2.5 draft. */
+export const DRAFT_TASK_ID = "cgt-20260930171041-8mowm";
+
+/** Task id of the live Seedance 2.5 final rendered from that draft. */
+export const FINAL_TASK_ID = "cgt-20260930173840-c9nos";
+
+/** Redacted clip URL of the live draft. */
+export const DRAFT_VIDEO_URL = "https://example.invalid/draft.mp4";
+
+/** Redacted clip URL of the live final. */
+export const FINAL_VIDEO_URL = "https://example.invalid/final.mp4";
+
+/** Redacted image URL of the Seedream response. */
+export const SEEDREAM_IMAGE_URL = "https://example.invalid/key.jpeg";
+
+/** `created_at` of the live draft, in ms: the start of its 7-day validity. */
+export const DRAFT_CREATED_MS = 1_790_759_442_000;
+
+// source: live BytePlus intl 2026-09-30 (GET task: a succeeded 2.5 draft, 480p, draft: true)
+export const LIVE_DRAFT_TASK = {
+  id: DRAFT_TASK_ID,
+  model: "dreamina-seedance-2-5-260628",
+  status: "succeeded",
+  usage: { completion_tokens: 48_437, total_tokens: 48_437 },
+  created_at: 1_790_759_442,
+  updated_at: 1_790_759_642,
+  seed: 76_282,
+  resolution: "480p",
+  ratio: "240:427",
+  duration: 5,
+  framespersecond: 24,
+  service_tier: "default",
+  execution_expires_after: 172_800,
+  generate_audio: true,
+  draft: true,
+  priority: 0,
+  output_format: "mp4",
+  content: { video_url: DRAFT_VIDEO_URL }
+};
+
+// source: live BytePlus intl 2026-09-30 (GET task: the 1080p final of that draft, with draft_task_id)
+export const LIVE_FINAL_TASK = {
+  id: FINAL_TASK_ID,
+  model: "dreamina-seedance-2-5-260628",
+  status: "succeeded",
+  usage: { completion_tokens: 245_025, total_tokens: 245_025 },
+  created_at: 1_790_761_120,
+  updated_at: 1_790_761_154,
+  seed: 76_282,
+  resolution: "1080p",
+  ratio: "9:16",
+  duration: 5,
+  framespersecond: 24,
+  generate_audio: true,
+  draft: false,
+  draft_task_id: DRAFT_TASK_ID,
+  output_format: "mp4",
+  content: { video_url: FINAL_VIDEO_URL }
+};
+
+// source: live BytePlus intl 2026-09-30 (400: 2.5 first frame with ratio)
+export const LIVE_ERROR_RATIO = {
+  error: {
+    code: "InvalidParameter.TaskTypeConstraint",
+    message:
+      "The parameter ratio specified in the request is not valid. For first-frame or first-last-frame generation, the output ratio follows the first-frame image. Request id: 02179075943500777dd13f2098096eba9569e39b59e750c583307",
+    param: "ratio",
+    type: "BadRequest"
+  }
+};
+
+// source: live BytePlus intl 2026-09-30 (400: a Codex keyframe with a real face)
+export const LIVE_ERROR_FACE = {
+  error: {
+    code: "InputImageSensitiveContentDetected.PrivacyInformation",
+    message:
+      "The request failed because the input image 'content[1]' may contain real person. Request id: 02179075825612928c256f90ee836450e608b7d1b1192f36fddb6",
+    param: "",
+    type: "BadRequest"
+  }
+};
+
+// source: live BytePlus intl 2026-09-30 (400: Seedream size 1152x2048; top-level, not wrapped in "error")
+export const LIVE_ERROR_SEEDREAM_SIZE = {
+  code: "InvalidParameter",
+  message:
+    "The parameter `size` specified in the request is not valid: image size must be at least 3686400 pixels. Request id: 021790758342364337dd80e214c02e2e5c4590cd6b9313c19891c",
+  param: "",
+  type: ""
+};
+
+// source: live BytePlus intl 2026-09-30 (200: Seedream 5.0 lite text-to-image, data[0].url and usage)
+export const LIVE_SEEDREAM_RESPONSE = {
+  data: [{ url: SEEDREAM_IMAGE_URL }],
+  usage: { generated_images: 1, output_tokens: 14_400, total_tokens: 14_400 }
+};
+
 // ─── Documented examples: Ark asset OpenAPI (control plane, signed) ─────────
 // source: https://raw.githubusercontent.com/byteplus-sa/ark-mcp/main/scripts/ark_openapi_sign.py (signing: host, Action/Version query, signed headers)
 
@@ -461,6 +563,7 @@ export const DEFAULT_CONFIG: Config = {
   groupId: null,
   groupName: "moku-ai",
   timeoutMs: 60_000,
+  downloadTimeoutMs: 300_000,
   priceOverrides: {},
   cnyPerUsd: 7.1
 };
@@ -484,6 +587,13 @@ export const CN_ACCOUNT = "89079cf1d170";
 /** intl data-plane tasks URL. */
 export const INTL_TASKS_URL =
   "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks";
+
+// source: live BytePlus intl 2026-09-30 (Seedream: POST {dataPlane}/images/generations)
+/** intl data-plane image generation URL. */
+export const INTL_IMAGES_URL = "https://ark.ap-southeast.bytepluses.com/api/v3/images/generations";
+
+/** `apiAccountOf("intl", TEST_API_KEY)`, pinned: the account of the test draft records. */
+export const INTL_API_ACCOUNT = "d1b474b7c3d4";
 
 // unverified: the cn host is in no source
 /** cn data-plane tasks URL. */
@@ -552,6 +662,34 @@ export function createFakeLog(): LogApi {
   };
 }
 
+/** An in-memory fake of the journal's provider records, with spies and an open flag. */
+export type FakeJournal = ArkJournal & {
+  /** Stored values by `provider|account|kind|key`. */
+  records: Map<string, string>;
+  /** What `isOpen()` answers. */
+  open: boolean;
+};
+
+/** The primary key of a provider record, as one string. */
+function recordKeyOf(query: ProviderRecordQuery): string {
+  return [query.provider, query.account, query.kind, query.key].join("|");
+}
+
+/** Builds a fake journal mirroring provider-records put/find (idempotent put). */
+export function createFakeJournal(open = true): FakeJournal {
+  const records = new Map<string, string>();
+  const journal: FakeJournal = {
+    records,
+    open,
+    isOpen: vi.fn(() => journal.open),
+    findProviderRecord: vi.fn((query: ProviderRecordQuery) => records.get(recordKeyOf(query))),
+    putProviderRecords: vi.fn((rows: ProviderRecord[]) => {
+      for (const row of rows) records.set(recordKeyOf(row), row.value);
+    })
+  };
+  return journal;
+}
+
 /** Per-dependency overrides accepted by {@link createTestCtx}. */
 export type TestCtxOverrides = {
   config?: Partial<Config>;
@@ -559,9 +697,10 @@ export type TestCtxOverrides = {
   registry?: RegistryApi;
   env?: EnvApi;
   log?: LogApi;
+  journal?: ArkJournal;
 };
 
-/** Builds a fake `ArkContext`: default config, fresh state, fake registry/env/log. */
+/** Builds a fake `ArkContext`: default config, fresh state, fake registry/env/log/journal. */
 export function createTestCtx(overrides: TestCtxOverrides = {}): ArkContext {
   const config: Config = { ...DEFAULT_CONFIG, ...overrides.config };
   const state: State = {
@@ -571,12 +710,16 @@ export function createTestCtx(overrides: TestCtxOverrides = {}): ArkContext {
     account: null,
     activeAssets: new Set(),
     negativeWarned: false,
+    imageNegativeWarned: false,
+    ratioWarned: false,
+    journalSkipLogged: false,
     ...overrides.state
   };
   const registry = overrides.registry ?? createFakeRegistry();
   const env = overrides.env ?? createFakeEnv();
   const log = overrides.log ?? createFakeLog();
-  return { config, state, emit: () => undefined, require: () => registry, env, log };
+  const journal = overrides.journal ?? createFakeJournal();
+  return { config, state, emit: () => undefined, require: () => registry, env, log, journal };
 }
 
 /** Everything any log call of `ctx` received, stringified. */

@@ -5,7 +5,9 @@
  * `checkVideoRequest` refuses what the model cannot take (no I/O),
  * `readInputs` reads the local images as data URIs and the asset refs as
  * their records, and `buildArkBody` assembles the body (pure). The prompt is
- * never rewritten: it cites refs by position ("image 1").
+ * never rewritten: it cites refs by position ("image 1"). A draft
+ * (`params.draft: true`) is this body plus `draft: true`, at 480p; a final
+ * from a draft has its own body (`./final.ts`).
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +17,7 @@ import type { VideoFile, VideoRequest } from "../../video/contract";
 import type { ArkVideoModel } from "../models";
 import { checkClip } from "../models";
 import type { ArkContext } from "../types";
+import { checkDraftMode, DRAFT_RESOLUTION } from "./draft";
 
 /**
  * The `ratio` values Ark takes, from `request.aspect`.
@@ -35,11 +38,13 @@ export const ARK_RATIOS: readonly string[] = [
 ];
 
 /**
- * The `params` keys ark takes: `refUrls` plus the allow-listed passthrough.
+ * The `params` keys ark takes: `refUrls`, the allow-listed passthrough,
+ * `draft` (a 480p draft render) and `generation` (never sent: it only changes
+ * the item key, so a bumped generation renders again).
  *
  * @example
  * ```ts
- * ARK_PARAMS[0]; // => "refUrls"
+ * ARK_PARAMS.at(-1); // => "generation"
  * ```
  */
 export const ARK_PARAMS = [
@@ -48,7 +53,9 @@ export const ARK_PARAMS = [
   "seed",
   "return_last_frame",
   "execution_expires_after",
-  "priority"
+  "priority",
+  "draft",
+  "generation"
 ] as const;
 
 /**
@@ -69,7 +76,7 @@ export type ArkParameterName = (typeof ARK_PARAMS)[number];
  * const key: ArkPassthroughKey = "return_last_frame";
  * ```
  */
-export type ArkPassthroughKey = Exclude<ArkParameterName, "refUrls">;
+export type ArkPassthroughKey = Exclude<ArkParameterName, "refUrls" | "draft" | "generation">;
 
 /**
  * The allow-listed passthrough params. Values come from the build file's
@@ -105,7 +112,8 @@ export type ArkMediaItem =
   | { type: "audio_url"; audio_url: { url: string }; role: "reference_audio" };
 
 /**
- * One entry of the body's `content` list.
+ * One entry of the body's `content` list. A final from a draft carries only
+ * the `draft_task` entry.
  *
  * @example
  * ```ts
@@ -115,10 +123,11 @@ export type ArkMediaItem =
 export type ArkContentItem =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string }; role: ArkImageRole }
-  | ArkMediaItem;
+  | ArkMediaItem
+  | { type: "draft_task"; draft_task: { id: string } };
 
 /**
- * The task body POSTed to ark.
+ * The task body POSTed to ark for a normal or a draft render.
  *
  * @example
  * ```ts
@@ -133,14 +142,16 @@ export type ArkVideoBody = ArkPassthrough & {
   model: string;
   /** Prompt, then frames, then reference images, then reference media. */
   content: ArkContentItem[];
-  /** Aspect ratio. */
-  ratio: string;
+  /** Aspect ratio. Left out when the model's ratio follows a first or last frame. */
+  ratio?: string;
   /** Clip length, seconds. */
   duration: number;
   /** Output resolution. */
   resolution: string;
   /** Whether ark generates audio. */
   generate_audio: boolean;
+  /** Present on a draft render only. */
+  draft?: true;
 };
 
 /**
@@ -148,7 +159,7 @@ export type ArkVideoBody = ArkPassthrough & {
  *
  * @example
  * ```ts
- * const checked: CheckedVideoRequest = { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {} };
+ * const checked: CheckedVideoRequest = { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {}, draft: false };
  * ```
  */
 export type CheckedVideoRequest = {
@@ -156,7 +167,7 @@ export type CheckedVideoRequest = {
   seconds: number;
   /** Output resolution. */
   resolution: string;
-  /** Aspect ratio. */
+  /** Aspect ratio (checked; not sent when the model's ratio follows a frame). */
   ratio: string;
   /** Whether ark generates audio. */
   audio: boolean;
@@ -164,6 +175,8 @@ export type CheckedVideoRequest = {
   media: ArkMediaItem[];
   /** The allow-listed passthrough params. */
   params: ArkPassthrough;
+  /** Whether this is a 480p draft render (`params.draft: true`). */
+  draft: boolean;
 };
 
 /**
@@ -365,6 +378,25 @@ export function hasVideoReferenceUrl(request: VideoRequest): boolean {
 }
 
 /**
+ * Whether the model's output ratio follows a first or last frame of this
+ * request, so `ratio` is not sent.
+ *
+ * @param model - The catalog row.
+ * @param frames - The request's first and last frame, read or not.
+ * @returns True when `ratio` is left out of the body.
+ * @example
+ * ```ts
+ * isRatioFromImage(resolveArkModel("dreamina-seedance-2-5-260628", "intl"), { image: { kind: "image", url: "data:image/png;base64,AQID" }, endImage: undefined }); // => true
+ * ```
+ */
+function isRatioFromImage(
+  model: ArkVideoModel,
+  frames: Pick<ReadInputs, "image" | "endImage"> | Pick<VideoRequest, "image" | "endImage">
+): boolean {
+  return model.ratioFollowsImage && (frames.image !== undefined || frames.endImage !== undefined);
+}
+
+/**
  * Checks `request.aspect` against the ratios ark takes.
  *
  * @param aspect - `request.aspect`; 9:16 when undefined.
@@ -386,6 +418,20 @@ function checkRatio(aspect: string | undefined): string {
 }
 
 /**
+ * The error for a `params` key ark does not take.
+ *
+ * @param key - The key.
+ * @returns The plain two-line error listing the allowed keys.
+ * @example
+ * ```ts
+ * unknownParameterError("cfg_scale").message.startsWith('[ai] Unknown ark param "cfg_scale".'); // => true
+ * ```
+ */
+export function unknownParameterError(key: string): Error {
+  return new Error(`[ai] Unknown ark param "${key}".\n  Allowed: ${ARK_PARAMS.join(", ")}.`);
+}
+
+/**
  * Whether a `params` key is one ark takes.
  *
  * @param key - A `params` key.
@@ -395,7 +441,7 @@ function checkRatio(aspect: string | undefined): string {
  * isArkParameter("cfg_scale"); // => false
  * ```
  */
-function isArkParameter(key: string): key is ArkParameterName {
+export function isArkParameter(key: string): key is ArkParameterName {
   return (ARK_PARAMS as readonly string[]).includes(key);
 }
 
@@ -408,16 +454,15 @@ function isArkParameter(key: string): key is ArkParameterName {
  * @throws {Error} A plain two-line error for an unknown key, or a seed on a model without seed.
  * @example
  * ```ts
- * checkParameters(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), { watermark: true, refUrls: [] }); // => { watermark: true }
+ * checkParameters(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), { watermark: true, refUrls: [], generation: 2 }); // => { watermark: true }
  * ```
  */
 function checkParameters(model: ArkVideoModel, params: Record<string, unknown>): ArkPassthrough {
   const passthrough: ArkPassthrough = {};
   for (const [key, value] of Object.entries(params)) {
-    if (!isArkParameter(key)) {
-      throw new Error(`[ai] Unknown ark param "${key}".\n  Allowed: ${ARK_PARAMS.join(", ")}.`);
-    }
-    if (key === "refUrls") continue;
+    if (!isArkParameter(key)) throw unknownParameterError(key);
+    const isNotPassthrough = key === "refUrls" || key === "draft" || key === "generation";
+    if (isNotPassthrough) continue;
     if (key === "seed" && !model.supportsSeed) {
       throw new Error(`[ai] Model ${model.id} takes no seed.\n  Remove params.seed.`);
     }
@@ -449,26 +494,29 @@ function checkReferences(model: ArkVideoModel, references: readonly VideoFile[])
 }
 
 /**
- * Checks a request against the model, with no I/O: seconds, resolution,
- * ratio, params, refs and refUrls. Every failure is a plain two-line error,
- * thrown before any file is read and before any call.
+ * Checks a request against the model, with no I/O: draft mode, seconds,
+ * resolution, ratio, params, refs and refUrls. Every failure is a plain
+ * two-line error, thrown before any file is read and before any call.
  *
  * @param model - The catalog row (already checked for the region).
  * @param request - The video request.
- * @returns The checked request, defaults applied.
+ * @returns The checked request, defaults applied (480p for a draft).
  * @throws {Error} The first broken rule.
  * @example
  * ```ts
  * checkVideoRequest(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), { model: "dreamina-seedance-2-0-260128", prompt: "p" });
- * // => { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {} }
+ * // => { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {}, draft: false }
  * ```
  */
 export function checkVideoRequest(
   model: ArkVideoModel,
   request: VideoRequest
 ): CheckedVideoRequest {
-  // Check clip, ratio and params against the model.
-  const clip = checkClip(model, request);
+  // The draft mode first: a draft renders at 480p when no resolution is given.
+  const draft = checkDraftMode(model, request);
+  const clip = checkClip(model, draft ? { ...request, resolution: DRAFT_RESOLUTION } : request);
+
+  // Check ratio and params against the model.
   const ratio = checkRatio(request.aspect);
   const params = request.params ?? {};
   const passthrough = checkParameters(model, params);
@@ -481,7 +529,8 @@ export function checkVideoRequest(
     ratio,
     audio: model.supportsAudio && request.audio === true,
     media,
-    params: passthrough
+    params: passthrough,
+    draft
   };
 }
 
@@ -560,6 +609,8 @@ function imageItem(input: ReadInput, role: ArkImageRole): ArkContentItem {
  * Assembles the task body: the prompt, the first frame, the last frame, the
  * reference images in request order, then the reference media in refUrls
  * order; `watermark` defaults to false and the passthrough params go last.
+ * `ratio` is left out when the model's ratio follows a first or last frame
+ * (ark refuses it then); a draft adds `draft: true`.
  *
  * @param model - The catalog row.
  * @param prompt - The prompt, sent as given.
@@ -568,7 +619,7 @@ function imageItem(input: ReadInput, role: ArkImageRole): ArkContentItem {
  * @returns The body.
  * @example
  * ```ts
- * const checked = { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {} };
+ * const checked = { seconds: 5, resolution: "720p", ratio: "9:16", audio: false, media: [], params: {}, draft: false };
  * buildArkBody(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), "p", checked, { image: undefined, endImage: undefined, refs: [] });
  * // => { model: "dreamina-seedance-2-0-260128", content: [{ type: "text", text: "p" }], ratio: "9:16", duration: 5, resolution: "720p", generate_audio: false, watermark: false }
  * ```
@@ -588,12 +639,13 @@ export function buildArkBody(
   return {
     model: model.id,
     content,
-    ratio: checked.ratio,
+    ...(isRatioFromImage(model, inputs) ? {} : { ratio: checked.ratio }),
     duration: checked.seconds,
     resolution: checked.resolution,
     generate_audio: checked.audio,
     watermark: false,
-    ...checked.params
+    ...checked.params,
+    ...(checked.draft ? { draft: true } : {})
   };
 }
 
@@ -610,4 +662,21 @@ export function warnNegativeOnce(ctx: ArkContext, request: VideoRequest): void {
 
   ctx.state.negativeWarned = true;
   ctx.log.warn("ark:negative:ignored", { model: request.model });
+}
+
+/**
+ * Logs `ark:ratio:ignored` the first time in this process a request names an
+ * `aspect` that cannot be honoured: the model's ratio follows the request's
+ * first or last frame, so `ratio` is not sent.
+ *
+ * @param ctx - Plugin context (state, log).
+ * @param model - The catalog row.
+ * @param request - The video request.
+ */
+export function warnRatioOnce(ctx: ArkContext, model: ArkVideoModel, request: VideoRequest): void {
+  const isIgnored = request.aspect !== undefined && isRatioFromImage(model, request);
+  if (!isIgnored || ctx.state.ratioWarned) return;
+
+  ctx.state.ratioWarned = true;
+  ctx.log.warn("ark:ratio:ignored", { model: model.id });
 }

@@ -20,7 +20,7 @@ describe("arkPlugin — wiring", () => {
     expect(arkPlugin.spec.onStop).toBeUndefined();
   });
 
-  it("registers video/ark and asset/ark in onInit", () => {
+  it("registers video/ark, asset/ark and image/ark in onInit", () => {
     const registry = createFakeRegistry();
     const ctx = createTestCtx({ registry });
 
@@ -37,5 +37,10 @@ describe("arkPlugin — wiring", () => {
         poll: expect.any(Function)
       });
     }
+    expect(registry.providers("image")).toEqual(["ark"]);
+    expect(registry.resolve("image", "ark")).toEqual({
+      estimate: expect.any(Function),
+      execute: expect.any(Function)
+    });
   });
 });

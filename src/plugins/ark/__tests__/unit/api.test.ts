@@ -10,18 +10,26 @@ describe("createArkApi().info()", () => {
     expect(api.info()).toEqual({
       provider: "ark",
       region: "intl",
-      configured: { video: true, assets: true },
-      models: modelsOf("intl")
+      configured: { video: true, assets: true, image: true },
+      models: modelsOf("intl"),
+      imageModels: ["seedream-5-0-lite-260128"]
     });
     expect(api.info().models).toEqual([
       "dreamina-seedance-2-0-260128",
+      "dreamina-seedance-2-0-fast-260128",
+      "dreamina-seedance-2-0-mini-260615",
       "dreamina-seedance-2-5-260628"
     ]);
   });
 
   it("reports nothing configured, without throwing, when no key is set", () => {
     const api = createArkApi(createTestCtx({ env: createFakeEnv({}) }));
-    expect(api.info().configured).toEqual({ video: false, assets: false });
+    expect(api.info().configured).toEqual({ video: false, assets: false, image: false });
+  });
+
+  it("reports images configured with the API key alone", () => {
+    const api = createArkApi(createTestCtx({ env: createFakeEnv({ ARK_API_KEY: TEST_API_KEY }) }));
+    expect(api.info().configured).toEqual({ video: true, assets: false, image: true });
   });
 
   it("needs both the access key and the secret key for assets", () => {
@@ -30,7 +38,7 @@ describe("createArkApi().info()", () => {
         env: createFakeEnv({ ARK_API_KEY: TEST_API_KEY, ARK_ACCESS_KEY: TEST_ACCESS_KEY })
       })
     );
-    expect(api.info().configured).toEqual({ video: true, assets: false });
+    expect(api.info().configured).toEqual({ video: true, assets: false, image: true });
   });
 
   it("treats an empty variable as not set", () => {
@@ -50,5 +58,6 @@ describe("createArkApi().info()", () => {
     expect(info.configured.video).toBe(true);
     expect(info.models).toEqual(modelsOf("cn"));
     expect(info.models).toEqual(["doubao-seedance-2-0-260128", "doubao-seedance-2-5-260628"]);
+    expect(info.imageModels).toEqual([]);
   });
 });

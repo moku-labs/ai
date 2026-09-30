@@ -53,7 +53,7 @@ const PROMPT = "A girl walks into the rain, the camera follows her";
 const CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
 const TASK_URL = `${INTL_TASKS_URL}/${TASK_ID}`;
 const FACE_MESSAGE =
-  "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Make it an asset item and $ref it.";
+  "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.";
 const GENERIC_FLAG_MESSAGE =
   "[ai] ark flagged the request: InputImageSensitiveContentDetected.PrivacyInformation.\n  Change the prompt or the inputs.";
 
@@ -101,9 +101,16 @@ describe("estimate", () => {
     const fetchMock = stubFetch();
     const handler = createVideoHandler(createTestCtx());
 
-    expect(handler.estimate(request())).toEqual({ usd: 0.756 });
-    expect(handler.estimate(request({ seconds: 10, resolution: "480p" }))).toEqual({ usd: 0.6804 });
+    expect(handler.estimate(request())).toEqual({ usd: 0.7623 });
+    expect(handler.estimate(request({ seconds: 10, resolution: "480p" }))).toEqual({
+      usd: 0.706_006
+    });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("prices a 1080p clip with the model's 1080p price", () => {
+    const handler = createVideoHandler(createTestCtx());
+    expect(handler.estimate(request({ resolution: "1080p" }))).toEqual({ usd: 1.886_692 });
   });
 
   it("accepts unresolved $ref and $file inputs and never reads them", () => {
@@ -114,13 +121,13 @@ describe("estimate", () => {
       refs: [{ $file: "refs/street.png" }]
     } as unknown as VideoRequest;
 
-    expect(handler.estimate(unresolved)).toEqual({ usd: 0.756 });
+    expect(handler.estimate(unresolved)).toEqual({ usd: 0.7623 });
   });
 
   it("converts the cn price to USD", () => {
     const handler = createVideoHandler(createTestCtx({ config: { region: "cn" } }));
     expect(handler.estimate(request({ model: "doubao-seedance-2-0-260128" }))).toEqual({
-      usd: 0.699_718
+      usd: 0.705_549
     });
   });
 
@@ -457,12 +464,25 @@ describe("poll", () => {
         seconds: 5,
         resolution: "720p",
         completionTokens: 108_900,
+        seed: 58_920,
         lastFrameUrl: LAST_FRAME_URL
       }
     });
     const download = callsOf(fetchMock)[1];
     expect(download?.url).toBe(VIDEO_URL);
     expect(download?.headers.Authorization).toBeUndefined();
+    expect(ctx.journal.putProviderRecords).not.toHaveBeenCalled();
+  });
+
+  it("downloads the clip with downloadTimeoutMs, the task read with timeoutMs", async () => {
+    stubFetch(jsonResponse(200, GET_TASK_SUCCEEDED), bytesResponse(CLIP));
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const handler = createVideoHandler(createTestCtx({ config: { downloadTimeoutMs: 450_000 } }));
+
+    await handler.poll(TASK_ID, request(), {});
+
+    expect(timeout.mock.calls).toEqual([[60_000], [450_000]]);
+    timeout.mockRestore();
   });
 
   it("uses the with-video-input price when refUrls holds a video", async () => {
@@ -507,8 +527,9 @@ describe("poll", () => {
       content: { video_url: VIDEO_URL }
     };
     stubFetch(jsonResponse(200, bare), bytesResponse(CLIP));
+    const ctx = createTestCtx();
 
-    const result = await createVideoHandler(createTestCtx()).poll(
+    const result = await createVideoHandler(ctx).poll(
       TASK_ID,
       request({ seconds: 10, resolution: "480p" }),
       {}
@@ -516,9 +537,29 @@ describe("poll", () => {
 
     expect(result).toMatchObject({
       state: "done",
-      costUsd: 0.6804,
-      meta: { model: MODEL_ID, seconds: 10, resolution: "480p", completionTokens: 97_200 }
+      costUsd: 0.706_006,
+      meta: { model: MODEL_ID, seconds: 10, resolution: "480p", completionTokens: 100_858 }
     });
+    expect(result.state === "done" && result.meta).not.toHaveProperty("seed");
+    expect(ctx.log.warn).toHaveBeenCalledWith("ark:cost:estimated", { taskId: TASK_ID });
+  });
+
+  it("estimates the cost of a task with an unlisted resolution instead of throwing", async () => {
+    const odd = { id: TASK_ID, status: "succeeded", resolution: "540p", duration: 5 };
+    stubFetch(
+      jsonResponse(200, { ...odd, content: { video_url: VIDEO_URL } }),
+      bytesResponse(CLIP)
+    );
+    const ctx = createTestCtx();
+
+    const result = await createVideoHandler(ctx).poll(TASK_ID, request(), {});
+
+    expect(result).toMatchObject({
+      state: "done",
+      costUsd: 0.354_466,
+      meta: { resolution: "540p", completionTokens: 50_638 }
+    });
+    expect(ctx.log.warn).toHaveBeenCalledWith("ark:cost:estimated", { taskId: TASK_ID });
   });
 
   it("falls back to 5 s at 720p when neither the task nor the request names them", async () => {
@@ -530,8 +571,8 @@ describe("poll", () => {
     const result = await createVideoHandler(createTestCtx()).poll(TASK_ID, request(), {});
 
     expect(result).toMatchObject({
-      costUsd: 0.756,
-      meta: { seconds: 5, resolution: "720p", completionTokens: 108_000 }
+      costUsd: 0.7623,
+      meta: { seconds: 5, resolution: "720p", completionTokens: 108_900 }
     });
   });
 

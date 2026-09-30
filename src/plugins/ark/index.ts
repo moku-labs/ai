@@ -1,9 +1,10 @@
 /**
- * Complex tier — ark provider: Seedance straight from ByteDance, on BytePlus
- * ModelArk (`region: "intl"`) or Volcengine Ark (`region: "cn"`). Registers
- * two handlers in onInit: `video/ark` (Seedance video tasks, with an asset
- * preflight before any paid call) and `asset/ark` (portrait registration into
- * an AIGC group through the signed asset OpenAPI). Emits no events.
+ * Complex tier — ark provider: Seedance and Seedream straight from ByteDance,
+ * on BytePlus ModelArk (`region: "intl"`) or Volcengine Ark (`region: "cn"`).
+ * Registers three handlers in onInit: `video/ark` (Seedance video tasks, with
+ * an asset preflight before any paid call, and draft → final), `asset/ark`
+ * (portrait registration into an AIGC group through the signed asset OpenAPI)
+ * and `image/ark` (Seedream text-to-image, bytes unchanged). Emits no events.
  *
  * @see README.md
  */
@@ -11,6 +12,7 @@ import { createPlugin } from "../../config";
 import { registryPlugin } from "../registry";
 import { createArkApi } from "./api";
 import { createAssetHandler } from "./asset/handler";
+import { createImageHandler } from "./image/handler";
 import { createArkState } from "./state";
 import type { Config } from "./types";
 import { createVideoHandler } from "./video/handler";
@@ -28,15 +30,17 @@ const defaultConfig: Config = {
   groupId: null,
   groupName: "moku-ai",
   timeoutMs: 60_000,
+  downloadTimeoutMs: 300_000,
   priceOverrides: {},
   cnyPerUsd: 7.1
 };
 
 /**
  * ark — Complex tier provider plugin. One instance is one account. Registers
- * `("video", "ark")` and `("asset", "ark")` in onInit. Depends on registry
- * only; the `video` and `asset` contracts are module imports, not plugin
- * edges. Keys are read through `ctx.env`, logs go through `ctx.log`.
+ * `("video", "ark")`, `("asset", "ark")` and `("image", "ark")` in onInit.
+ * Depends on registry only; the task contracts are module imports, not plugin
+ * edges. Keys are read through `ctx.env`, logs go through `ctx.log`, draft
+ * task ids are kept through `ctx.journal`.
  *
  * @see README.md
  */
@@ -46,7 +50,7 @@ export const arkPlugin = createPlugin("ark", {
   createState: createArkState,
   api: createArkApi,
   /**
-   * Registers the ark video and asset handlers with the registry.
+   * Registers the ark video, asset and image handlers with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
    */
@@ -54,5 +58,6 @@ export const arkPlugin = createPlugin("ark", {
     const registry = ctx.require(registryPlugin);
     registry.register("video", "ark", createVideoHandler(ctx));
     registry.register("asset", "ark", createAssetHandler(ctx));
+    registry.register("image", "ark", createImageHandler(ctx));
   }
 });

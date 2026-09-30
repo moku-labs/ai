@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { accountOf, ownAccount } from "../../account";
+import { accountOf, apiAccountOf, ownAccount } from "../../account";
 import {
   CN_ACCOUNT,
   createFakeEnv,
   createTestCtx,
   INTL_ACCOUNT,
-  TEST_ACCESS_KEY
+  INTL_API_ACCOUNT,
+  TEST_ACCESS_KEY,
+  TEST_API_KEY
 } from "../fixtures";
 
 describe("accountOf", () => {
@@ -56,5 +58,21 @@ describe("ownAccount", () => {
   it("throws when the access key is not set", () => {
     const ctx = createTestCtx({ env: createFakeEnv({}) });
     expect(() => ownAccount(ctx)).toThrow('required variable "ARK_ACCESS_KEY"');
+  });
+});
+
+describe("apiAccountOf", () => {
+  it("is the pinned 12-hex fingerprint of region + API key", () => {
+    expect(apiAccountOf("intl", TEST_API_KEY)).toBe(INTL_API_ACCOUNT);
+    expect(apiAccountOf("intl", TEST_API_KEY)).toMatch(/^[0-9a-f]{12}$/);
+  });
+
+  it("differs by region and from the access-key fingerprint of the same string", () => {
+    expect(apiAccountOf("cn", TEST_API_KEY)).not.toBe(INTL_API_ACCOUNT);
+    expect(apiAccountOf("intl", TEST_ACCESS_KEY)).not.toBe(accountOf("intl", TEST_ACCESS_KEY));
+  });
+
+  it("never contains the key", () => {
+    expect(apiAccountOf("intl", TEST_API_KEY)).not.toContain(TEST_API_KEY.slice(0, 6));
   });
 });

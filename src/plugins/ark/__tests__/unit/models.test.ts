@@ -10,6 +10,8 @@ import {
 } from "../../models";
 
 const INTL_20 = "dreamina-seedance-2-0-260128";
+const INTL_FAST = "dreamina-seedance-2-0-fast-260128";
+const INTL_MINI = "dreamina-seedance-2-0-mini-260615";
 const CN_20 = "doubao-seedance-2-0-260128";
 const INTL_25 = "dreamina-seedance-2-5-260628";
 const CN_25 = "doubao-seedance-2-5-260628";
@@ -34,10 +36,13 @@ describe("catalog", () => {
       expect(model.maxRefImages).toBeGreaterThan(0);
       expect(model.price.base).toBeGreaterThan(0);
       expect(model.price.withVideoInput).toBeGreaterThan(0);
+      expect(typeof model.ratioFollowsImage).toBe("boolean");
+      expect(typeof model.supportsDraft).toBe("boolean");
+      expect("price1080" in model).toBe(true);
     }
   });
 
-  it("keeps the documented Seedance 2.0 data", () => {
+  it("keeps the official Seedance 2.0 data, with its 1080p price", () => {
     expect(resolveArkModel(INTL_20, "intl")).toEqual({
       id: INTL_20,
       region: "intl",
@@ -49,9 +54,60 @@ describe("catalog", () => {
       maxRefAudios: 3,
       supportsSeed: false,
       supportsAudio: true,
-      price: { base: 7, withVideoInput: 4.3 }
+      ratioFollowsImage: false,
+      supportsDraft: false,
+      price: { base: 7, withVideoInput: 4.3 },
+      price1080: { base: 7.7, withVideoInput: 4.7 }
     });
-    expect(resolveArkModel(CN_20, "cn").price).toEqual({ base: 46, withVideoInput: 28 });
+    expect(resolveArkModel(CN_20, "cn")).toMatchObject({
+      price: { base: 46, withVideoInput: 28 },
+      price1080: undefined,
+      ratioFollowsImage: false,
+      supportsDraft: false
+    });
+  });
+});
+
+describe("Seedance 2.0 fast and mini rows", () => {
+  it("resolves fast and mini on intl with the official data", () => {
+    const shared = {
+      region: "intl",
+      minSeconds: 4,
+      maxSeconds: 15,
+      resolutions: ["480p", "720p"],
+      maxRefImages: 9,
+      maxRefVideos: 3,
+      maxRefAudios: 3,
+      supportsSeed: false,
+      supportsAudio: true,
+      ratioFollowsImage: false,
+      supportsDraft: false,
+      price1080: undefined
+    };
+    expect(resolveArkModel(INTL_FAST, "intl")).toEqual({
+      ...shared,
+      id: INTL_FAST,
+      price: { base: 5.6, withVideoInput: 3.3 }
+    });
+    expect(resolveArkModel(INTL_MINI, "intl")).toEqual({
+      ...shared,
+      id: INTL_MINI,
+      price: { base: 3.5, withVideoInput: 2.1 }
+    });
+  });
+
+  it("refuses 1080p on mini and fast", () => {
+    for (const id of [INTL_MINI, INTL_FAST]) {
+      expect(() => checkResolution(resolveArkModel(id, "intl"), "1080p")).toThrow(
+        `[ai] Model ${id} does not take resolution "1080p".\n  Use one of: 480p, 720p.`
+      );
+    }
+  });
+
+  it("rejects mini and fast on cn", () => {
+    expect(() => resolveArkModel(INTL_MINI, "cn")).toThrow(
+      `[ai] Model ${INTL_MINI} is a intl model.`
+    );
   });
 });
 
@@ -62,26 +118,32 @@ describe("Seedance 2.5 rows", () => {
       region: "intl",
       minSeconds: 4,
       maxSeconds: 30,
-      resolutions: ["480p", "720p"],
+      resolutions: ["480p", "720p", "1080p"],
       maxRefImages: 30,
       maxRefVideos: 10,
       maxRefAudios: 10,
-      supportsSeed: false,
+      supportsSeed: true,
       supportsAudio: true,
-      price: { base: 10.7, withVideoInput: 6.4 }
+      ratioFollowsImage: true,
+      supportsDraft: true,
+      price: { base: 10.7, withVideoInput: 6.4 },
+      price1080: { base: 11.7, withVideoInput: 7 }
     });
     expect(resolveArkModel(CN_25, "cn")).toEqual({
       id: CN_25,
       region: "cn",
       minSeconds: 4,
       maxSeconds: 30,
-      resolutions: ["480p", "720p"],
+      resolutions: ["480p", "720p", "1080p"],
       maxRefImages: 30,
       maxRefVideos: 10,
       maxRefAudios: 10,
-      supportsSeed: false,
+      supportsSeed: true,
       supportsAudio: true,
-      price: { base: 70, withVideoInput: 42 }
+      ratioFollowsImage: true,
+      supportsDraft: true,
+      price: { base: 70, withVideoInput: 42 },
+      price1080: undefined
     });
   });
 
@@ -106,10 +168,9 @@ describe("Seedance 2.5 rows", () => {
     }
   });
 
-  it("rejects 1080p on 2.5", () => {
-    expect(() => checkResolution(resolveArkModel(INTL_25, "intl"), "1080p")).toThrow(
-      `[ai] Model ${INTL_25} does not take resolution "1080p".\n  Use one of: 480p, 720p.`
-    );
+  it("accepts 1080p on 2.5", () => {
+    expect(checkResolution(resolveArkModel(INTL_25, "intl"), "1080p")).toBe("1080p");
+    expect(checkResolution(resolveArkModel(CN_25, "cn"), "1080p")).toBe("1080p");
   });
 });
 
@@ -122,7 +183,7 @@ describe("modelsOf", () => {
     expect(intl).not.toContain(CN_20);
     expect(cn).toContain(CN_20);
     expect(cn).not.toContain(INTL_20);
-    expect(intl).toEqual([INTL_20, INTL_25]);
+    expect(intl).toEqual([INTL_20, INTL_FAST, INTL_MINI, INTL_25]);
     expect(cn).toEqual([CN_20, CN_25]);
     expect([...intl, ...cn].toSorted()).toEqual(arkModels.map(model => model.id).toSorted());
   });
