@@ -11,6 +11,7 @@ import path from "node:path";
 import { z } from "zod";
 import { PromptGenUnavailableError } from "../promptGen/contract";
 import { RetryableProviderError, TerminalProviderError } from "./errors";
+import { BY_HAND, withoutPeriod } from "./message";
 
 /** File codex writes its final answer to (`-o`), inside the call dir. */
 export const LAST_MESSAGE_FILE = "last-message.txt";
@@ -80,11 +81,8 @@ const LIMIT_STATUS = 429;
 /** Where codex prints an API error as JSON: `ERROR: {` on stderr. */
 const API_ERROR_MARKER = "ERROR: {";
 
-/** Longest API error message kept in the error text. */
+/** Longest detail kept in an exit error: an API message, or the last stderr line. */
 const ERROR_EXCERPT_CHARS = 300;
-
-/** Second line of every "look at it by hand" error. */
-const BY_HAND = "Run the same codex exec by hand to see the full output.";
 
 /** Message per unavailable reason; two lines, never the prompt. */
 const UNAVAILABLE_MESSAGES = {
@@ -95,12 +93,23 @@ const UNAVAILABLE_MESSAGES = {
 
 /** The fields of a codex API error this plugin reads; the rest is ignored. */
 const apiErrorSchema = z.object({
-  error: z.object({ message: z.string(), code: z.string().nullish() }),
+  error: z.object({ message: z.string() }),
   status: z.number().optional()
 });
 
 /** A codex API error, as read. */
 type ApiError = z.infer<typeof apiErrorSchema>;
+
+/** Why a provider cannot serve now. */
+type UnavailableReason = "auth" | "limit";
+
+/** What a finished process printed: the kept tails of stderr and stdout. */
+type CapturedOutput = {
+  /** Captured stderr tail. */
+  stderr: string;
+  /** Captured stdout tail. */
+  stdout: string;
+};
 
 /**
  * Builds the `codex exec` argv. `--` always precedes the prompt, because
@@ -206,36 +215,23 @@ function lastLineOf(stderr: string): string {
 }
 
 /**
- * Drops trailing periods, so a message line ends with exactly one.
- *
- * @param text - A message fragment.
- * @returns The fragment without trailing periods.
- * @example
- * ```ts
- * withoutPeriod("is not permitted."); // => "is not permitted"
- * ```
- */
-function withoutPeriod(text: string): string {
-  let result = text;
-  while (result.endsWith(".")) result = result.slice(0, -1);
-  return result;
-}
-
-/**
- * The API error codex printed, if any: the JSON after the last `ERROR: {`,
- * or the whole text when it is one JSON error (stdout).
+ * The API error codex printed, if any: the JSON from the last `ERROR: {` to
+ * the last `}`, or the whole text when it is one JSON error (stdout).
  *
  * @param text - Captured stderr or stdout tail.
  * @returns The parsed API error, or undefined when there is none.
  * @example
  * ```ts
- * apiErrorOf('ERROR: {"error":{"message":"bad schema"},"status":400}')?.status; // => 400
+ * apiErrorOf('ERROR: {"error":{"message":"bad schema"},"status":400}\ndone')?.status; // => 400
  * ```
  */
 function apiErrorOf(text: string): ApiError | undefined {
+  // Cut the JSON out: keep the "{" after the marker, drop any line after the last "}"
   const marker = text.lastIndexOf(API_ERROR_MARKER);
-  const json = marker === -1 ? text.trim() : text.slice(marker + API_ERROR_MARKER.length - 1);
+  const start = marker === -1 ? 0 : marker + API_ERROR_MARKER.length - 1;
+  const json = text.slice(start, text.lastIndexOf("}") + 1);
 
+  // Parse, then keep only the fields this plugin reads
   let value: unknown;
   try {
     value = JSON.parse(json);
@@ -247,23 +243,39 @@ function apiErrorOf(text: string): ApiError | undefined {
 }
 
 /**
- * The unavailable reason of an API error, if any: 401/403 or auth wording
- * is "auth", 429 or limit wording is "limit". Anything else, a 400
- * `invalid_json_schema` included, is an ordinary failure.
+ * The unavailable reason some output text shows, if any.
+ *
+ * @param text - A stderr tail, or an API error message.
+ * @returns "auth", "limit", or undefined.
+ * @example
+ * ```ts
+ * reasonOfText("stream error: Rate limit reached"); // => "limit"
+ * ```
+ */
+function reasonOfText(text: string): UnavailableReason | undefined {
+  if (AUTH_PATTERN.test(text)) return "auth";
+  if (LIMIT_PATTERN.test(text)) return "limit";
+  return undefined;
+}
+
+/**
+ * The unavailable reason of an API error, if any. A status decides alone:
+ * 401/403 is "auth", 429 is "limit", any other status, a 400
+ * `invalid_json_schema` included, is an ordinary failure. Only an error
+ * without a status is read by its wording.
  *
  * @param apiError - The parsed API error.
  * @returns "auth", "limit", or undefined.
  * @example
  * ```ts
- * apiUnavailableReason({ error: { message: "slow down" }, status: 429 }); // => "limit"
+ * apiReason({ error: { message: "maximum is 429" }, status: 400 }); // => undefined
  * ```
  */
-function apiUnavailableReason(apiError: ApiError): "auth" | "limit" | undefined {
-  const { message } = apiError.error;
-  const status = apiError.status ?? 0;
-  if (AUTH_STATUSES.has(status) || AUTH_PATTERN.test(message)) return "auth";
-  if (status === LIMIT_STATUS || LIMIT_PATTERN.test(message)) return "limit";
-  return undefined;
+function apiReason(apiError: ApiError): UnavailableReason | undefined {
+  const { status } = apiError;
+  if (status === undefined) return reasonOfText(apiError.error.message);
+  if (AUTH_STATUSES.has(status)) return "auth";
+  return status === LIMIT_STATUS ? "limit" : undefined;
 }
 
 /**
@@ -271,53 +283,36 @@ function apiUnavailableReason(apiError: ApiError): "auth" | "limit" | undefined 
  * or stdout decides by its status and gives its message. Without one, a
  * stderr tail that says "not logged in" or "limit reached" makes the
  * provider unavailable, so promptGen can fall back, and the last stderr
- * line is the detail. Anything else is terminal.
+ * line is the detail. Anything else is terminal. The detail is capped, as
+ * codex echoes the prompt, schema included, to stderr.
  *
  * @param code - Exit code, or null when killed by a signal.
  * @param exitSignal - Terminating signal name, when any.
  * @param output - Captured stderr and stdout tails.
- * @param output.stderr - Captured stderr tail.
- * @param output.stdout - Captured stdout tail.
  * @returns The unavailable or terminal error to throw.
  * @example
  * ```ts
- * exitError(1, null, { stderr: "boom", stdout: "" }).message; // => "[ai] Codex exited with code 1: boom.\n  Run the same ..."
+ * exitError(1, null, { stderr: "boom", stdout: "" }).message.startsWith("[ai] Codex exited with code 1: boom.\n"); // => true
  * ```
  */
 function exitError(
   code: number | null,
   exitSignal: NodeJS.Signals | null,
-  output: { stderr: string; stdout: string }
+  output: CapturedOutput
 ): TerminalProviderError | PromptGenUnavailableError {
-  // An API error decides by its own status and message
+  // An API error decides by its own status; without one, the stderr wording decides
   const apiError = apiErrorOf(output.stderr) ?? apiErrorOf(output.stdout);
-  const reason =
-    apiError === undefined ? unavailableReasonOf(output.stderr) : apiUnavailableReason(apiError);
+  const reason = apiError === undefined ? reasonOfText(output.stderr) : apiReason(apiError);
   if (reason !== undefined)
     return new PromptGenUnavailableError(UNAVAILABLE_MESSAGES[reason], reason);
 
-  // Otherwise terminal, with the API message or the last stderr line
+  // Otherwise terminal, with the API message or the last stderr line, capped
   const how = code === null ? `signal ${exitSignal ?? "unknown"}` : `code ${code}`;
-  const message =
-    apiError?.error.message.trim().slice(0, ERROR_EXCERPT_CHARS) ?? lastLineOf(output.stderr);
+  const message = (apiError?.error.message ?? lastLineOf(output.stderr))
+    .trim()
+    .slice(0, ERROR_EXCERPT_CHARS);
   const detail = message === "" ? "" : `: ${withoutPeriod(message)}`;
   return new TerminalProviderError(`[ai] Codex exited with ${how}${detail}.\n  ${BY_HAND}`);
-}
-
-/**
- * The unavailable reason a plain stderr tail shows, if any.
- *
- * @param stderr - Captured stderr tail.
- * @returns "auth", "limit", or undefined.
- * @example
- * ```ts
- * unavailableReasonOf("stream error: Rate limit reached"); // => "limit"
- * ```
- */
-function unavailableReasonOf(stderr: string): "auth" | "limit" | undefined {
-  if (AUTH_PATTERN.test(stderr)) return "auth";
-  if (LIMIT_PATTERN.test(stderr)) return "limit";
-  return undefined;
 }
 
 /**

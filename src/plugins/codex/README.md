@@ -160,8 +160,9 @@ createApp({ pluginConfigs: { limits: { lanes: { "prompt-gen/codex": { concurrenc
 | Caller abort | `signal.reason`, rethrown unchanged | pause |
 
 The `<detail>` of a non-zero exit is `error.message` of the API error codex prints as `ERROR: {…}` on stderr,
-or as JSON on stdout. Without one it is the last stderr line. An API error decides by itself: status 401 or 403
-is `auth`, 429 is `limit`, and any other status, a 400 `invalid_json_schema` included, is terminal.
+or as JSON on stdout. Without one it is the last stderr line. Either is capped at 300 characters. An API error
+with a status decides by the status alone: 401 or 403 is `auth`, 429 is `limit`, and any other status, a 400
+`invalid_json_schema` included, is terminal. An API error without a status is read by its wording.
 
 Terminal and unavailable errors carry neither `kind` nor `status`, so the runner classifies them as `"unknown"`.
 

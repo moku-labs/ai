@@ -13,6 +13,7 @@ import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../
 import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
+import { BY_HAND } from "../message";
 import type { CodexContext } from "../types";
 import { createCallDirectory } from "../workdir";
 import { parseSchemaAnswer, schemaBlock } from "./answer";
@@ -93,9 +94,7 @@ async function readAnswer(dir: string): Promise<string> {
 
   const text = raw.trim();
   if (text === "") {
-    throw new TerminalProviderError(
-      "[ai] Codex wrote no answer.\n  Run the same codex exec by hand to see the full output."
-    );
+    throw new TerminalProviderError(`[ai] Codex wrote no answer.\n  ${BY_HAND}`);
   }
   return text;
 }

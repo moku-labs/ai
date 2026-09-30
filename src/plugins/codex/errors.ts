@@ -2,6 +2,7 @@
  * @file codex provider plugin — runtime provider error classes — values;
  * `types.ts` stays types-only. The runner-compatible error taxonomy:
  * `RetryableProviderError` (timeout) and `TerminalProviderError` (everything else).
+ * Re-exported publicly as `CodexErrors`, so it holds the error classes only.
  */
 
 /**

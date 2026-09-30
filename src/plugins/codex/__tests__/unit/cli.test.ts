@@ -508,6 +508,35 @@ describe("runCodex — API error message", () => {
     expect((error as PromptGenUnavailableError).reason).toBe("limit");
   });
 
+  it("keeps the API message when a line follows the ERROR JSON", async () => {
+    const stderr = printStderr(`${CODEX_SCHEMA_ERROR_STDERR}\nsession ended`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toContain(": Invalid schema for response_format");
+  });
+
+  it("keeps a 400 terminal even when its message says 429 or rate limit", async () => {
+    const json = '{"error":{"message":"rate limit field maximum is 429"},"status":400}';
+    const stderr = printStderr(`ERROR: ${json}`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toContain(": rate limit field maximum is 429.");
+  });
+
+  it("caps a long last stderr line, such as the echoed schema", async () => {
+    const schemaLine = `{"schema":"${"x".repeat(2000)}"}`;
+    const stderr = printStderr(schemaLine);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    const detail = (error as Error).message.split("\n")[0] ?? "";
+    expect(detail.length).toBeLessThan(360);
+  });
+
   it("uses error.message of a JSON error on stdout", async () => {
     const error = await failWith(
       `echo '{"error":{"message":"server broke."},"status":500}'\nexit 1`

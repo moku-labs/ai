@@ -7,6 +7,7 @@
  */
 import type { ZodType } from "zod";
 import { TerminalProviderError } from "../errors";
+import { withoutPeriod } from "../message";
 
 /** Line that introduces the response schema in the prompt. */
 const SCHEMA_LINE =
@@ -19,29 +20,13 @@ const SCHEMA_MISMATCH = "[ai] Codex answer does not match params.responseSchema.
 const FENCE_PATTERN = /^```(?:json)?[^\S\n]*\n([\s\S]*)\n```$/;
 
 /**
- * Drops trailing periods, so a message line ends with exactly one.
- *
- * @param text - A message fragment.
- * @returns The fragment without trailing periods.
- * @example
- * ```ts
- * withoutPeriod("Expected number."); // => "Expected number"
- * ```
- */
-function withoutPeriod(text: string): string {
-  let result = text;
-  while (result.endsWith(".")) result = result.slice(0, -1);
-  return result;
-}
-
-/**
  * The prompt block that asks for a schema answer: the answer rule, then the schema.
  *
  * @param schemaText - The schema as compact JSON.
  * @returns The block, to append after the prompt with a blank line.
  * @example
  * ```ts
- * schemaBlock('{"type":"number"}'); // => "Answer with one JSON value only, … JSON Schema:\n{\"type\":\"number\"}"
+ * schemaBlock('{"type":"number"}').endsWith('Schema:\n{"type":"number"}'); // => true
  * ```
  */
 export function schemaBlock(schemaText: string): string {
@@ -62,9 +47,11 @@ export function schemaBlock(schemaText: string): string {
  * ```
  */
 export function parseSchemaAnswer(text: string, validator: ZodType): string {
+  // Unwrap one code fence, if any
   const trimmed = text.trim();
   const body = FENCE_PATTERN.exec(trimmed)?.[1] ?? trimmed;
 
+  // Parse the JSON
   let value: unknown;
   try {
     value = JSON.parse(body);
@@ -72,6 +59,7 @@ export function parseSchemaAnswer(text: string, validator: ZodType): string {
     throw new TerminalProviderError(`${SCHEMA_MISMATCH}\n  The answer is not valid JSON.`);
   }
 
+  // Check it against the schema, naming the first issue
   const parsed = validator.safeParse(value);
   const issue = parsed.error?.issues[0];
   if (issue !== undefined) {
