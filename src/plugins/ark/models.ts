@@ -10,11 +10,6 @@ import type { ArkRegion, EstimateRequest } from "./types";
 
 /**
  * Price per 1M output tokens: `withVideoInput` when a video ref is sent.
- *
- * @example
- * ```ts
- * const price: ArkPrice = { base: 7, withVideoInput: 4.3 };
- * ```
  */
 export type ArkPrice = { base: number; withVideoInput: number };
 
