@@ -238,8 +238,9 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 
 Bodies: nano `{ prompt, aspect_ratio, resolution, num_images: 1, output_format: "png", enable_web_search: false, sync_mode: false, image_urls? }`;
 seedream `{ prompt, image_size, num_images: 1, max_images: 1, sync_mode: false, image_urls? }`;
-gpt `{ prompt, image_size, quality, num_images: 1, output_format: "jpeg", image_urls? }`. `params.quality` (gpt only) is
-`low`, `medium` or `high`, else `high`. The prompt sent is `<prompt>\n\nAvoid: <negative>` when `negative` is set.
+gpt `{ prompt, image_size, quality, num_images: 1, output_format, image_urls? }`. `params.quality` (gpt only) is
+`auto`, `low`, `medium`, `high`, `xhigh` or `max`, else `high`. `params.output_format` (gpt only) is `jpeg`, `png`
+or `webp`, else `jpeg`. Nano always sends `png`. The prompt sent is `<prompt>\n\nAvoid: <negative>` when `negative` is set.
 Every other param passes through, but the mapped fields win: a param never raises `num_images` or changes the size.
 
 Refs must be resolved `{ path, mimeType, hash }` files at `submit`; `estimate` only counts them.
@@ -341,6 +342,9 @@ other tasks' keys carry the task:
 | `image:seedream-4.5-edit` | 0.04 | per image |
 | `image:gpt-image-2.5` | 0.05 | per image |
 | `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |
+
+GPT Image prices are the `high` quality price. `params.quality` `xhigh` multiplies the row by 1.78, `max` by 4,
+the same ratio at every size in fal's table. Lower qualities keep the `high` price as an upper bound.
 | `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
 | `music:stable-audio-2.5` | 0.20 | per generation |
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |

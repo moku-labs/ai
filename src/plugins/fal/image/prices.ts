@@ -23,6 +23,38 @@ export const imagePrices: Readonly<Record<string, number>> = {
 };
 
 /**
+ * GPT Image price factor by quality, over the bundled `high` price. fal's
+ * table (2026-09-30) is the same ratio at every size: xhigh ≈ 1.78 × high,
+ * max = 4 × high. Lower qualities keep the `high` price, an upper bound.
+ *
+ * @example
+ * ```ts
+ * GPT_QUALITY_FACTORS.max; // => 4
+ * ```
+ */
+export const GPT_QUALITY_FACTORS: Readonly<Record<string, number>> = { xhigh: 1.78, max: 4 };
+
+/** The alias whose price scales by `params.quality`. */
+const GPT_ALIAS = "gpt-image-2.5";
+
+/**
+ * Price factor of `params.quality` for a model: {@link GPT_QUALITY_FACTORS}
+ * for GPT Image, else 1.
+ *
+ * @param alias - The image model alias.
+ * @param quality - `params.quality` when it is a string.
+ * @returns The factor applied to the table price.
+ * @example
+ * ```ts
+ * imageQualityFactor("gpt-image-2.5", "xhigh"); // => 1.78
+ * ```
+ */
+export function imageQualityFactor(alias: string, quality: string | undefined): number {
+  if (alias !== GPT_ALIAS || quality === undefined) return 1;
+  return GPT_QUALITY_FACTORS[quality] ?? 1;
+}
+
+/**
  * USD for one image: `image:<alias>@<resolution>` when a resolution is
  * planned, then `image:<alias>`.
  *

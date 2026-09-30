@@ -30,7 +30,7 @@ import {
   promptWithNegative,
   resolveImageModel
 } from "./models";
-import { imagePriceOf } from "./prices";
+import { imagePriceOf, imageQualityFactor } from "./prices";
 
 /**
  * One poll of an image job. The image contract has no job form, so it is declared here.
@@ -102,6 +102,23 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 /** Status of a request refused before any upload or charge. */
 const BAD_REQUEST = 400;
 
+/** Micro-dollars per dollar: prices are rounded to whole micro-dollars. */
+const MICROS = 1_000_000;
+
+/**
+ * A param value when it is a string, else undefined.
+ *
+ * @param value - The raw param.
+ * @returns The string, or undefined.
+ * @example
+ * ```ts
+ * stringParameter("png"); // => "png"
+ * ```
+ */
+function stringParameter(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
 /**
  * Plans a request without I/O: model (default `config.imageDefaultModel`),
  * ref count against the model's limit (refs may still be `$ref`s), resolution,
@@ -129,7 +146,10 @@ export function planImage(ctx: FalContext, request: ImageRequest): ImagePlan {
   const aspect = request.aspect ?? DEFAULT_IMAGE_ASPECT;
   checkImageAspect(model, aspect, resolution);
 
-  const costUsd = imagePriceOf(resolvePrices(ctx), model.alias, resolution);
+  // GPT Image costs more at xhigh and max; rounded to whole micro-dollars.
+  const tablePrice = imagePriceOf(resolvePrices(ctx), model.alias, resolution);
+  const factor = imageQualityFactor(model.alias, stringParameter(request.params?.quality));
+  const costUsd = Math.round(tablePrice * factor * MICROS) / MICROS;
   return { model, aspect, resolution, refCount, costUsd };
 }
 
@@ -193,7 +213,6 @@ function imageBody(
   request: ImageRequest,
   imageUrls: readonly string[]
 ): Record<string, unknown> {
-  const quality = request.params?.quality;
   return {
     ...passthroughParameters(request.params, CONSUMED_PARAMS),
     ...plan.model.body({
@@ -201,7 +220,8 @@ function imageBody(
       aspect: plan.aspect,
       resolution: plan.resolution,
       imageUrls,
-      quality: typeof quality === "string" ? quality : undefined
+      quality: stringParameter(request.params?.quality),
+      outputFormat: stringParameter(request.params?.output_format)
     })
   };
 }

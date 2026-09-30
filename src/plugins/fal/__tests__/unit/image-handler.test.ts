@@ -77,6 +77,17 @@ describe("estimate", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["high", 0.05],
+    ["low", 0.05],
+    ["xhigh", 0.089],
+    ["max", 0.2]
+  ])("prices gpt-image-2.5 at quality %s as %f", (quality, usd) => {
+    const handler = createImageHandler(createTestCtx());
+
+    expect(handler.estimate({ prompt: "p", params: { quality } })).toEqual({ usd });
+  });
+
   it("prices nano-banana-pro by resolution", () => {
     const handler = createImageHandler(createTestCtx());
     expect(handler.estimate({ prompt: "p", model: "nano-banana-pro" })).toEqual({ usd: 0.15 });
@@ -160,13 +171,28 @@ describe("submit", () => {
       image_size: { width: 1152, height: 2048 },
       quality: "low",
       num_images: 1,
-      output_format: "jpeg"
+      output_format: "png"
     });
     expect(JSON.parse(jobId)).toMatchObject({ requestId: "req-1" });
     expect(ctx.log.info).toHaveBeenCalledWith("fal:image:submitted", {
       model: "gpt-image-2.5",
       endpoint: "openai/gpt-image-2.5/sunburst/text-to-image",
       requestId: "req-1"
+    });
+  });
+
+  it("sends the caller's output_format png and quality xhigh to fal", async () => {
+    const fetchMock = stubFetch(submitResponse("req-9"));
+    const request: ImageRequest = {
+      prompt: "face",
+      params: { output_format: "png", quality: "xhigh" }
+    };
+
+    await createImageHandler(createTestCtx()).submit(request, {});
+
+    expect(jsonBodyOf(callsOf(fetchMock)[0])).toMatchObject({
+      output_format: "png",
+      quality: "xhigh"
     });
   });
 
