@@ -1,0 +1,1835 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "add": {
+      "type": "object",
+      "properties": {
+        "scenes": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^sc\\d{2,3}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "location": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+              },
+              "when": {
+                "type": "object",
+                "properties": {
+                  "day": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 99
+                  },
+                  "time": {
+                    "type": "string",
+                    "enum": ["dawn", "morning", "day", "afternoon", "evening", "night"]
+                  }
+                },
+                "required": ["day", "time"],
+                "additionalProperties": false
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["present", "memory", "dream"]
+              },
+              "pace": {
+                "type": "string",
+                "enum": ["fast", "mid", "slow"]
+              },
+              "light": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "enum": ["left", "right", "top", "back", "front"]
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": ["soft", "hard"]
+                  },
+                  "temp": {
+                    "type": "string",
+                    "enum": ["warm", "cool", "mixed"]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["key", "quality", "temp"],
+                "additionalProperties": false
+              },
+              "cast": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "at": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                    },
+                    "wear": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "axis": {
+                "type": "object",
+                "properties": {
+                  "left": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  },
+                  "right": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  }
+                },
+                "required": ["left", "right"],
+                "additionalProperties": false
+              },
+              "state": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                }
+              },
+              "sound": {
+                "type": "object",
+                "properties": {
+                  "ambience": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              "grade": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": ["neutral", "warm", "cool", "night", "memory", "dream"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "cube": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["cube"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "story": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^b\\d{1,3}$"
+                    },
+                    "who": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                    },
+                    "text": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["id", "text"],
+                  "additionalProperties": false
+                }
+              },
+              "clips": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string",
+                  "pattern": "^c\\d{2,3}$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "pattern": "^[^\\n\\r]*$"
+                    },
+                    "role": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["scene", "bridge", "insert"]
+                    },
+                    "join": {
+                      "type": "string",
+                      "enum": ["cut", "match", "dissolve", "black"]
+                    },
+                    "opens": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string",
+                          "enum": ["new", "prev_end"]
+                        },
+                        "text": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["from"],
+                      "additionalProperties": false
+                    },
+                    "ends": {
+                      "type": "object",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "change": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": ["gaze", "face", "pose", "camera", "props", "light"]
+                          }
+                        }
+                      },
+                      "required": ["text", "change"],
+                      "additionalProperties": false
+                    },
+                    "shots": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+                          },
+                          "of": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^b\\d{1,3}$"
+                            }
+                          },
+                          "size": {
+                            "type": "string",
+                            "enum": ["ECU", "CU", "MCU", "MS", "MLS", "LS", "ELS"]
+                          },
+                          "angle": {
+                            "type": "string",
+                            "enum": ["eye", "high", "low", "top"]
+                          },
+                          "yaw": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 360
+                          },
+                          "lens": {
+                            "type": "string",
+                            "enum": ["wide", "normal", "tele", "macro"]
+                          },
+                          "move": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "static",
+                                  "push_in",
+                                  "pull_out",
+                                  "pan_left",
+                                  "pan_right",
+                                  "tilt_up",
+                                  "tilt_down",
+                                  "truck_left",
+                                  "truck_right",
+                                  "pedestal_up",
+                                  "pedestal_down",
+                                  "arc_left",
+                                  "arc_right",
+                                  "tracking",
+                                  "handheld"
+                                ]
+                              },
+                              "amp": {
+                                "type": "string",
+                                "enum": ["small", "large"]
+                              },
+                              "speed": {
+                                "type": "string",
+                                "enum": ["slow", "fast"]
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "deg": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 360
+                              }
+                            },
+                            "required": ["type"],
+                            "additionalProperties": false
+                          },
+                          "dur": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "maximum": 30
+                          },
+                          "frame": {
+                            "maxItems": 3,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": "string",
+                                  "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                                },
+                                "x": {
+                                  "type": "string",
+                                  "enum": ["L", "C", "R"]
+                                },
+                                "depth": {
+                                  "type": "string",
+                                  "enum": ["fg", "mg", "bg"]
+                                },
+                                "face": {
+                                  "type": "string",
+                                  "enum": ["left", "right", "cam", "away"]
+                                },
+                                "part": {
+                                  "type": "string",
+                                  "enum": ["full", "waist", "chest", "face", "hands", "ots"]
+                                },
+                                "act": {
+                                  "type": "string",
+                                  "enum": ["listen", "react"]
+                                },
+                                "look_at": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": ["cam", "down", "off_left", "off_right"]
+                                    },
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                                    }
+                                  ]
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": ["who", "x", "depth", "face", "part"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "props": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                            }
+                          },
+                          "state": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                            }
+                          },
+                          "beats": {
+                            "minItems": 1,
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "len": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0
+                                },
+                                "who": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gaze",
+                                    "face",
+                                    "breath",
+                                    "small_move",
+                                    "light",
+                                    "gesture",
+                                    "walk",
+                                    "run",
+                                    "turn",
+                                    "sit",
+                                    "stand",
+                                    "hand_object",
+                                    "hand_object_small",
+                                    "contact",
+                                    "liquid_motion",
+                                    "fight",
+                                    "fx"
+                                  ]
+                                },
+                                "target": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": ["cam", "down", "off_left", "off_right"]
+                                    },
+                                    {
+                                      "type": "string",
+                                      "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                                    }
+                                  ]
+                                },
+                                "part": {
+                                  "type": "string",
+                                  "enum": [
+                                    "eyes",
+                                    "mouth",
+                                    "brows",
+                                    "head",
+                                    "shoulders",
+                                    "hands",
+                                    "body"
+                                  ]
+                                },
+                                "emotion": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string",
+                                      "enum": [
+                                        "calm",
+                                        "joy",
+                                        "sad",
+                                        "anger",
+                                        "fear",
+                                        "surprise",
+                                        "shame",
+                                        "love",
+                                        "tension",
+                                        "disgust"
+                                      ]
+                                    },
+                                    "level": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 5
+                                    }
+                                  },
+                                  "required": ["name", "level"],
+                                  "additionalProperties": false
+                                },
+                                "speed": {
+                                  "type": "string",
+                                  "enum": ["slow", "normal", "fast"]
+                                },
+                                "text": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "say": {
+                                  "type": "object",
+                                  "properties": {
+                                    "ja": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kana": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "en": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "to": {
+                                      "type": "string",
+                                      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                                    },
+                                    "emotion": {
+                                      "type": "object",
+                                      "properties": {
+                                        "name": {
+                                          "type": "string",
+                                          "enum": [
+                                            "calm",
+                                            "joy",
+                                            "sad",
+                                            "anger",
+                                            "fear",
+                                            "surprise",
+                                            "shame",
+                                            "love",
+                                            "tension",
+                                            "disgust"
+                                          ]
+                                        },
+                                        "level": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 5
+                                        }
+                                      },
+                                      "required": ["name", "level"],
+                                      "additionalProperties": false
+                                    },
+                                    "volume": {
+                                      "type": "string",
+                                      "enum": ["whisper", "quiet", "normal", "loud", "shout"]
+                                    },
+                                    "how": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "path": {
+                                      "type": "string",
+                                      "enum": ["native", "dub", "tts"]
+                                    }
+                                  },
+                                  "required": ["ja", "en"],
+                                  "additionalProperties": false
+                                },
+                                "sfx": {
+                                  "type": "object",
+                                  "properties": {
+                                    "text": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": ["text"],
+                                  "additionalProperties": false
+                                },
+                                "sets": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                                  }
+                                },
+                                "screen_text": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["len", "who", "kind", "text"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "of",
+                          "size",
+                          "angle",
+                          "lens",
+                          "move",
+                          "dur",
+                          "frame",
+                          "beats"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "frames": {
+                      "type": "object",
+                      "properties": {
+                        "first": {
+                          "type": "object",
+                          "properties": {
+                            "src": {
+                              "type": "string",
+                              "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                            },
+                            "people": {
+                              "type": "boolean"
+                            },
+                            "instr": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "from": {
+                              "type": "object",
+                              "properties": {
+                                "clip": {
+                                  "type": "string",
+                                  "pattern": "^c\\d{2,3}$"
+                                },
+                                "take": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                },
+                                "sec": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": ["clip", "take", "sec"],
+                              "additionalProperties": false
+                            },
+                            "pick": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                            }
+                          },
+                          "required": ["src"],
+                          "additionalProperties": false
+                        },
+                        "last": {
+                          "type": "object",
+                          "properties": {
+                            "src": {
+                              "type": "string",
+                              "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                            },
+                            "people": {
+                              "type": "boolean"
+                            },
+                            "instr": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "from": {
+                              "type": "object",
+                              "properties": {
+                                "clip": {
+                                  "type": "string",
+                                  "pattern": "^c\\d{2,3}$"
+                                },
+                                "take": {
+                                  "type": "string",
+                                  "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                                },
+                                "sec": {
+                                  "type": "number",
+                                  "minimum": 0
+                                }
+                              },
+                              "required": ["clip", "take", "sec"],
+                              "additionalProperties": false
+                            },
+                            "pick": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                            }
+                          },
+                          "required": ["src"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["first", "last"],
+                      "additionalProperties": false
+                    },
+                    "refsOrder": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      }
+                    },
+                    "refsExcluded": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      }
+                    }
+                  },
+                  "required": ["kind", "join", "opens", "shots"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["location", "mode", "cast", "story", "clips"],
+            "additionalProperties": false
+          }
+        },
+        "clips": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^c\\d{2,3}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[^\\n\\r]*$"
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["scene", "bridge", "insert"]
+              },
+              "join": {
+                "type": "string",
+                "enum": ["cut", "match", "dissolve", "black"]
+              },
+              "opens": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "enum": ["new", "prev_end"]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["from"],
+                "additionalProperties": false
+              },
+              "ends": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "change": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["gaze", "face", "pose", "camera", "props", "light"]
+                    }
+                  }
+                },
+                "required": ["text", "change"],
+                "additionalProperties": false
+              },
+              "shots": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+                    },
+                    "of": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^b\\d{1,3}$"
+                      }
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": ["ECU", "CU", "MCU", "MS", "MLS", "LS", "ELS"]
+                    },
+                    "angle": {
+                      "type": "string",
+                      "enum": ["eye", "high", "low", "top"]
+                    },
+                    "yaw": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 360
+                    },
+                    "lens": {
+                      "type": "string",
+                      "enum": ["wide", "normal", "tele", "macro"]
+                    },
+                    "move": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "static",
+                            "push_in",
+                            "pull_out",
+                            "pan_left",
+                            "pan_right",
+                            "tilt_up",
+                            "tilt_down",
+                            "truck_left",
+                            "truck_right",
+                            "pedestal_up",
+                            "pedestal_down",
+                            "arc_left",
+                            "arc_right",
+                            "tracking",
+                            "handheld"
+                          ]
+                        },
+                        "amp": {
+                          "type": "string",
+                          "enum": ["small", "large"]
+                        },
+                        "speed": {
+                          "type": "string",
+                          "enum": ["slow", "fast"]
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deg": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 360
+                        }
+                      },
+                      "required": ["type"],
+                      "additionalProperties": false
+                    },
+                    "dur": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 30
+                    },
+                    "frame": {
+                      "maxItems": 3,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "who": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                          },
+                          "x": {
+                            "type": "string",
+                            "enum": ["L", "C", "R"]
+                          },
+                          "depth": {
+                            "type": "string",
+                            "enum": ["fg", "mg", "bg"]
+                          },
+                          "face": {
+                            "type": "string",
+                            "enum": ["left", "right", "cam", "away"]
+                          },
+                          "part": {
+                            "type": "string",
+                            "enum": ["full", "waist", "chest", "face", "hands", "ots"]
+                          },
+                          "act": {
+                            "type": "string",
+                            "enum": ["listen", "react"]
+                          },
+                          "look_at": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["cam", "down", "off_left", "off_right"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                              }
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["who", "x", "depth", "face", "part"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "props": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      }
+                    },
+                    "state": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      },
+                      "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                      }
+                    },
+                    "beats": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "len": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "who": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "gaze",
+                              "face",
+                              "breath",
+                              "small_move",
+                              "light",
+                              "gesture",
+                              "walk",
+                              "run",
+                              "turn",
+                              "sit",
+                              "stand",
+                              "hand_object",
+                              "hand_object_small",
+                              "contact",
+                              "liquid_motion",
+                              "fight",
+                              "fx"
+                            ]
+                          },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["cam", "down", "off_left", "off_right"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                              }
+                            ]
+                          },
+                          "part": {
+                            "type": "string",
+                            "enum": ["eyes", "mouth", "brows", "head", "shoulders", "hands", "body"]
+                          },
+                          "emotion": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "enum": [
+                                  "calm",
+                                  "joy",
+                                  "sad",
+                                  "anger",
+                                  "fear",
+                                  "surprise",
+                                  "shame",
+                                  "love",
+                                  "tension",
+                                  "disgust"
+                                ]
+                              },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 5
+                              }
+                            },
+                            "required": ["name", "level"],
+                            "additionalProperties": false
+                          },
+                          "speed": {
+                            "type": "string",
+                            "enum": ["slow", "normal", "fast"]
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "say": {
+                            "type": "object",
+                            "properties": {
+                              "ja": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kana": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "en": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "to": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                              },
+                              "emotion": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "enum": [
+                                      "calm",
+                                      "joy",
+                                      "sad",
+                                      "anger",
+                                      "fear",
+                                      "surprise",
+                                      "shame",
+                                      "love",
+                                      "tension",
+                                      "disgust"
+                                    ]
+                                  },
+                                  "level": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 5
+                                  }
+                                },
+                                "required": ["name", "level"],
+                                "additionalProperties": false
+                              },
+                              "volume": {
+                                "type": "string",
+                                "enum": ["whisper", "quiet", "normal", "loud", "shout"]
+                              },
+                              "how": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "path": {
+                                "type": "string",
+                                "enum": ["native", "dub", "tts"]
+                              }
+                            },
+                            "required": ["ja", "en"],
+                            "additionalProperties": false
+                          },
+                          "sfx": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": ["text"],
+                            "additionalProperties": false
+                          },
+                          "sets": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                            }
+                          },
+                          "screen_text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80
+                          }
+                        },
+                        "required": ["len", "who", "kind", "text"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "of",
+                    "size",
+                    "angle",
+                    "lens",
+                    "move",
+                    "dur",
+                    "frame",
+                    "beats"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "frames": {
+                "type": "object",
+                "properties": {
+                  "first": {
+                    "type": "object",
+                    "properties": {
+                      "src": {
+                        "type": "string",
+                        "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                      },
+                      "people": {
+                        "type": "boolean"
+                      },
+                      "instr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "from": {
+                        "type": "object",
+                        "properties": {
+                          "clip": {
+                            "type": "string",
+                            "pattern": "^c\\d{2,3}$"
+                          },
+                          "take": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                          },
+                          "sec": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["clip", "take", "sec"],
+                        "additionalProperties": false
+                      },
+                      "pick": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["src"],
+                    "additionalProperties": false
+                  },
+                  "last": {
+                    "type": "object",
+                    "properties": {
+                      "src": {
+                        "type": "string",
+                        "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                      },
+                      "people": {
+                        "type": "boolean"
+                      },
+                      "instr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "from": {
+                        "type": "object",
+                        "properties": {
+                          "clip": {
+                            "type": "string",
+                            "pattern": "^c\\d{2,3}$"
+                          },
+                          "take": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                          },
+                          "sec": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["clip", "take", "sec"],
+                        "additionalProperties": false
+                      },
+                      "pick": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["src"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["first", "last"],
+                "additionalProperties": false
+              },
+              "refsOrder": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                }
+              },
+              "refsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                }
+              }
+            },
+            "required": ["kind", "join", "opens", "shots"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "change": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "clip": {
+            "type": "string",
+            "pattern": "^c\\d{2,3}$"
+          },
+          "patch": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "pattern": "^[^\\n\\r]*$"
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["scene", "bridge", "insert"]
+              },
+              "join": {
+                "type": "string",
+                "enum": ["cut", "match", "dissolve", "black"]
+              },
+              "opens": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "enum": ["new", "prev_end"]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": ["from"],
+                "additionalProperties": false
+              },
+              "ends": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "change": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": ["gaze", "face", "pose", "camera", "props", "light"]
+                    }
+                  }
+                },
+                "required": ["text", "change"],
+                "additionalProperties": false
+              },
+              "shots": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+                    },
+                    "of": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^b\\d{1,3}$"
+                      }
+                    },
+                    "size": {
+                      "type": "string",
+                      "enum": ["ECU", "CU", "MCU", "MS", "MLS", "LS", "ELS"]
+                    },
+                    "angle": {
+                      "type": "string",
+                      "enum": ["eye", "high", "low", "top"]
+                    },
+                    "yaw": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 360
+                    },
+                    "lens": {
+                      "type": "string",
+                      "enum": ["wide", "normal", "tele", "macro"]
+                    },
+                    "move": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "static",
+                            "push_in",
+                            "pull_out",
+                            "pan_left",
+                            "pan_right",
+                            "tilt_up",
+                            "tilt_down",
+                            "truck_left",
+                            "truck_right",
+                            "pedestal_up",
+                            "pedestal_down",
+                            "arc_left",
+                            "arc_right",
+                            "tracking",
+                            "handheld"
+                          ]
+                        },
+                        "amp": {
+                          "type": "string",
+                          "enum": ["small", "large"]
+                        },
+                        "speed": {
+                          "type": "string",
+                          "enum": ["slow", "fast"]
+                        },
+                        "target": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "deg": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 360
+                        }
+                      },
+                      "required": ["type"],
+                      "additionalProperties": false
+                    },
+                    "dur": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "maximum": 30
+                    },
+                    "frame": {
+                      "maxItems": 3,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "who": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                          },
+                          "x": {
+                            "type": "string",
+                            "enum": ["L", "C", "R"]
+                          },
+                          "depth": {
+                            "type": "string",
+                            "enum": ["fg", "mg", "bg"]
+                          },
+                          "face": {
+                            "type": "string",
+                            "enum": ["left", "right", "cam", "away"]
+                          },
+                          "part": {
+                            "type": "string",
+                            "enum": ["full", "waist", "chest", "face", "hands", "ots"]
+                          },
+                          "act": {
+                            "type": "string",
+                            "enum": ["listen", "react"]
+                          },
+                          "look_at": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["cam", "down", "off_left", "off_right"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                              }
+                            ]
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": ["who", "x", "depth", "face", "part"],
+                        "additionalProperties": false
+                      }
+                    },
+                    "props": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      }
+                    },
+                    "state": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                      },
+                      "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                      }
+                    },
+                    "beats": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "len": {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          },
+                          "who": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "gaze",
+                              "face",
+                              "breath",
+                              "small_move",
+                              "light",
+                              "gesture",
+                              "walk",
+                              "run",
+                              "turn",
+                              "sit",
+                              "stand",
+                              "hand_object",
+                              "hand_object_small",
+                              "contact",
+                              "liquid_motion",
+                              "fight",
+                              "fx"
+                            ]
+                          },
+                          "target": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": ["cam", "down", "off_left", "off_right"]
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                              }
+                            ]
+                          },
+                          "part": {
+                            "type": "string",
+                            "enum": ["eyes", "mouth", "brows", "head", "shoulders", "hands", "body"]
+                          },
+                          "emotion": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "enum": [
+                                  "calm",
+                                  "joy",
+                                  "sad",
+                                  "anger",
+                                  "fear",
+                                  "surprise",
+                                  "shame",
+                                  "love",
+                                  "tension",
+                                  "disgust"
+                                ]
+                              },
+                              "level": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 5
+                              }
+                            },
+                            "required": ["name", "level"],
+                            "additionalProperties": false
+                          },
+                          "speed": {
+                            "type": "string",
+                            "enum": ["slow", "normal", "fast"]
+                          },
+                          "text": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "say": {
+                            "type": "object",
+                            "properties": {
+                              "ja": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "kana": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "en": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "to": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                              },
+                              "emotion": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "enum": [
+                                      "calm",
+                                      "joy",
+                                      "sad",
+                                      "anger",
+                                      "fear",
+                                      "surprise",
+                                      "shame",
+                                      "love",
+                                      "tension",
+                                      "disgust"
+                                    ]
+                                  },
+                                  "level": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 5
+                                  }
+                                },
+                                "required": ["name", "level"],
+                                "additionalProperties": false
+                              },
+                              "volume": {
+                                "type": "string",
+                                "enum": ["whisper", "quiet", "normal", "loud", "shout"]
+                              },
+                              "how": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "path": {
+                                "type": "string",
+                                "enum": ["native", "dub", "tts"]
+                              }
+                            },
+                            "required": ["ja", "en"],
+                            "additionalProperties": false
+                          },
+                          "sfx": {
+                            "type": "object",
+                            "properties": {
+                              "text": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            },
+                            "required": ["text"],
+                            "additionalProperties": false
+                          },
+                          "sets": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                            },
+                            "additionalProperties": {
+                              "type": "string",
+                              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                            }
+                          },
+                          "screen_text": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 80
+                          }
+                        },
+                        "required": ["len", "who", "kind", "text"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "of",
+                    "size",
+                    "angle",
+                    "lens",
+                    "move",
+                    "dur",
+                    "frame",
+                    "beats"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "frames": {
+                "type": "object",
+                "properties": {
+                  "first": {
+                    "type": "object",
+                    "properties": {
+                      "src": {
+                        "type": "string",
+                        "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                      },
+                      "people": {
+                        "type": "boolean"
+                      },
+                      "instr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "from": {
+                        "type": "object",
+                        "properties": {
+                          "clip": {
+                            "type": "string",
+                            "pattern": "^c\\d{2,3}$"
+                          },
+                          "take": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                          },
+                          "sec": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["clip", "take", "sec"],
+                        "additionalProperties": false
+                      },
+                      "pick": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["src"],
+                    "additionalProperties": false
+                  },
+                  "last": {
+                    "type": "object",
+                    "properties": {
+                      "src": {
+                        "type": "string",
+                        "enum": ["gen", "take", "extend", "import", "edit", "none"]
+                      },
+                      "people": {
+                        "type": "boolean"
+                      },
+                      "instr": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "from": {
+                        "type": "object",
+                        "properties": {
+                          "clip": {
+                            "type": "string",
+                            "pattern": "^c\\d{2,3}$"
+                          },
+                          "take": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                          },
+                          "sec": {
+                            "type": "number",
+                            "minimum": 0
+                          }
+                        },
+                        "required": ["clip", "take", "sec"],
+                        "additionalProperties": false
+                      },
+                      "pick": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": ["src"],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["first", "last"],
+                "additionalProperties": false
+              },
+              "refsOrder": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                }
+              },
+              "refsExcluded": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["clip", "patch"],
+        "additionalProperties": false
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "clip": {
+            "type": "string",
+            "pattern": "^c\\d{2,3}$"
+          },
+          "q": {
+            "type": "string",
+            "minLength": 1
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["match", "missing"]
+          },
+          "missing": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["character", "location", "prop"]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "matches": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$"
+                }
+              }
+            },
+            "required": ["kind", "name"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["clip", "q", "options"],
+        "additionalProperties": false
+      }
+    },
+    "structure": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["role", "text"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["add", "change", "questions"],
+  "additionalProperties": false
+}

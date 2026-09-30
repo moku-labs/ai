@@ -7,6 +7,7 @@ import { TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt/handler";
 import {
   CODEX_401_STDERR,
+  CODEX_SCHEMA_ERROR_STDERR,
   createFakeLog,
   createTestCtx,
   printStderr,
@@ -143,21 +144,53 @@ describe("createPromptGenHandler", () => {
       });
     });
 
-    it("writes schema.json, passes --output-schema, and returns the JSON answer", async () => {
-      const copySchema = `cp "$dir/schema.json" "${root}/schema-copy.json"`;
-      const bin = writeFakeCodex(root, `${copySchema}\n${writeAnswer('{"ok":true}')}`);
+    it("puts the schema in the prompt, not --output-schema, and returns the checked JSON", async () => {
+      const bin = writeFakeCodex(root, writeAnswer('{ "ok": true }'));
       const ctx = createTestCtx({ config: { bin, workDir } });
       const schema = { type: "object", properties: { ok: { type: "boolean" } } };
 
       const result = await createPromptGenHandler(ctx).execute(
-        { prompt: "p", params: { responseSchema: schema } },
+        { prompt: "p", system: "s", params: { responseSchema: schema } },
         {}
       );
 
       expect(result.text).toBe('{"ok":true}');
-      expect(JSON.parse(readFileSync(path.join(root, "schema-copy.json"), "utf8"))).toEqual(schema);
       const args = recordedArgs();
-      expect(args[args.indexOf("--output-schema") + 1]).toMatch(/schema\.json$/);
+      expect(args).not.toContain("--output-schema");
+      expect(readFileSync(path.join(root, "ls.txt"), "utf8")).toBe("");
+      const prompt = readFileSync(path.join(root, "args.txt"), "utf8").split("--\n").at(-1);
+      expect(prompt).toBe(
+        `s\n\np\n\nAnswer with one JSON value only, no prose, no code fence. It must match this JSON Schema:\n${JSON.stringify(schema)}\n`
+      );
+    });
+
+    it("strips one json code fence around a schema answer", async () => {
+      const bin = writeFakeCodex(root, writeAnswer('```json\n{"ok":true}\n```'));
+      const ctx = createTestCtx({ config: { bin, workDir } });
+
+      const result = await createPromptGenHandler(ctx).execute(
+        { prompt: "p", params: { responseSchema: { type: "object" } } },
+        {}
+      );
+
+      expect(result.text).toBe('{"ok":true}');
+    });
+
+    it("answers with the studio storyboard.line schema OpenAI strict mode rejects", async () => {
+      const answer = '{"add":{},"change":[],"questions":[]}';
+      const bin = writeFakeCodex(root, writeAnswer(answer));
+      const ctx = createTestCtx({ config: { bin, workDir } });
+      const file = path.join(import.meta.dirname, "data", "line-schema.json");
+      const schema: unknown = JSON.parse(readFileSync(file, "utf8"));
+
+      const result = await createPromptGenHandler(ctx).execute(
+        { prompt: "Answer with an empty add object.", params: { responseSchema: schema } },
+        {}
+      );
+
+      expect(result.text).toBe(answer);
+      expect(recordedArgs()).not.toContain("--output-schema");
+      expect(recordedArgs().at(-1)).toContain('"propertyNames"');
     });
 
     it("copies params.images into the call dir and attaches each with --image", async () => {
@@ -266,8 +299,37 @@ describe("createPromptGenHandler", () => {
 
       expect(error).toBeInstanceOf(TerminalProviderError);
       expect((error as Error).message).toBe(
-        "[ai] Codex answer is not valid JSON.\n  Check params.responseSchema; codex needs a strict schema."
+        "[ai] Codex answer does not match params.responseSchema.\n  The answer is not valid JSON."
       );
+    });
+
+    it("throws a terminal error, not unavailable, when a schema answer is off the schema", async () => {
+      const bin = writeFakeCodex(root, writeAnswer('{"ok":"yes"}'));
+      const ctx = createTestCtx({ config: { bin, workDir } });
+      const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+
+      const error = await createPromptGenHandler(ctx)
+        .execute({ prompt: "p", params: { responseSchema: schema } }, {})
+        .catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(TerminalProviderError);
+      expect(error).not.toBeInstanceOf(PromptGenUnavailableError);
+      expect((error as Error).message).toMatch(
+        /^\[ai] Codex answer does not match params\.responseSchema\.\n {2}ok: /
+      );
+      expect(readdirSync(workDir)).toEqual([]);
+    });
+
+    it("throws a terminal error with the API message for an invalid_json_schema 400", async () => {
+      const bin = writeFakeCodex(root, `${printStderr(CODEX_SCHEMA_ERROR_STDERR)}\nexit 1`);
+      const ctx = createTestCtx({ config: { bin, workDir } });
+
+      const error = await createPromptGenHandler(ctx)
+        .execute({ prompt: "p" }, {})
+        .catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(TerminalProviderError);
+      expect((error as Error).message).toContain(": Invalid schema for response_format");
     });
 
     it("returns plain text as is when no schema is set", async () => {

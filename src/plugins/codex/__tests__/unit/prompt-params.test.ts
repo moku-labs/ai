@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   readImages,
@@ -44,10 +46,30 @@ describe("readResponseSchema", () => {
     expect(readResponseSchema(undefined)).toBeUndefined();
   });
 
-  it("returns the schema as JSON text", () => {
-    const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+  it("returns the schema as compact JSON text and a validator", () => {
+    const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
 
-    expect(readResponseSchema(schema)).toBe(JSON.stringify(schema));
+    const read = readResponseSchema(schema);
+
+    expect(read?.text).toBe(JSON.stringify(schema));
+    expect(read?.validator.safeParse({ ok: true }).success).toBe(true);
+    expect(read?.validator.safeParse({ ok: "yes" }).success).toBe(false);
+  });
+
+  it("reads the studio storyboard.line schema OpenAI strict mode rejects", () => {
+    const file = path.join(import.meta.dirname, "data", "line-schema.json");
+    const schema: unknown = JSON.parse(readFileSync(file, "utf8"));
+
+    const read = readResponseSchema(schema);
+
+    expect(read?.validator.safeParse({ add: {}, change: [], questions: [] }).success).toBe(true);
+    expect(
+      read?.validator.safeParse({ add: { scenes: { bad: {} } }, change: [], questions: [] }).success
+    ).toBe(false);
+  });
+
+  it("throws the pinned error when zod cannot read the schema", () => {
+    expect(() => readResponseSchema({ type: "no-such-type" })).toThrow(SCHEMA_ERROR);
   });
 
   it.each([
@@ -92,7 +114,7 @@ describe("readPromptParameters", () => {
 
     expect(params).toEqual({
       images: [],
-      schemaText: "{}",
+      schema: { text: "{}", validator: expect.anything() },
       reasoningEffort: "high",
       ignored: ["temperature"]
     });
@@ -101,7 +123,7 @@ describe("readPromptParameters", () => {
   it("gives defaults when the request has no params", () => {
     expect(readPromptParameters({ prompt: "p" }, "low")).toEqual({
       images: [],
-      schemaText: undefined,
+      schema: undefined,
       reasoningEffort: "low",
       ignored: []
     });

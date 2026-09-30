@@ -77,10 +77,13 @@ Each call owns one temp dir under `workDir`, removed in `finally`.
 ```
 codex exec [-m <model>] -c model_reasoning_effort="<effort>" --sandbox read-only
   --skip-git-repo-check -C <dir> -o <dir>/last-message.txt
-  [--output-schema <dir>/schema.json] [--image <abs path>]... -- <prompt>
+  [--image <abs path>]... -- <prompt>
 ```
 
 - codex has no system flag. With `system` set, the prompt is `system`, a blank line, then `prompt`.
+- With `params.responseSchema` set, the answer rule and the schema follow after another blank line.
+- Never `--output-schema`. Codex sends it as an OpenAI strict `json_schema`, and strict mode rejects what
+  `z.toJSONSchema` makes: `propertyNames`, record maps, optional keys, `$schema`.
 - The answer is `last-message.txt`, trimmed.
 - `estimate()` validates the params and returns `{ usd: 0 }`.
 - `meta` is `{ provider: "codex", model?, modelRequested?, reasoningEffort, ignored? }`.
@@ -95,7 +98,7 @@ await app.promptGen.generate({ prompt: "Say ok", system: "Be terse." }, { provid
 | Param | Shape | Effect |
 | --- | --- | --- |
 | `params.images` | `ImageFile` or `ImageFile[]` | Copied into the call dir as `ref-<n>.<ext>`, one `--image <abs path>` each. |
-| `params.responseSchema` | plain JSON-schema object | Written to `<dir>/schema.json`, passed as `--output-schema`. The answer must `JSON.parse`. |
+| `params.responseSchema` | plain JSON-schema object | Appended to the prompt as compact JSON. The answer is parsed (one ```` ```json ```` fence stripped) and checked with `z.fromJSONSchema(schema)`. `text` is the validated JSON, re-stringified. |
 | `params.reasoning` | `"off"`, `"low"`, `"medium"`, `"high"` | `-c model_reasoning_effort="<x>"`. `off` becomes `low`. Absent: `reasoningEffort`. |
 | `temperature` | number | Ignored. `meta.ignored: ["temperature"]`. |
 | any other param | any | Ignored. |
@@ -123,15 +126,15 @@ These throw `PromptGenUnavailableError`, so `promptGen` moves on to its next `fa
 | Case | `reason` | Signal | Message |
 | --- | --- | --- | --- |
 | Binary missing | `missing` | spawn `ENOENT` | `[ai] Codex CLI not found: <bin>.` |
-| Not logged in | `auth` | stderr matches `/401 Unauthorized\|not logged in\|codex login/i` | `[ai] Codex CLI is not logged in.` / `Run codex login, or use another provider.` |
-| Plan or rate limit | `limit` | stderr matches `/usage limit\|rate limit\|429\|too many requests/i` | `[ai] Codex CLI hit its plan or rate limit.` / `Wait for the reset, or use another provider.` |
+| Not logged in | `auth` | API error status 401 or 403, or stderr matches `/401 Unauthorized\|not logged in\|codex login/i` | `[ai] Codex CLI is not logged in.` / `Run codex login, or use another provider.` |
+| Plan or rate limit | `limit` | API error status 429, or stderr matches `/usage limit\|rate limit\|429\|too many requests/i` | `[ai] Codex CLI hit its plan or rate limit.` / `Wait for the reset, or use another provider.` |
 
 Any other failure is not a reason to switch:
 
 | Case | Error |
 | --- | --- |
 | Exit 0, answer missing or blank | `TerminalProviderError` `[ai] Codex wrote no answer.` |
-| Schema set, answer not JSON | `TerminalProviderError` `[ai] Codex answer is not valid JSON.` |
+| Schema set, answer off-schema or not JSON | `TerminalProviderError` `[ai] Codex answer does not match params.responseSchema.` |
 | Non-zero exit, timeout, abort | as in [Errors](#errors) |
 
 ### Lane
@@ -151,10 +154,14 @@ createApp({ pluginConfigs: { limits: { lanes: { "prompt-gen/codex": { concurrenc
 | `bin` not found | `PromptGenUnavailableError` `[ai] Codex CLI not found: <bin>.`, `reason: "missing"` | terminal |
 | Not logged in, plan or rate limit | `PromptGenUnavailableError`, `reason: "auth"` or `"limit"` | terminal |
 | `bin` not executable | `TerminalProviderError` `[ai] Codex CLI could not start: <code>.` | terminal |
-| Non-zero exit | `TerminalProviderError` with the last stderr line | terminal |
+| Non-zero exit | `TerminalProviderError` `[ai] Codex exited with code <n>: <detail>.` | terminal |
 | Exit 0, no image | `TerminalProviderError` `[ai] Codex finished without writing an image.` | terminal |
 | Timeout | `RetryableProviderError` with `kind: "timeout"` | retryable |
 | Caller abort | `signal.reason`, rethrown unchanged | pause |
+
+The `<detail>` of a non-zero exit is `error.message` of the API error codex prints as `ERROR: {…}` on stderr,
+or as JSON on stdout. Without one it is the last stderr line. An API error decides by itself: status 401 or 403
+is `auth`, 429 is `limit`, and any other status, a 400 `invalid_json_schema` included, is terminal.
 
 Terminal and unavailable errors carry neither `kind` nor `status`, so the runner classifies them as `"unknown"`.
 

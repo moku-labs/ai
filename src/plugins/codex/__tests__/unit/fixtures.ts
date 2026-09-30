@@ -181,6 +181,38 @@ export const CODEX_401_STDERR = [
 ].join("\n");
 
 /**
+ * Captured codex-cli 0.155.0 stderr for `--output-schema` with the studio
+ * `storyboard.line` schema (2026-09-30): the session header, the echoed
+ * prompt, then the 400 `invalid_json_schema` error, printed twice.
+ */
+export const CODEX_SCHEMA_ERROR_STDERR = (() => {
+  const apiError = [
+    "ERROR: {",
+    '  "type": "error",',
+    '  "error": {',
+    '    "type": "invalid_request_error",',
+    '    "code": "invalid_json_schema",',
+    "    \"message\": \"Invalid schema for response_format 'codex_output_schema': In context=('properties', 'add', 'properties', 'scenes'), 'propertyNames' is not permitted.\",",
+    '    "param": "text.format.schema"',
+    "  },",
+    '  "status": 400',
+    "}"
+  ];
+  return [
+    "Reading additional input from stdin...",
+    "OpenAI Codex v0.155.0",
+    "--------",
+    "model: gpt-6-astra",
+    "sandbox: read-only",
+    "--------",
+    "user",
+    "Answer with an empty add object.",
+    ...apiError,
+    ...apiError
+  ].join("\n");
+})();
+
+/**
  * Shell snippet that prints `text` to stderr through a quoted heredoc.
  *
  * @param text - The stderr text, possibly multi-line.
