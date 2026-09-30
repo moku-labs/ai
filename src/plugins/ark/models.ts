@@ -1,11 +1,17 @@
 /**
  * @file ark model catalog — data module. One row per Seedance model id:
- * region, clip length limits, resolutions, reference limits, seed and audio
- * support, and the price per 1M output tokens in the region's currency.
- * Adding a model is one object in {@link arkModels}. Ids and prices come from
- * summaries of the official rate cards: verify them in the console.
+ * region, clip length limits, resolutions, reference limits, seed, audio and
+ * draft support, whether the ratio follows a first frame, and the price per
+ * 1M output tokens in the region's currency. Adding a model is one object in
+ * {@link arkModels}. intl prices are the official list prices; cn rows come
+ * from summaries of the rate card: verify them in the console.
  */
 import type { ArkRegion, EstimateRequest } from "./types";
+
+/**
+ * Price per 1M output tokens: `withVideoInput` when a video ref is sent.
+ */
+export type ArkPrice = { base: number; withVideoInput: number };
 
 /**
  * One Seedance model on Ark.
@@ -13,9 +19,10 @@ import type { ArkRegion, EstimateRequest } from "./types";
  * @example
  * ```ts
  * const row: ArkVideoModel = {
- *   id: "dreamina-seedance-2-0-260128", region: "intl", minSeconds: 4, maxSeconds: 15,
- *   resolutions: ["480p", "720p", "1080p"], maxRefImages: 9, maxRefVideos: 3, maxRefAudios: 3,
- *   supportsSeed: false, supportsAudio: true, price: { base: 7, withVideoInput: 4.3 }
+ *   id: "dreamina-seedance-2-0-mini-260615", region: "intl", minSeconds: 4, maxSeconds: 15,
+ *   resolutions: ["480p", "720p"], maxRefImages: 9, maxRefVideos: 3, maxRefAudios: 3,
+ *   supportsSeed: false, supportsAudio: true, ratioFollowsImage: false, supportsDraft: false,
+ *   price: { base: 3.5, withVideoInput: 2.1 }, price1080: undefined
  * };
  * ```
  */
@@ -40,8 +47,14 @@ export type ArkVideoModel = {
   supportsSeed: boolean;
   /** Whether the model can generate audio (`generate_audio`). */
   supportsAudio: boolean;
+  /** With a first or last frame, `ratio` is not sent: the output ratio follows the image. */
+  ratioFollowsImage: boolean;
+  /** Whether the model takes `params.draft: true` and `fromDraft` (draft → final). */
+  supportsDraft: boolean;
   /** Price per 1M output tokens in the region currency; `withVideoInput` when a video ref is sent. */
-  price: { base: number; withVideoInput: number };
+  price: ArkPrice;
+  /** Price at 1080p when it differs from `price`; undefined when it does not. */
+  price1080: ArkPrice | undefined;
 };
 
 /** Clip length when the request names none, seconds. */
@@ -59,7 +72,7 @@ export const DEFAULT_RESOLUTION = "720p";
  * ```
  */
 export const arkModels: readonly ArkVideoModel[] = [
-  // source: https://docs.byteplus.com/en/docs/ModelArk (Seedance 2.0 rate card, via a third-party summary; verify in console)
+  // source: https://docs.byteplus.com/en/docs/modelark/model-pricing (checked 2026-09-30)
   {
     id: "dreamina-seedance-2-0-260128",
     region: "intl",
@@ -71,7 +84,44 @@ export const arkModels: readonly ArkVideoModel[] = [
     maxRefAudios: 3,
     supportsSeed: false,
     supportsAudio: true,
-    price: { base: 7, withVideoInput: 4.3 }
+    ratioFollowsImage: false,
+    supportsDraft: false,
+    price: { base: 7, withVideoInput: 4.3 },
+    price1080: { base: 7.7, withVideoInput: 4.7 }
+  },
+  // source: https://docs.byteplus.com/en/docs/modelark/model-pricing (checked 2026-09-30)
+  {
+    id: "dreamina-seedance-2-0-fast-260128",
+    region: "intl",
+    minSeconds: 4,
+    maxSeconds: 15,
+    resolutions: ["480p", "720p"],
+    maxRefImages: 9,
+    maxRefVideos: 3,
+    maxRefAudios: 3,
+    supportsSeed: false,
+    supportsAudio: true,
+    ratioFollowsImage: false,
+    supportsDraft: false,
+    price: { base: 5.6, withVideoInput: 3.3 },
+    price1080: undefined
+  },
+  // source: https://docs.byteplus.com/en/docs/modelark/model-pricing (checked 2026-09-30)
+  {
+    id: "dreamina-seedance-2-0-mini-260615",
+    region: "intl",
+    minSeconds: 4,
+    maxSeconds: 15,
+    resolutions: ["480p", "720p"],
+    maxRefImages: 9,
+    maxRefVideos: 3,
+    maxRefAudios: 3,
+    supportsSeed: false,
+    supportsAudio: true,
+    ratioFollowsImage: false,
+    supportsDraft: false,
+    price: { base: 3.5, withVideoInput: 2.1 },
+    price1080: undefined
   },
   // source: https://www.volcengine.com/docs/82379 (Seedance 2.0 rate card, via a third-party summary; verify in console)
   {
@@ -85,35 +135,46 @@ export const arkModels: readonly ArkVideoModel[] = [
     maxRefAudios: 3,
     supportsSeed: false,
     supportsAudio: true,
-    price: { base: 46, withVideoInput: 28 }
+    ratioFollowsImage: false,
+    supportsDraft: false,
+    price: { base: 46, withVideoInput: 28 },
+    price1080: undefined
   },
-  // source: https://raw.githubusercontent.com/byteplus-sa/ark-mcp/main/docs/models.md + https://cellcog.ai/blog/seedance-2-5-pricing/ (verify in console)
+  // source: https://docs.byteplus.com/en/docs/modelark/model-pricing (checked 2026-09-30)
+  // 1080p, seed, draft and the ratio that follows the first frame: live BytePlus intl run, 2026-09-30
   {
     id: "dreamina-seedance-2-5-260628",
     region: "intl",
     minSeconds: 4,
     maxSeconds: 30,
-    resolutions: ["480p", "720p"],
+    resolutions: ["480p", "720p", "1080p"],
     maxRefImages: 30,
     maxRefVideos: 10,
     maxRefAudios: 10,
-    supportsSeed: false,
+    supportsSeed: true,
     supportsAudio: true,
-    price: { base: 10.7, withVideoInput: 6.4 }
+    ratioFollowsImage: true,
+    supportsDraft: true,
+    price: { base: 10.7, withVideoInput: 6.4 },
+    price1080: { base: 11.7, withVideoInput: 7 }
   },
   // source: https://www.aitop100.cn/infomation/details/34378.html + reseller docs (id unverified; verify in console)
+  // 1080p, seed, draft and the first-frame ratio mirror the intl 2.5 row; the cn 1080p price is unverified
   {
     id: "doubao-seedance-2-5-260628",
     region: "cn",
     minSeconds: 4,
     maxSeconds: 30,
-    resolutions: ["480p", "720p"],
+    resolutions: ["480p", "720p", "1080p"],
     maxRefImages: 30,
     maxRefVideos: 10,
     maxRefAudios: 10,
-    supportsSeed: false,
+    supportsSeed: true,
     supportsAudio: true,
-    price: { base: 70, withVideoInput: 42 }
+    ratioFollowsImage: true,
+    supportsDraft: true,
+    price: { base: 70, withVideoInput: 42 },
+    price1080: undefined
   }
 ];
 

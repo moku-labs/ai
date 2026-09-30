@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArkFetchOptions, ArkInit } from "../../client";
 import {
   arkFetch,
+  bearerHeaders,
+  describeArkError,
   flaggedError,
   openApiCall,
   readJson,
@@ -23,10 +25,14 @@ import {
   ERROR_SENSITIVE_TEXT,
   GET_ASSET_REQUEST,
   GROUP_ID,
+  INTL_IMAGES_URL,
   INTL_TASKS_URL,
   intlActionUrl,
   jsonBodyOf,
   jsonResponse,
+  LIVE_ERROR_FACE,
+  LIVE_ERROR_RATIO,
+  LIVE_ERROR_SEEDREAM_SIZE,
   OPENAPI_ERROR_ACCESS_DENIED,
   OPENAPI_ERROR_INVALID,
   OPENAPI_ERROR_QUOTA,
@@ -44,7 +50,7 @@ const INIT: ArkInit = {
 };
 const OPTIONS: ArkFetchOptions = { timeoutMs: 5000, label: LABEL };
 const FACE_MESSAGE =
-  "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Make it an asset item and $ref it.";
+  "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.";
 const ENTITLEMENT_HINT =
   "\n  Check the Seedance Advanced Creation Rights and the AIGC authorization letter in the Ark console.";
 
@@ -383,7 +389,76 @@ describe("openApiCall", () => {
   });
 });
 
+describe("live error bodies", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("flags the live face refusal of a local image with the Seedream hint", async () => {
+    stubFetch(jsonResponse(400, LIVE_ERROR_FACE));
+
+    const error = await rejectionOf({ ...OPTIONS, localImage: true });
+
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect((error as Error).message).toBe(FACE_MESSAGE);
+  });
+
+  it("keeps the live 2.5 ratio refusal terminal, with ark's code and message", async () => {
+    stubFetch(jsonResponse(400, LIVE_ERROR_RATIO));
+
+    const error = await rejectionOf();
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ status: 400, code: "InvalidParameter.TaskTypeConstraint" });
+    expect((error as Error).message).toContain(
+      "failed (400 InvalidParameter.TaskTypeConstraint): The parameter ratio specified"
+    );
+  });
+
+  it("reads the unwrapped Seedream error: code and message at the top level", async () => {
+    stubFetch(jsonResponse(400, LIVE_ERROR_SEEDREAM_SIZE));
+
+    let error: unknown;
+    try {
+      await arkFetch(INTL_IMAGES_URL, INIT, { timeoutMs: 5000, label: "/images/generations" });
+    } catch (error_) {
+      error = error_;
+    }
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ status: 400, code: "InvalidParameter" });
+    expect((error as Error).message).toBe(
+      "[ai] ark /images/generations failed (400 InvalidParameter): The parameter `size` specified in the request is not valid: image size must be at least 3686400 pixels. Request id: 021790758342364337dd80e214c02e2e5c4590cd6b9313c19891c."
+    );
+  });
+});
+
 describe("helpers", () => {
+  it("describeArkError prefers the wrapped error, then the top level", () => {
+    expect(describeArkError({ error: { code: "A", message: "a." }, code: "B" })).toEqual({
+      code: "A",
+      message: "a",
+      envelope: false
+    });
+    expect(describeArkError({ code: "B", message: "b" })).toEqual({
+      code: "B",
+      message: "b",
+      envelope: false
+    });
+    expect(describeArkError(undefined)).toEqual({
+      code: undefined,
+      message: undefined,
+      envelope: false
+    });
+  });
+
+  it("bearerHeaders sends the key as Bearer with a JSON body", () => {
+    expect(bearerHeaders("k")).toEqual({
+      Authorization: "Bearer k",
+      "Content-Type": "application/json"
+    });
+  });
+
   it("flaggedError picks the message by the local-image rule", () => {
     const code = "InputImageSensitiveContentDetected.PrivacyInformation";
     expect(flaggedError(code, true).message).toBe(FACE_MESSAGE);

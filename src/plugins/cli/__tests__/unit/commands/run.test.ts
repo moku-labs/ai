@@ -106,6 +106,49 @@ describe("runRunCommand — progress rendering", () => {
   });
 });
 
+/** Runs `moku run` over a stream holding one `item:failed` event; returns the stderr lines. */
+async function renderFailedItem(
+  failure: Pick<Extract<RunEvent, { type: "item:failed" }>, "label" | "errorClass" | "message">
+): Promise<string[]> {
+  const event: RunEvent = { type: "item:failed", runId: "run-1", itemId: "item-7", ...failure };
+  const { context, errorLines } = createFakeCommandContext({
+    runner: {
+      run: () => Promise.resolve({ runId: "run-1", status: "failed", totals: ZERO_TOTALS }),
+      events: async function* (): AsyncIterable<RunEvent> {
+        yield event;
+      }
+    }
+  });
+
+  await runRunCommand(context, {}, []);
+  return errorLines;
+}
+
+describe("runRunCommand — item:failed rendering", () => {
+  it("prints the label and the first line of the message", async () => {
+    const errorLines = await renderFailedItem({
+      label: "hero-shot",
+      errorClass: "http-4xx",
+      message: "[ai] fal rejected the request.\n  Check the prompt."
+    });
+
+    expect(errorLines).toEqual(["  ✗ hero-shot  [ai] fal rejected the request."]);
+  });
+
+  it("prints the errorClass when there is no message", async () => {
+    const errorLines = await renderFailedItem({ label: "hero-shot", errorClass: "timeout" });
+
+    expect(errorLines).toEqual(["  ✗ hero-shot  timeout"]);
+  });
+
+  it("falls back to the itemId when the label is null", async () => {
+    // eslint-disable-next-line unicorn/no-null -- RunEvent label is typed `string | null` (rows written before labels)
+    const errorLines = await renderFailedItem({ label: null, errorClass: "network" });
+
+    expect(errorLines).toEqual(["  ✗ item-7  network"]);
+  });
+});
+
 describe("runRunCommand — dry-run rendering", () => {
   it("renders the estimate summary even though the event stream stays empty", async () => {
     // The fixture's default runner.events() is an empty generator — exactly

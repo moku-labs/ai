@@ -27,7 +27,7 @@ export type Config = {
   defaults: LaneConfig;
   /**
    * Per-lane overrides, keyed by exact lane string or "{task}/{provider}" prefix.
-   * An override replaces the whole map: repeat "video/apimodels" when you set it.
+   * An override replaces the whole map: repeat "video/apimodels" and "video/ark" when you set it.
    */
   lanes: Record<string, Partial<LaneConfig>>;
 };

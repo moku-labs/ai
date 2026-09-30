@@ -8,7 +8,18 @@ describe("createArkState", () => {
     expect(state.account).toBeNull();
     expect(state.activeAssets).toEqual(new Set());
     expect(state.negativeWarned).toBe(false);
-    expect(Object.keys(state)).toEqual(["group", "account", "activeAssets", "negativeWarned"]);
+    expect(state.imageNegativeWarned).toBe(false);
+    expect(state.ratioWarned).toBe(false);
+    expect(state.journalSkipLogged).toBe(false);
+    expect(Object.keys(state)).toEqual([
+      "group",
+      "account",
+      "activeAssets",
+      "negativeWarned",
+      "imageNegativeWarned",
+      "ratioWarned",
+      "journalSkipLogged"
+    ]);
   });
 
   it("gives each call its own asset cache", () => {

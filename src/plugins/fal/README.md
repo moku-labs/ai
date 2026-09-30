@@ -106,6 +106,8 @@ never silently cut down:
 
 **Asset refs.** fal cannot use registered assets. An `image`, `endImage` or ref that `$ref`s an `asset` item fails the item with a terminal HTTP 400 error before any upload. Use provider `ark` for those items.
 
+**Draft render.** fal refuses `input.fromDraft` in `estimate` and `submit`, before any upload, with a terminal error: `[ai] fal takes no draft render (input.fromDraft).` Use provider `ark` with a Seedance 2.5 draft.
+
 **End frame.** `input.endImage` is the last frame: the clip ends on this image. Like `image`, it is a `$ref` or
 `$file`. It goes out as `end_image_url` on the seven models with `end_image_url` in the End frame column; a body
 gets the field only when the request has an end frame, so a request without one sends the same body as before.

@@ -63,11 +63,37 @@ export type RunEvent =
   | { type: "item:dispatching"; runId: string; itemId: string }
   | { type: "item:done"; runId: string; itemId: string; costUsd: number; contentHash: string }
   | { type: "item:retry"; runId: string; itemId: string; errorClass: ErrorClass; attempt: number }
-  | { type: "item:failed"; runId: string; itemId: string; errorClass: ErrorClass }
+  | {
+      type: "item:failed";
+      runId: string;
+      itemId: string;
+      /** The item's build-file id (`ItemRow.label`); null only on rows written before labels existed. */
+      label: string | null;
+      errorClass: ErrorClass;
+      /** First two lines (max 300 chars) of our own `[ai]` error; absent for any other error. */
+      message?: string;
+    }
   | { type: "item:flagged"; runId: string; itemId: string }
   | { type: "overflow"; runId: string; dropped: number }
   | { type: "progress"; runId: string; totals: RunTotals }
   | { type: "terminal"; runId: string; status: RunResultStatus; totals: RunTotals };
+
+/**
+ * Why an item failed: its error class and, only for our own `[ai]` errors,
+ * the error's first two lines (max 300 chars). Carried on `item:failed` and
+ * the `runner:item:failed` log, never written to the journal.
+ */
+export type ItemFailure = { errorClass: ErrorClass; message?: string };
+
+/**
+ * The MIME type the planner gives a `$file`: an image signature in its first
+ * bytes wins over its extension. `mismatch` is set when the two disagree.
+ */
+export type FileMimeType = {
+  mimeType: string;
+  /** The file's lowercase extension and the MIME type its bytes show. */
+  mismatch?: { extension: string; detected: string };
+};
 
 /** `Omit` applied to each member of a union, so the union stays discriminated. */
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -258,14 +284,15 @@ export type ActiveRun = {
 /**
  * How the item holding an artifact claim ended, copied by the items waiting
  * on it: `done` (reuse its artifact), `flagged` / `failed` (record the same
- * verdict, no submit), or `open` (it stopped without a final provider
+ * verdict, no submit; `failed` carries the leader's `[ai]` message when it
+ * had one), or `open` (it stopped without a final provider
  * verdict: a drain, a budget stop, a refused gate, or retryable attempts
  * exhausted; its job, if any, stays adoptable).
  */
 export type ClaimVerdict =
   | { kind: "done" }
   | { kind: "flagged" }
-  | { kind: "failed"; errorClass: ErrorClass }
+  | { kind: "failed"; errorClass: ErrorClass; message?: string }
   | { kind: "open" };
 
 /** The one item allowed to reach the provider for an artifact key right now. */

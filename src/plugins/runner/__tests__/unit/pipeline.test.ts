@@ -14,6 +14,7 @@ import type {
   ExecutableHandler,
   JobPoll,
   ProviderErrorHint,
+  RunnerContext,
   UnstampedRunEvent
 } from "../../types";
 import {
@@ -843,6 +844,7 @@ describe("executeItem", () => {
  *
  * @param options - Handler error hint, attempt ceiling and gate override.
  * @param options.hint - Error fields the handler throws with; omit for success.
+ * @param options.message - The thrown error's message. Default "provider said no".
  * @param options.maxAttempts - Attempt ceiling. Default 3.
  * @param options.gate - Gate result override.
  * @returns The verdict and whether the claim map is empty afterwards.
@@ -852,12 +854,13 @@ describe("executeItem", () => {
  * ```
  */
 async function leaderVerdict(
-  options: { hint?: object; maxAttempts?: number; gate?: GateResult } = {}
+  options: { hint?: object; message?: string; maxAttempts?: number; gate?: GateResult } = {}
 ): Promise<{ verdict: ClaimVerdict | undefined; claimsLeft: number }> {
   const log: CallLog = [];
+  const message = options.message ?? "provider said no";
   const handler = fakeHandler(log, {
     execute: async () => {
-      if (options.hint) throw Object.assign(new Error("provider said no"), options.hint);
+      if (options.hint) throw Object.assign(new Error(message), options.hint);
       return { body: new TextEncoder().encode("ok"), mimeType: "text/plain", costUsd: 0.1 };
     }
   });
@@ -961,6 +964,40 @@ describe("executeItem — cross-run dedupe claim", () => {
     expect(ctx.log.info).toHaveBeenCalledWith("runner:dedupe:shared", {
       itemId: item.id,
       verdict: verdict.kind
+    });
+  });
+
+  it("a follower of a failed leader reports the leader's message under its own label", async () => {
+    const LEADER_MESSAGE = "[ai] ark rejected the request (400).\n  Check the model id.";
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log);
+    const settleLeader = openClaim(ctx.state, "ak-1", LEADER);
+    const item = fakeItemRow({ artifactKey: "ak-1", label: "e02.s01.h3" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "failed", errorClass: "http-4xx", message: LEADER_MESSAGE });
+    await following;
+
+    expect(events.at(-1)).toEqual({
+      type: "item:failed",
+      itemId: item.id,
+      label: "e02.s01.h3",
+      errorClass: "http-4xx",
+      message: LEADER_MESSAGE
+    });
+    expect(ctx.log.warn).toHaveBeenCalledWith("runner:item:failed", {
+      itemId: item.id,
+      errorClass: "http-4xx",
+      message: LEADER_MESSAGE
     });
   });
 
@@ -1101,6 +1138,19 @@ describe("executeItem — cross-run dedupe claim", () => {
     it("failed with the class of a terminal failure", async () => {
       const { verdict } = await leaderVerdict({ hint: { status: 400 } });
       expect(verdict).toEqual({ kind: "failed", errorClass: "http-4xx" });
+      expect(verdict).not.toHaveProperty("message");
+    });
+
+    it("failed with the message of our own terminal error", async () => {
+      const { verdict } = await leaderVerdict({
+        hint: { status: 400 },
+        message: "[ai] ark rejected the request (400).\n  Check the model id."
+      });
+      expect(verdict).toEqual({
+        kind: "failed",
+        errorClass: "http-4xx",
+        message: "[ai] ark rejected the request (400).\n  Check the model id."
+      });
     });
 
     it("open once attempts are exhausted on a retryable class, so a follower tries itself", async () => {
@@ -1235,5 +1285,149 @@ describe("executeItem — a job failed with kind:resubmit", () => {
       "limits.reportOutcome(retryable-error)",
       "limits.reportOutcome(ok)"
     ]);
+  });
+});
+
+/**
+ * Runs one item whose handler throws `failWith(attempt)` on every attempt,
+ * and returns what it reported and logged.
+ *
+ * @param failWith - Builds the error thrown by the given 1-based attempt.
+ * @param options - Attempt ceiling and the row's label.
+ * @param options.maxAttempts - Attempt ceiling. Default 3.
+ * @param options.label - The item row's label. Default the fixture's "01-fakeTask".
+ * @returns The context, the stream records and the item id.
+ * @example
+ * ```ts
+ * const { events } = await runFailingItem(() => Object.assign(new Error("[ai] no."), { status: 400 }));
+ * ```
+ */
+async function runFailingItem(
+  failWith: (attempt: number) => Error,
+  options: { maxAttempts?: number; label?: string | null } = {}
+): Promise<{ ctx: RunnerContext; events: UnstampedRunEvent[]; itemId: string }> {
+  const log: CallLog = [];
+  let attempts = 0;
+  const handler = fakeHandler(log, {
+    execute: async () => {
+      attempts += 1;
+      throw failWith(attempts);
+    }
+  });
+  const ctx = createFakeRunnerContext(log, {
+    config: { retryBaseMs: 1 },
+    registry: { resolve: (): unknown => handler }
+  });
+  const item = fakeItemRow(options.label === undefined ? {} : { label: options.label });
+  const { report, events } = collectReports();
+
+  await executeItem(
+    ctx,
+    item,
+    fakePlan(options.maxAttempts ?? 3),
+    createDrainController(undefined),
+    report,
+    Promise.resolve()
+  );
+
+  return { ctx, events, itemId: item.id };
+}
+
+// ---------------------------------------------------------------------------
+// executeItem — item:failed carries the item's label and our own error's message
+// ---------------------------------------------------------------------------
+
+describe("executeItem — item:failed label and message", () => {
+  const ARK_MESSAGE = "[ai] ark rejected the request (400).\n  Check the model id.";
+
+  it("a terminal [ai] error reports its first two lines and the item's label", async () => {
+    const { ctx, events, itemId } = await runFailingItem(
+      () =>
+        Object.assign(new Error(`${ARK_MESSAGE}\n  Body: {"code":"InvalidParameter"}`), {
+          status: 400
+        }),
+      { label: "e01.s01.h3" }
+    );
+
+    expect(events.at(-1)).toEqual({
+      type: "item:failed",
+      itemId,
+      label: "e01.s01.h3",
+      errorClass: "http-4xx",
+      message: ARK_MESSAGE
+    });
+    expect(ctx.log.warn).toHaveBeenCalledWith("runner:item:failed", {
+      itemId,
+      errorClass: "http-4xx",
+      message: ARK_MESSAGE
+    });
+  });
+
+  it("cuts a long [ai] message at 300 characters", async () => {
+    const { events } = await runFailingItem(() =>
+      Object.assign(new Error(`[ai] ${"x".repeat(400)}`), { status: 400 })
+    );
+
+    const failed = events.at(-1);
+    const message = failed?.type === "item:failed" ? failed.message : undefined;
+    expect(message).toBe(`[ai] ${"x".repeat(295)}`);
+  });
+
+  it("a non-[ai] error reports no message key, only the label", async () => {
+    const { ctx, events, itemId } = await runFailingItem(() =>
+      Object.assign(new Error("bad request: Authorization Bearer sk-live-123"), { status: 400 })
+    );
+
+    const failed = events.at(-1);
+    expect(failed).toEqual({
+      type: "item:failed",
+      itemId,
+      label: "01-fakeTask",
+      errorClass: "http-4xx"
+    });
+    expect(failed).not.toHaveProperty("message");
+    expect(ctx.log.warn).toHaveBeenCalledWith("runner:item:failed", {
+      itemId,
+      errorClass: "http-4xx"
+    });
+    expect(vi.mocked(ctx.log.warn).mock.calls.at(-1)?.[1]).not.toHaveProperty("message");
+  });
+
+  it("a row written before labels existed reports label null", async () => {
+    // eslint-disable-next-line unicorn/no-null -- ItemRow.label is `string | null` for legacy rows
+    const NO_LABEL = null;
+    const { events } = await runFailingItem(() => new Error("[ai] no."), { label: NO_LABEL });
+
+    expect(events.at(-1)).toMatchObject({ type: "item:failed", label: NO_LABEL });
+  });
+
+  it("retries exhausted: item:failed carries the last attempt's message", async () => {
+    const { ctx, events, itemId } = await runFailingItem(
+      attempt =>
+        Object.assign(new Error(`[ai] fal is busy (attempt ${attempt}).\n  It retries later.`), {
+          status: 503
+        }),
+      { maxAttempts: 2 }
+    );
+
+    expect(events.map(event => event.type)).toEqual([
+      "item:queued",
+      "item:dispatching",
+      "item:retry",
+      "item:dispatching",
+      "item:failed"
+    ]);
+    expect(events.at(-1)).toEqual({
+      type: "item:failed",
+      itemId,
+      label: "01-fakeTask",
+      errorClass: "http-5xx",
+      message: "[ai] fal is busy (attempt 2).\n  It retries later."
+    });
+    expect(ctx.log.warn).toHaveBeenCalledWith("runner:item:failed", {
+      itemId,
+      errorClass: "http-5xx",
+      message: "[ai] fal is busy (attempt 2).\n  It retries later."
+    });
   });
 });

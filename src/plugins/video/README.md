@@ -58,8 +58,31 @@ types as `Video.VideoHandler` etc.
 | `resolution` | `string` | no | Model-specific resolution, e.g. `"720p"`, `"768P"`. |
 | `audio` | `boolean` | no | Generate native audio when the model can. Default false. |
 | `params` | `Record<string, unknown>` | no | Pass-through provider params, merged last into the provider body. |
+| `fromDraft` | `VideoFile` | no | The draft clip this request turns into a final render. The provider reuses the draft's prompt, frames, duration, ratio, seed and audio. Providers without a draft mode refuse it. Pass `prompt: ""` from code. |
 
 `VideoFile` is `{ path: string; mimeType: string; hash: string }`.
+
+### Draft → final
+
+A draft is a cheap preview clip. A final re-renders that draft at full quality. Today only `ark`
+supports it (Seedance 2.5).
+
+- The draft item sets `params.draft: true`.
+- The final item sets `input.fromDraft: { $ref: <draft item> }`. It may omit `prompt`.
+- The final renders at `1080p` only.
+- Draft ids expire after 7 days. Render the final before then.
+
+```yaml
+items:
+  - id: s01.draft
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, prompt: "slow push-in", params: { draft: true } }
+  - id: s01.final
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, fromDraft: { $ref: s01.draft }, resolution: 1080p }
+```
 
 ### `VideoResult`
 
@@ -82,15 +105,16 @@ type VideoJobPoll =
 ### `EstimateRequest`
 
 `estimate` runs at plan time, before the runner resolves build-file references. So its request is a
-`VideoRequest` whose `image`, `endImage` and `refs` may still be `{ $ref }` or `{ $file }`. Every
+`VideoRequest` whose `image`, `endImage`, `refs` and `fromDraft` may still be `{ $ref }` or `{ $file }`. Every
 `VideoRequest` is an `EstimateRequest`.
 
 ```ts
 type EstimateInput = VideoFile | { $ref: string } | { $file: string };
-type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
+type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs" | "fromDraft"> & {
   image?: EstimateInput;
   endImage?: EstimateInput;
   refs?: EstimateInput[];
+  fromDraft?: EstimateInput;
 };
 ```
 

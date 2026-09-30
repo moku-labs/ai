@@ -70,6 +70,25 @@ function resolveApiKey(ctx: ApimodelsContext): string {
 }
 
 /**
+ * Refuses a draft render: apimodels has no draft-to-final call. A plain
+ * `Error` (terminal, nothing billed), thrown before any upload or call.
+ *
+ * @param request - The request, resolved or not.
+ * @throws {Error} When `request.fromDraft` is set.
+ * @example
+ * ```ts
+ * refuseDraft({ model: "seedance-2.5", prompt: "", fromDraft: { $ref: "shot-03-draft" } });
+ * // throws: "[ai] apimodels takes no draft render (input.fromDraft). ..."
+ * ```
+ */
+function refuseDraft(request: EstimateRequest): void {
+  if (request.fromDraft === undefined) return;
+  throw new Error(
+    "[ai] apimodels takes no draft render (input.fromDraft).\n  Use provider ark with a Seedance 2.5 draft."
+  );
+}
+
+/**
  * Estimate of a request, network-free and on unresolved inputs: validation,
  * then the table price plus one asset price per `params.assets` entry (a
  * worst case: the cache is not visible here).
@@ -77,9 +96,11 @@ function resolveApiKey(ctx: ApimodelsContext): string {
  * @param ctx - Plugin context (price table).
  * @param request - The request, resolved or not.
  * @returns USD, rounded to micro-dollars.
+ * @throws {Error} A plain error for a draft render (`fromDraft`).
  * @throws {TerminalProviderError} A 400 for anything submit would refuse.
  */
 function estimateUsd(ctx: ApimodelsContext, request: EstimateRequest): number {
+  refuseDraft(request);
   const model = resolveModel(request.model);
   checkRequest(model, request);
   const assetCount = readAssetSelectors(request).length;
@@ -232,7 +253,8 @@ async function submitJob(
   request: VideoRequest,
   signal: AbortSignal | undefined
 ): Promise<{ jobId: string }> {
-  // Refuse what the model or params.assets cannot take, then read the key, before any upload.
+  // Refuse a draft render, what the model or params.assets cannot take, then read the key, before any upload.
+  refuseDraft(request);
   const model = resolveModel(request.model);
   checkRequest(model, request);
   const selectors = readAssetSelectors(request);

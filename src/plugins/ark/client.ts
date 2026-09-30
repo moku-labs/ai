@@ -1,7 +1,7 @@
 /**
  * @file ark thin fetch client (global fetch — Node >= 24 and Bun). `arkFetch`
- * performs every HTTP call of this plugin (video tasks, the clip download,
- * the signed asset OpenAPI) and owns the one place that classifies transport
+ * performs every HTTP call of this plugin (video tasks, Seedream images, the
+ * clip and image downloads, the signed asset OpenAPI) and owns the one place that classifies transport
  * and HTTP failures into `RetryableProviderError` / `TerminalProviderError` /
  * `FlaggedProviderError`. Every error it throws carries a `status` or a
  * `kind`, so the runner never classifies an ark failure as `unknown`.
@@ -237,7 +237,8 @@ export function shorten(text: string | undefined): string | undefined {
 
 /**
  * Narrows an ark error body: an OpenAPI envelope error when there is one,
- * else a data-plane `error` object.
+ * else a data-plane `error` object, else a top-level `code` / `message` (the
+ * Seedream image API sends its errors unwrapped).
  *
  * @param body - Parsed JSON body, or undefined when unreadable.
  * @returns The code, the shortened message and where they came from.
@@ -255,7 +256,8 @@ export function describeArkError(body: unknown): ArkErrorInfo {
       envelope: true
     };
   }
-  const error = readField(body, "error");
+  const wrapped = readField(body, "error");
+  const error = typeof wrapped === "object" && wrapped !== null ? wrapped : body;
   return {
     code: readString(error, "code"),
     message: shorten(readString(error, "message")),
@@ -283,8 +285,9 @@ function retryAfterMsOf(value: string | null): number | undefined {
 
 /**
  * The content-policy error for a refusal code. A request with a plain local
- * image gets the "make it an asset" hint, because ark refuses real faces in
- * plain images but takes them as registered assets.
+ * image gets the face hint: ark refuses a real face in a plain image, but
+ * trusts one in a Seedream image made on the same account (bytes unchanged)
+ * and in a registered asset.
  *
  * @param code - ark's refusal code, e.g. `InputImageSensitiveContentDetected.PrivacyInformation`.
  * @param localImage - Whether the request carries a plain local image.
@@ -297,9 +300,23 @@ function retryAfterMsOf(value: string | null): number | undefined {
  */
 export function flaggedError(code: string, localImage: boolean): FlaggedProviderError {
   const message = localImage
-    ? `[ai] ark refused an image with a face: ${code}.\n  Make it an asset item and $ref it.`
+    ? `[ai] ark refused an image with a face: ${code}.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.`
     : `[ai] ark flagged the request: ${code}.\n  Change the prompt or the inputs.`;
   return new FlaggedProviderError(message);
+}
+
+/**
+ * The data-plane headers: Bearer API key and a JSON body.
+ *
+ * @param apiKey - The Ark API key.
+ * @returns Header record.
+ * @example
+ * ```ts
+ * bearerHeaders("k").Authorization; // => "Bearer k"
+ * ```
+ */
+export function bearerHeaders(apiKey: string): Record<string, string> {
+  return { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
 }
 
 /**

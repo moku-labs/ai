@@ -2,17 +2,21 @@
  * @file ark video handler — implements the task-owned contract
  * (`../../video/contract.ts`) over the Ark video task API. `submit` checks the
  * request, checks every asset ref (the asset preflight), then POSTs the task;
- * `poll` reads the task once and, on success, downloads the clip right away:
- * its URL expires 24 h after success. There is no `execute`: the runner and
- * the `video` facade both drive `submit` + `poll`, so a task id is journaled
- * and never submitted twice. Estimate and actual cost share `../prices.ts`.
+ * a final from a draft (`fromDraft`) first finds the draft task in the
+ * journal. `poll` reads the task once and, on success, downloads the clip
+ * right away: its URL expires 24 h after success. A succeeded draft is
+ * recorded in the journal, so a final can find it. There is no `execute`: the
+ * runner and the `video` facade both drive `submit` + `poll`, so a task id is
+ * journaled and never submitted twice. Estimate and actual cost share
+ * `../prices.ts`.
  */
 import type { AssetRecord } from "../../asset/contract";
-import type { VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
+import type { VideoFile, VideoHandler, VideoJobPoll, VideoRequest } from "../../video/contract";
 import { ownAccount } from "../account";
 import { getAsset } from "../asset/handler";
 import {
   arkFetch,
+  bearerHeaders,
   flaggedError,
   readField,
   readJson,
@@ -22,10 +26,12 @@ import {
   unreadableResponse
 } from "../client";
 import { FlaggedProviderError, TerminalProviderError } from "../errors";
+import type { ArkVideoModel } from "../models";
 import { DEFAULT_RESOLUTION, DEFAULT_SECONDS, resolveArkModel } from "../models";
-import { costUsd, estimateTokens, estimateUsd } from "../prices";
+import { costUsd, estimateTokens, estimateUsd, nearestResolution } from "../prices";
 import { dataPlaneUrl } from "../regions";
-import type { ArkContext } from "../types";
+import type { ArkContext, EstimateRequest } from "../types";
+import type { ArkVideoBody } from "./body";
 import {
   assetRecordsOf,
   buildArkBody,
@@ -33,8 +39,18 @@ import {
   hasLocalImage,
   hasVideoReferenceUrl,
   readInputs,
-  warnNegativeOnce
+  warnNegativeOnce,
+  warnRatioOnce
 } from "./body";
+import {
+  checkDraftMode,
+  DRAFT_RESOLUTION,
+  defaultResolutionOf,
+  isDraftTask,
+  recordDraft
+} from "./draft";
+import type { ArkFinalBody } from "./final";
+import { buildFinalBody, checkDraftFile, checkFinalRequest, resolveDraft } from "./final";
 
 /** The ark video handler: the async form of the contract (no `execute`). */
 export type ArkVideoHandler = Required<Pick<VideoHandler, "estimate" | "submit" | "poll">>;
@@ -74,20 +90,6 @@ const FAILED_TASK_STATUS = 400;
 
 /** Status of an expired or cancelled task. */
 const ENDED_TASK_STATUS = 410;
-
-/**
- * The data-plane headers: Bearer API key and a JSON body.
- *
- * @param apiKey - The Ark API key.
- * @returns Header record.
- * @example
- * ```ts
- * bearerHeaders("k").Authorization; // => "Bearer k"
- * ```
- */
-function bearerHeaders(apiKey: string): Record<string, string> {
-  return { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
-}
 
 /**
  * Refuses an asset ref registered by another provider or another account.
@@ -154,8 +156,71 @@ async function preflightAssets(
 }
 
 /**
+ * POSTs one task body. Once the POST is sent ark may bill it: it runs to the
+ * end without the caller's signal, so a billed task always returns its id.
+ *
+ * @param ctx - Plugin context (config, log).
+ * @param apiKey - The Ark API key.
+ * @param body - The task body.
+ * @param localImage - Whether the body carries a plain local image (face hint).
+ * @returns The task id as the job id.
+ * @throws {Error} A plain error when ark answers without a task id.
+ */
+async function postTask(
+  ctx: ArkContext,
+  apiKey: string,
+  body: ArkVideoBody | ArkFinalBody,
+  localImage: boolean
+): Promise<{ jobId: string }> {
+  const response = await arkFetch(
+    `${dataPlaneUrl(ctx.config)}${TASKS_PATH}`,
+    { method: "POST", headers: bearerHeaders(apiKey), body: JSON.stringify(body) },
+    { timeoutMs: ctx.config.timeoutMs, label: TASKS_PATH, localImage }
+  );
+
+  // No id means the task may exist: fail without a retry, so it is never paid for twice.
+  const taskId = readString(readJson(response), "id");
+  if (taskId === undefined) {
+    throw new Error(
+      "[ai] ark returned no task id.\n  Check the task list in the console before running again."
+    );
+  }
+  ctx.log.info("ark:video:submitted", { model: body.model, taskId });
+  return { jobId: taskId };
+}
+
+/**
+ * Submits a final from a draft: checks the request and the draft clip, finds
+ * the draft task in the journal, then POSTs the draft-task body.
+ *
+ * @param ctx - Plugin context.
+ * @param model - The request's catalog row.
+ * @param request - The video request.
+ * @param fromDraft - The draft clip.
+ * @param signal - Caller abort signal.
+ * @returns The task id as the job id.
+ */
+async function submitFinal(
+  ctx: ArkContext,
+  model: ArkVideoModel,
+  request: VideoRequest,
+  fromDraft: VideoFile,
+  signal: AbortSignal | undefined
+): Promise<{ jobId: string }> {
+  // Refuse what a final cannot carry, then find its draft: all before any call.
+  checkDraftFile(fromDraft);
+  const checked = checkFinalRequest(model, request);
+  const apiKey = ctx.env.require(ctx.config.apiKeyEnv);
+  const draft = resolveDraft(ctx, model, fromDraft.hash);
+
+  signal?.throwIfAborted();
+  return postTask(ctx, apiKey, buildFinalBody(model, draft.taskId, checked), false);
+}
+
+/**
  * Checks the request, reads its inputs, runs the asset preflight, then POSTs
- * the task. The API key is read through `ctx.env` (MC3).
+ * the task; a request with `fromDraft` is a final. The API key is read
+ * through `ctx.env` (MC3).
  *
  * @param ctx - Plugin context.
  * @param request - The video request.
@@ -169,6 +234,9 @@ async function submitTask(
 ): Promise<{ jobId: string }> {
   // Refuse what the model cannot take, before any read or call.
   const model = resolveArkModel(request.model, ctx.config.region);
+  if (request.fromDraft !== undefined) {
+    return submitFinal(ctx, model, request, request.fromDraft, signal);
+  }
   const checked = checkVideoRequest(model, request);
   const apiKey = ctx.env.require(ctx.config.apiKeyEnv);
 
@@ -176,28 +244,12 @@ async function submitTask(
   const inputs = await readInputs(request);
   await preflightAssets(ctx, assetRecordsOf(inputs), signal);
   warnNegativeOnce(ctx, request);
+  warnRatioOnce(ctx, model, request);
 
-  // Once the POST is sent ark may bill it: an abort now would lose the task id, so it runs to the end.
+  // An abort after this point would lose the task id: the POST runs to the end.
   signal?.throwIfAborted();
-  const response = await arkFetch(
-    `${dataPlaneUrl(ctx.config)}${TASKS_PATH}`,
-    {
-      method: "POST",
-      headers: bearerHeaders(apiKey),
-      body: JSON.stringify(buildArkBody(model, request.prompt, checked, inputs))
-    },
-    { timeoutMs: ctx.config.timeoutMs, label: TASKS_PATH, localImage: hasLocalImage(request) }
-  );
-
-  // No id means the task may exist: fail without a retry, so it is never paid for twice.
-  const taskId = readString(readJson(response), "id");
-  if (taskId === undefined) {
-    throw new Error(
-      "[ai] ark returned no task id.\n  Check the task list in the console before running again."
-    );
-  }
-  ctx.log.info("ark:video:submitted", { model: model.id, taskId });
-  return { jobId: taskId };
+  const body = buildArkBody(model, request.prompt, checked, inputs);
+  return postTask(ctx, apiKey, body, hasLocalImage(request));
 }
 
 /**
@@ -275,7 +327,51 @@ function endedPoll(ctx: ArkContext, taskId: string, status: string): VideoJobPol
 }
 
 /**
- * Downloads a succeeded task's clip (without the key) and prices it from the
+ * The output tokens of a succeeded task: `usage.completion_tokens`, else the
+ * estimate at the nearest listed resolution, logged as `ark:cost:estimated`.
+ * Never throws: the task is already paid.
+ *
+ * @param ctx - Plugin context (log).
+ * @param taskId - The task id.
+ * @param task - The task body.
+ * @param clip - The clip's resolution and seconds.
+ * @param clip.resolution - The resolution.
+ * @param clip.seconds - The seconds.
+ * @returns Tokens.
+ */
+function completionTokensOf(
+  ctx: ArkContext,
+  taskId: string,
+  task: unknown,
+  clip: { resolution: string; seconds: number }
+): number {
+  const billed = readNumber(readField(task, "usage"), "completion_tokens");
+  if (billed !== undefined) return billed;
+
+  ctx.log.warn("ark:cost:estimated", { taskId });
+  return estimateTokens(nearestResolution(clip.resolution), clip.seconds);
+}
+
+/**
+ * The draft fields of a done poll's meta: `draft: true` for a draft,
+ * `draftTaskId` for a final, nothing otherwise.
+ *
+ * @param task - The task body.
+ * @returns The fields to spread into `meta`.
+ * @example
+ * ```ts
+ * draftMetaOf({ draft: false, draft_task_id: "cgt-20260930171041-8mowm" }); // => { draftTaskId: "cgt-20260930171041-8mowm" }
+ * ```
+ */
+function draftMetaOf(task: unknown): { draft?: true; draftTaskId?: string } {
+  if (isDraftTask(task)) return { draft: true };
+  const draftTaskId = readString(task, "draft_task_id");
+  return draftTaskId === undefined ? {} : { draftTaskId };
+}
+
+/**
+ * Downloads a succeeded task's clip (without the key, with its own longer
+ * timeout), records a draft in the journal, and prices the clip from the
  * completion tokens; the request's values fill in what the task body lacks.
  *
  * @param ctx - Plugin context.
@@ -301,30 +397,41 @@ async function downloadClip(
   const download = await arkFetch(
     videoUrl,
     { method: "GET" },
-    { timeoutMs: ctx.config.timeoutMs, signal, label: "video download" }
+    { timeoutMs: ctx.config.downloadTimeoutMs, signal, label: "video download" }
   );
 
-  // Price the completion tokens; fall back to the estimate when ark sent none.
+  // A draft is kept by its clip's hash, so a final can find its task.
   const model = resolveArkModel(request.model, ctx.config.region);
+  if (isDraftTask(task)) recordDraft(ctx, taskId, task, model.id, download.body);
+
+  // Read what the task reports; the request fills in what it lacks.
   const seconds = readNumber(task, "duration") ?? request.seconds ?? DEFAULT_SECONDS;
-  const resolution = readString(task, "resolution") ?? request.resolution ?? DEFAULT_RESOLUTION;
-  const completionTokens =
-    readNumber(readField(task, "usage"), "completion_tokens") ??
-    estimateTokens(resolution, seconds);
+  const resolution =
+    readString(task, "resolution") ??
+    request.resolution ??
+    defaultResolutionOf(request, DEFAULT_RESOLUTION);
+  const seed = readNumber(task, "seed");
   const lastFrameUrl = readString(content, "last_frame_url");
 
+  // Price the completion tokens; fall back to the estimate when ark sent none.
+  const completionTokens = completionTokensOf(ctx, taskId, task, { resolution, seconds });
+  const withVideoInput = hasVideoReferenceUrl(request);
+
+  // Report the clip as done.
   ctx.log.info("ark:video:done", { taskId, bytes: download.body.length });
   return {
     state: "done",
     video: download.body,
     mimeType: VIDEO_MIME,
-    costUsd: costUsd(ctx.config, model, completionTokens, hasVideoReferenceUrl(request)),
+    costUsd: costUsd(ctx.config, model, completionTokens, withVideoInput, resolution),
     meta: {
       taskId,
       model: model.id,
       seconds,
       resolution,
       completionTokens,
+      ...(seed === undefined ? {} : { seed }),
+      ...draftMetaOf(task),
       ...(lastFrameUrl === undefined ? {} : { lastFrameUrl })
     }
   };
@@ -369,22 +476,47 @@ async function pollTask(
 }
 
 /**
+ * Estimates a request without any call or file read: a final from a draft
+ * is 1080p for `seconds` (5 when absent), a draft is 480p, anything else its
+ * own seconds and resolution; all at the base price. It throws the submit
+ * errors it can check before the files are resolved.
+ *
+ * @param ctx - Plugin context (config).
+ * @param request - The request, files resolved or not.
+ * @returns USD.
+ */
+function estimateVideo(ctx: ArkContext, request: EstimateRequest): number {
+  const model = resolveArkModel(request.model, ctx.config.region);
+  if (request.fromDraft !== undefined) {
+    const { resolution } = checkFinalRequest(model, request);
+    const tokens = estimateTokens(resolution, request.seconds ?? DEFAULT_SECONDS);
+    return costUsd(ctx.config, model, tokens, false, resolution);
+  }
+
+  const isDraft = checkDraftMode(model, request);
+  return estimateUsd(
+    ctx.config,
+    model,
+    isDraft ? { ...request, resolution: DRAFT_RESOLUTION } : request
+  );
+}
+
+/**
  * Creates the ark video handler registered under `("video", "ark")`.
  * `estimate` touches no network and never reads a file: it checks model,
- * region, seconds and resolution with the submit errors, then prices the
- * estimated tokens at the base price. `submit` refuses a bad request or a bad
- * asset before the POST; once the POST is sent it runs to the end, so a
- * billed task always returns its id.
+ * region, draft mode, seconds and resolution with the submit errors, then
+ * prices the estimated tokens at the base price. `submit` refuses a bad
+ * request, a bad asset or a draft it cannot find before the POST; once the
+ * POST is sent it runs to the end, so a billed task always returns its id.
  *
- * @param ctx - Plugin context (config, state, env, log).
+ * @param ctx - Plugin context (config, state, env, log, journal).
  * @returns The handler: estimate, submit and poll.
  */
 export function createVideoHandler(ctx: ArkContext): ArkVideoHandler {
   return {
-    estimate: (request: VideoRequest): { usd: number } => {
-      const model = resolveArkModel(request.model, ctx.config.region);
-      return { usd: estimateUsd(ctx.config, model, request) };
-    },
+    estimate: (request: EstimateRequest): { usd: number } => ({
+      usd: estimateVideo(ctx, request)
+    }),
     submit: (request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }> =>
       submitTask(ctx, request, opts.signal),
     poll: (

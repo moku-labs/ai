@@ -3,7 +3,9 @@
  * that registered it, so a stored asset record carries a fingerprint of that
  * account. It is a one-way hash: it never contains the key and cannot be
  * turned back into it. The region is part of it, because the same key string
- * in two regions is two accounts.
+ * in two regions is two accounts. The API key gets its own fingerprint
+ * ({@link apiAccountOf}): a draft task id is valid only for the API key that
+ * made it.
  */
 import { createHash } from "node:crypto";
 import type { ArkContext, ArkRegion } from "./types";
@@ -26,6 +28,26 @@ const FINGERPRINT_LENGTH = 12;
 export function accountOf(region: ArkRegion, accessKey: string): string {
   return createHash("sha256")
     .update(`moku-ai:${region}:${accessKey}`)
+    .digest("hex")
+    .slice(0, FINGERPRINT_LENGTH);
+}
+
+/**
+ * The API-key fingerprint that scopes a draft record: the first 12 hex
+ * characters of `sha256("moku-ai:api:" + region + ":" + apiKey)`. One-way; it
+ * never contains the key.
+ *
+ * @param region - The Ark region.
+ * @param apiKey - The Ark API key.
+ * @returns 12 lowercase hex characters.
+ * @example
+ * ```ts
+ * apiAccountOf("intl", "test-ark-api-key"); // => "d1b474b7c3d4"
+ * ```
+ */
+export function apiAccountOf(region: ArkRegion, apiKey: string): string {
+  return createHash("sha256")
+    .update(`moku-ai:api:${region}:${apiKey}`)
     .digest("hex")
     .slice(0, FINGERPRINT_LENGTH);
 }

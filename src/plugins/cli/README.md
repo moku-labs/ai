@@ -109,6 +109,10 @@ right after `runner.run()` is called, which is required to observe the run's act
 window. Coalesced `"progress"` events render a spinner-prefixed line (spinner only in color
 mode); the authoritative `"terminal"` record renders a final branded box.
 
+Each `"item:failed"` event prints one `✗` line to stderr as it arrives, before the box. The line
+is the item label, then the first line of the error message. With no message it shows the error
+class. With no label it shows the item id.
+
 ```bash
 moku run "assets/**/*.moku.yaml" --max-cost 5
 ```
@@ -116,10 +120,11 @@ moku run "assets/**/*.moku.yaml" --max-cost 5
 ```text
 ⠋ 3/12 done · $0.1240 spent
 ⠙ 7/12 done · $0.2903 spent
+✗ hero-shot  [ai] fal rejected the request.
 ┌────────────────────┐
-│ status   done      │
-│ done     12/12     │
-│ failed   0         │
+│ status   failed    │
+│ done     11/12     │
+│ failed   1         │
 │ flagged  0         │
 │ spend    $0.5012   │
 └────────────────────┘

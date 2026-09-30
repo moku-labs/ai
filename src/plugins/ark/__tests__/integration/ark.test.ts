@@ -327,11 +327,18 @@ describe("ark: through the full framework", () => {
     expect(app.registry.providers("video")[0]).toBe("fal");
     expect(app.registry.providers("video")).toContain("ark");
     expect(app.registry.providers("asset")).toEqual(["ark"]);
+    expect(app.registry.providers("image")).toContain("ark");
     expect(app.ark.info()).toEqual({
       provider: "ark",
       region: "intl",
-      configured: { video: true, assets: true },
-      models: [MODEL, "dreamina-seedance-2-5-260628"]
+      configured: { video: true, assets: true, image: true },
+      models: [
+        MODEL,
+        "dreamina-seedance-2-0-fast-260128",
+        "dreamina-seedance-2-0-mini-260615",
+        "dreamina-seedance-2-5-260628"
+      ],
+      imageModels: ["seedream-5-0-lite-260128"]
     });
     expectTypeOf(app.ark.info()).toEqualTypeOf<ArkInfo>();
   });

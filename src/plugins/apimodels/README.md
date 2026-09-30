@@ -55,6 +55,9 @@ submit, before any upload or charge:
   Remove refs from input.refs, or use a model that takes more.
 ```
 
+apimodels refuses `input.fromDraft` (a draft render) at estimate and at submit, before any upload or charge,
+with a plain error: `[ai] apimodels takes no draft render (input.fromDraft).` Use provider `ark` with a Seedance 2.5 draft.
+
 At estimate time a `$ref` / `$file` ref has no MIME type yet: it counts only against the total
 (images + audio + video), never as an image. Submit checks each group exactly.
 

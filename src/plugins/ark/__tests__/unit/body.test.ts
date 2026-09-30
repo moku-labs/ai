@@ -11,7 +11,8 @@ import {
   hasLocalImage,
   hasVideoReferenceUrl,
   readInputs,
-  warnNegativeOnce
+  warnNegativeOnce,
+  warnRatioOnce
 } from "../../video/body";
 import type { TempFiles } from "../fixtures";
 import {
@@ -30,6 +31,10 @@ import {
 
 const MODEL_ID = "dreamina-seedance-2-0-260128";
 const MODEL = resolveArkModel(MODEL_ID, "intl");
+const MODEL_25_ID = "dreamina-seedance-2-5-260628";
+const MODEL_25 = resolveArkModel(MODEL_25_ID, "intl");
+const ALLOWED =
+  "Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority, draft, generation.";
 
 let temp: TempFiles;
 let image: VideoFile;
@@ -50,6 +55,13 @@ async function bodyOf(request: VideoRequest): Promise<unknown> {
   const checked = checkVideoRequest(MODEL, request);
   const inputs = await readInputs(request);
   return buildArkBody(MODEL, request.prompt, checked, inputs);
+}
+
+/** Checks, reads and builds a request on the 2.5 row. */
+async function body25Of(request: VideoRequest): Promise<unknown> {
+  const checked = checkVideoRequest(MODEL_25, request);
+  const inputs = await readInputs(request);
+  return buildArkBody(MODEL_25, request.prompt, checked, inputs);
 }
 
 /** A request with defaults for everything but the given fields. */
@@ -186,8 +198,137 @@ describe("mapping rows", () => {
       "seed",
       "return_last_frame",
       "execution_expires_after",
-      "priority"
+      "priority",
+      "draft",
+      "generation"
     ]);
+  });
+
+  it("never sends params.generation", async () => {
+    const body = (await bodyOf(request({ params: { generation: 3 } }))) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("generation");
+  });
+});
+
+describe("ratio follows the image (Seedance 2.5)", () => {
+  it("leaves ratio out for 2.5 with a first frame (exact body)", async () => {
+    const body = await body25Of(
+      request({ model: MODEL_25_ID, prompt: "Akari lifts the lid", image, seconds: 5 })
+    );
+    expect(body).toEqual({
+      model: MODEL_25_ID,
+      content: [
+        { type: "text", text: "Akari lifts the lid" },
+        { type: "image_url", image_url: { url: LOCAL_IMAGE_DATA_URI }, role: "first_frame" }
+      ],
+      duration: 5,
+      resolution: "720p",
+      generate_audio: false,
+      watermark: false
+    });
+  });
+
+  it("leaves ratio out for 2.5 with only a last frame", async () => {
+    const body = (await body25Of(request({ model: MODEL_25_ID, endImage: image }))) as object;
+    expect(body).not.toHaveProperty("ratio");
+  });
+
+  it("keeps ratio for 2.5 with reference images only, and for 2.0 with a first frame", async () => {
+    const references = (await body25Of(request({ model: MODEL_25_ID, refs: [image] }))) as object;
+    const first = (await bodyOf(request({ image, aspect: "16:9" }))) as object;
+    expect(references).toHaveProperty("ratio", "9:16");
+    expect(first).toHaveProperty("ratio", "16:9");
+  });
+
+  it("still checks an explicit aspect", () => {
+    expect(() =>
+      checkVideoRequest(MODEL_25, request({ model: MODEL_25_ID, image, aspect: "5:4" }))
+    ).toThrow('[ai] ark ratio "5:4" is not supported.');
+  });
+
+  it("logs ark:ratio:ignored once for an explicit aspect on 2.5 with a frame", () => {
+    const ctx = createTestCtx();
+
+    warnRatioOnce(ctx, MODEL_25, request({ model: MODEL_25_ID, image, aspect: "9:16" }));
+    warnRatioOnce(ctx, MODEL_25, request({ model: MODEL_25_ID, image, aspect: "16:9" }));
+
+    expect(ctx.log.warn).toHaveBeenCalledTimes(1);
+    expect(ctx.log.warn).toHaveBeenCalledWith("ark:ratio:ignored", { model: MODEL_25_ID });
+    expect(ctx.state.ratioWarned).toBe(true);
+  });
+
+  it("does not log when the aspect is honoured or absent", () => {
+    const ctx = createTestCtx();
+
+    warnRatioOnce(ctx, MODEL, request({ image, aspect: "9:16" }));
+    warnRatioOnce(ctx, MODEL_25, request({ model: MODEL_25_ID, image }));
+    warnRatioOnce(ctx, MODEL_25, request({ model: MODEL_25_ID, refs: [image], aspect: "1:1" }));
+
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("draft render (params.draft)", () => {
+  it("builds the draft body: draft true, 480p, no ratio with a first frame", async () => {
+    const body = await body25Of(
+      request({
+        model: MODEL_25_ID,
+        prompt: "Akari lifts the lid of a cake box",
+        image,
+        seconds: 5,
+        audio: true,
+        params: { draft: true }
+      })
+    );
+    expect(body).toEqual({
+      model: MODEL_25_ID,
+      content: [
+        { type: "text", text: "Akari lifts the lid of a cake box" },
+        { type: "image_url", image_url: { url: LOCAL_IMAGE_DATA_URI }, role: "first_frame" }
+      ],
+      duration: 5,
+      resolution: "480p",
+      generate_audio: true,
+      watermark: false,
+      draft: true
+    });
+  });
+
+  it("uses 480p when no resolution is given, and takes an explicit 480p", () => {
+    const draft = { model: MODEL_25_ID, params: { draft: true } };
+    expect(checkVideoRequest(MODEL_25, request(draft))).toMatchObject({
+      resolution: "480p",
+      draft: true,
+      params: {}
+    });
+    expect(checkVideoRequest(MODEL_25, request({ ...draft, resolution: "480p" })).resolution).toBe(
+      "480p"
+    );
+  });
+
+  it("is not a draft without params.draft", () => {
+    expect(checkVideoRequest(MODEL_25, request({ model: MODEL_25_ID })).draft).toBe(false);
+  });
+
+  it("refuses a draft on a model without a draft mode", () => {
+    expect(() => checkVideoRequest(MODEL, request({ params: { draft: true } }))).toThrow(
+      `[ai] Model ${MODEL_ID} has no draft mode.\n  Use dreamina-seedance-2-5-260628 for drafts.`
+    );
+  });
+
+  it("refuses a draft at 720p", () => {
+    expect(() =>
+      checkVideoRequest(
+        MODEL_25,
+        request({ model: MODEL_25_ID, resolution: "720p", params: { draft: true } })
+      )
+    ).toThrow("[ai] ark drafts are 480p only.\n  Remove input.resolution or set it to 480p.");
+  });
+
+  it("refuses a params.draft other than true", () => {
+    expect(() =>
+      checkVideoRequest(MODEL_25, request({ model: MODEL_25_ID, params: { draft: false } }))
+    ).toThrow("[ai] ark params.draft takes only true.\n  Remove params.draft for a full render.");
   });
 });
 
@@ -209,13 +350,13 @@ describe("checkVideoRequest rejections", () => {
 
   it("rejects an unknown param", () => {
     expect(() => checkVideoRequest(MODEL, request({ params: { cfg_scale: 7 } }))).toThrow(
-      '[ai] Unknown ark param "cfg_scale".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority.'
+      `[ai] Unknown ark param "cfg_scale".\n  ${ALLOWED}`
     );
   });
 
   it("rejects camera_fixed as an unknown param", () => {
     expect(() => checkVideoRequest(MODEL, request({ params: { camera_fixed: true } }))).toThrow(
-      '[ai] Unknown ark param "camera_fixed".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority.'
+      `[ai] Unknown ark param "camera_fixed".\n  ${ALLOWED}`
     );
   });
 
