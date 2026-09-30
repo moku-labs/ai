@@ -15,6 +15,15 @@ describe("framework createApp: limits lanes and apimodels wiring", () => {
     expect(lane.rpm).toBe(20);
   });
 
+  it("caps the ark video lane at 3 concurrent jobs and 180 rpm", () => {
+    const app = createApp({});
+
+    const lane = app.limits.laneConfig("video/ark/default");
+
+    expect(lane.concurrency).toBe(3);
+    expect(lane.rpm).toBe(180);
+  });
+
   it("keeps the framework defaults on every other lane", () => {
     const app = createApp({});
 

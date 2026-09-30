@@ -6,6 +6,7 @@
  * claimant adopts any live provider job through the journal.
  */
 import type { ItemRow } from "../journal/types";
+import { itemFailureOf, reportItemFailed } from "./failure";
 import { openClaim } from "./state";
 import type { ClaimVerdict, DrainController, RunnerContext, UnstampedRunEvent } from "./types";
 
@@ -95,7 +96,8 @@ async function verdictUnlessDrained(
  * Records the leader's `flagged` or `failed` verdict on a follower without a
  * provider call: the same request would get the same verdict and cost money.
  * The gate still runs, so the budget is checked (a refusal triggers the
- * budget stop as usual); no attempt row is written.
+ * budget stop as usual); no attempt row is written. A shared `failed` is
+ * reported under the follower's own label with the leader's message.
  *
  * @param ctx - Runner domain context.
  * @param item - The follower, still `queued`.
@@ -121,7 +123,7 @@ function shareVerdict(
     report({ type: "item:flagged", itemId: item.id });
   } else {
     ctx.journal.markFailed(item.id, { errorClass: verdict.errorClass, terminal: true });
-    report({ type: "item:failed", itemId: item.id, errorClass: verdict.errorClass });
+    reportItemFailed(ctx, item, itemFailureOf(verdict.errorClass, verdict.message), report);
   }
   ctx.log.info("runner:dedupe:shared", { itemId: item.id, verdict: verdict.kind });
 }

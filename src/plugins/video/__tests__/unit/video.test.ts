@@ -311,5 +311,31 @@ describe("standard tier: video plugin", () => {
       expectTypeOf<VideoRequest>().toHaveProperty("endImage");
       expect(withEnd.endImage).toBe(lastFrame);
     });
+
+    it("accepts an optional fromDraft: VideoFile draft clip with an empty prompt", () => {
+      const draftClip: VideoFile = { path: "draft.mp4", mimeType: "video/mp4", hash: "draft" };
+      const final: VideoRequest = {
+        model: "dreamina-seedance-2-5-260628",
+        prompt: "",
+        fromDraft: draftClip,
+        resolution: "1080p"
+      };
+      expectTypeOf<VideoRequest["fromDraft"]>().toEqualTypeOf<VideoFile | undefined>();
+      expect(final.fromDraft).toBe(draftClip);
+    });
+
+    it("EstimateRequest takes fromDraft resolved or still a $ref", () => {
+      const planned: EstimateRequest = {
+        model: "dreamina-seedance-2-5-260628",
+        prompt: "",
+        fromDraft: { $ref: "s01.draft" },
+        resolution: "1080p"
+      };
+      const handler: VideoHandler = {
+        estimate: estimated => ({ usd: estimated.fromDraft === undefined ? 1 : 2 })
+      };
+      expectTypeOf<EstimateRequest["fromDraft"]>().toEqualTypeOf<EstimateInput | undefined>();
+      expect(handler.estimate(planned)).toEqual({ usd: 2 });
+    });
   });
 });

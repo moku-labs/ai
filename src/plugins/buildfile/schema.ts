@@ -3,15 +3,37 @@
  */
 import { z } from "zod";
 
-/** Zod schema for one build item. */
-export const buildItemSchema = z.object({
-  task: z.string(),
-  id: z.string().optional(),
-  provider: z.string().optional(),
-  input: z.record(z.string(), z.unknown()),
-  params: z.record(z.string(), z.unknown()).optional(),
-  pack: z.object({ name: z.string(), version: z.string() }).optional()
-});
+/** Hint shown when an item puts `params` inside `input` instead of next to it. */
+const PARAMS_INSIDE_INPUT_MESSAGE =
+  "params go next to input, not inside it; move input.params to params";
+
+/**
+ * Zod schema for one build item.
+ *
+ * Refuses `input.params`: the runner builds the request as
+ * `{ ...input, params }`, so a `params` key inside `input` would be
+ * silently dropped. This check is runtime-only; the generated JSON Schema
+ * does not express it.
+ */
+export const buildItemSchema = z
+  .object({
+    task: z.string(),
+    id: z.string().optional(),
+    provider: z.string().optional(),
+    input: z.record(z.string(), z.unknown()),
+    params: z.record(z.string(), z.unknown()).optional(),
+    pack: z.object({ name: z.string(), version: z.string() }).optional()
+  })
+  .superRefine((item, refinement) => {
+    const isMisplacedInInput = Object.hasOwn(item.input, "params");
+    if (!isMisplacedInInput) return;
+
+    refinement.addIssue({
+      code: "custom",
+      path: ["input", "params"],
+      message: PARAMS_INSIDE_INPUT_MESSAGE
+    });
+  });
 
 /** Zod schema for a whole build file (IR). */
 export const buildSpecSchema = z.object({

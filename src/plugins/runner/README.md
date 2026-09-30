@@ -162,7 +162,7 @@ record also carries `runId`, the run it belongs to:
 | `item:dispatching` | `runId, itemId` | Item passed the atomic gate |
 | `item:done` | `runId, itemId, costUsd, contentHash` | Artifact stored and committed (`costUsd: 0` when reused) |
 | `item:retry` | `runId, itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
-| `item:failed` | `runId, itemId, errorClass` | Terminal failure (4xx, or attempts exhausted) |
+| `item:failed` | `runId, itemId, label, errorClass, message?` | Terminal failure (4xx, or attempts exhausted). `label` is the build-file id, `null` on old rows. `message` is set only for our own `[ai]` errors: the first two lines, max 300 chars. Attempts exhausted carries the last attempt's message. A dedupe follower carries the leader's message. |
 | `item:flagged` | `runId, itemId` | Content-policy rejection (terminal, never re-queued) |
 | `overflow` | `runId, dropped` | Consumer buffer overflowed; `dropped` oldest item records of that run lost |
 | `progress` | `runId, totals` | Coalesced run totals (latest unconsumed wins) |
@@ -201,7 +201,9 @@ const app = createApp({ plugins: [reporterPlugin] });
 1. **Plan** — compile build files (`buildfile.loadGlob`), order each build's items so `$ref`
    targets come first, resolve each item's provider (item `provider` → build
    `defaults.provider` → the task's first-registered provider), hash every `$file`, and compute
-   two keys. Planning key = `sha256(canonicalJson({ task, input, params }))` with each `$ref`
+   two keys. An image `$file` gets its MIME from its first bytes (PNG, JPEG, GIF, WEBP). When the
+   bytes disagree with the extension, the bytes win and `runner:mime:mismatch`
+   (`{ path, extension, detected }`) is logged once per file. Other files keep the extension map. Planning key = `sha256(canonicalJson({ task, input, params }))` with each `$ref`
    replaced by its target's planning key and each `$file` by its content hash (deliberately
    excludes `provider`). Artifact key = the same over `{ task, provider, packVersion, input,
    params }`, with `$ref`s replaced by the target's artifact key. The request is the flat task
@@ -233,7 +235,9 @@ const app = createApp({ plugins: [reporterPlugin] });
 8. **Classify on error** — `classifyError` maps the thrown error into the journal taxonomy
    (see below); `limits.reportOutcome` feeds the breaker (`"ok"` / `"retryable-error"` only).
    When the drain signal fired and the error carries no provider hint, the attempt ends
-   `aborted` and the item stays `dispatching` for `resume()`.
+   `aborted` and the item stays `dispatching` for `resume()`. A terminal failure also logs
+   `runner:item:failed` (`{ itemId, errorClass, message? }`). The message is never written to the
+   journal.
 9. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
    `store.put(bytes)` → `journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash,
    mimeType })`.

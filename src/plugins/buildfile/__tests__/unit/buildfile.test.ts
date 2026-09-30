@@ -53,6 +53,26 @@ describe("buildfile unit", () => {
       const result = buildItemSchema.safeParse({ task: "voiceover", input: "nope" });
       expect(result.success).toBe(false);
     });
+
+    it("rejects input.params with a hint to move it next to input", () => {
+      const result = buildItemSchema.safeParse({
+        task: "video",
+        input: { prompt: "a cat", params: { resolution: "480p" } }
+      });
+      if (result.success) throw new Error("expected failure");
+      expect(firstIssueMessage(result.error)).toBe(
+        "input.params: params go next to input, not inside it; move input.params to params"
+      );
+    });
+
+    it("still accepts params next to input", () => {
+      const result = buildItemSchema.safeParse({
+        task: "video",
+        input: { prompt: "a cat" },
+        params: { resolution: "480p" }
+      });
+      expect(result.success).toBe(true);
+    });
   });
 
   describe("schema: buildSpecSchema", () => {
@@ -127,6 +147,27 @@ describe("buildfile unit", () => {
           lang: "yaml"
         })
       ).rejects.toThrow('[ai] Build file "<inline>" is invalid.\n  items.0.input:');
+    });
+
+    it("rejects input.params with the exact two-line error", async () => {
+      await expect(
+        api.compile({
+          text: "version: 1\nname: x\nitems:\n  - task: video\n    input:\n      prompt: a cat\n      params:\n        resolution: 480p\n",
+          lang: "yaml"
+        })
+      ).rejects.toThrow(
+        new Error(
+          '[ai] Build file "<inline>" is invalid.\n  items.0.input.params: params go next to input, not inside it; move input.params to params.'
+        )
+      );
+    });
+
+    it("compiles an item with params next to input", async () => {
+      const compiled = await api.compile({
+        text: "version: 1\nname: x\nitems:\n  - task: video\n    input:\n      prompt: a cat\n    params:\n      resolution: 480p\n",
+        lang: "yaml"
+      });
+      expect(compiled.spec.items[0]?.params).toEqual({ resolution: "480p" });
     });
 
     it("matches the exact pinned two-line format", async () => {

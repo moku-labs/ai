@@ -9,6 +9,7 @@
 import type { AttemptOutcome, ErrorClass, ItemRow } from "../journal/types";
 import { registryPlugin } from "../registry";
 import { claimArtifact, OPEN_VERDICT, tryReuse } from "./claim";
+import { failureMessageOf, itemFailureOf, reportItemFailed } from "./failure";
 import { canonicalJson, sha256Hex } from "./keys";
 import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import {
@@ -24,19 +25,25 @@ import type {
   ExecutableHandler,
   HandlerRequest,
   HandlerResult,
+  ItemFailure,
   PlannedItem,
   ResolvedFile,
   RunnerContext,
   UnstampedRunEvent
 } from "./types";
 
-/** Discriminated outcome of a single provider attempt. */
+/**
+ * Discriminated outcome of a single provider attempt. A failed attempt
+ * carries its {@link ItemFailure}: the class, plus the `[ai]` message when the
+ * error was ours, so a retryable failure that exhausts the attempts still
+ * reports the last attempt's message.
+ */
 type AttemptOutcomeResult =
   | { kind: "done"; costUsd: number; contentHash: string }
   | { kind: "aborted" }
   | { kind: "flagged" }
-  | { kind: "terminal-failed"; errorClass: ErrorClass }
-  | { kind: "retryable"; errorClass: ErrorClass; retryAfterMs: number | undefined };
+  | ({ kind: "terminal-failed" } & ItemFailure)
+  | ({ kind: "retryable"; retryAfterMs: number | undefined } & ItemFailure);
 
 /**
  * Runtime shape guard narrowing a registry-resolved handler (`unknown`) to
@@ -315,7 +322,8 @@ function outcomeOf(errorClass: ErrorClass): AttemptOutcome {
  * transitions the item for the two outcomes it can fully decide
  * (`flagged`, terminal `failed`), and reports the breaker outcome for
  * retryable failures. A provider's `kind: "resubmit"` verdict retries like
- * its status says but never feeds the lane breaker. The
+ * its status says but never feeds the lane breaker. A failed outcome carries
+ * the error's safe `[ai]` message ({@link failureMessageOf}). The
  * retryable-vs-exhausted decision is left to the caller, which tracks the
  * cross-attempt count.
  *
@@ -335,6 +343,7 @@ function handleAttemptError(
 ): AttemptOutcomeResult {
   const errorClass = classifyError(error);
   const outcome = outcomeOf(errorClass);
+  const failure = itemFailureOf(errorClass, failureMessageOf(error));
 
   ctx.journal.finishAttempt(attemptId, { endedAt: Date.now(), outcome, errorClass });
 
@@ -344,13 +353,13 @@ function handleAttemptError(
   }
   if (outcome === "terminal-error") {
     ctx.journal.markFailed(item.id, { errorClass, terminal: true });
-    return { kind: "terminal-failed", errorClass };
+    return { kind: "terminal-failed", ...failure };
   }
 
   // Retryable: a lane failure feeds the breaker; a "submit again" verdict does not.
   const isLaneFailure = !isResubmitVerdict(error);
   if (isLaneFailure) ctx.limits.reportOutcome(lane, "retryable-error");
-  return { kind: "retryable", errorClass, retryAfterMs: retryAfterMsOf(error) };
+  return { kind: "retryable", ...failure, retryAfterMs: retryAfterMsOf(error) };
 }
 
 /**
@@ -727,8 +736,10 @@ type AttemptStep = { verdict: ClaimVerdict } | { attempt: number; waitMs: number
  * `aborted` (the item stays `dispatching` for resume), or — for a
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
- * computed backoff delay. A stop carries the item's claim verdict: `done`,
- * `flagged`, `failed` with its class for a non-retryable failure, or `open`
+ * computed backoff delay. Every `item:failed` carries the item's label and
+ * the attempt's `[ai]` message, if any (see {@link reportItemFailed}). A stop
+ * carries the item's claim verdict: `done`, `flagged`, `failed` with its class
+ * (and message) for a non-retryable failure, or `open`
  * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
  * timeout error can pass on a later try, so a follower tries for itself.
  * Extracted to keep the {@link runAttempts} loop flat.
@@ -765,15 +776,16 @@ function applyOutcome(
     return { verdict: { kind: "flagged" } };
   }
   if (outcome.kind === "terminal-failed") {
-    report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
-    return { verdict: { kind: "failed", errorClass: outcome.errorClass } };
+    const failure = itemFailureOf(outcome.errorClass, outcome.message);
+    reportItemFailed(ctx, item, failure, report);
+    return { verdict: { kind: "failed", ...failure } };
   }
 
-  // Retryable: out of attempts is a terminal failure, else re-queue with a backoff.
+  // Retryable: out of attempts is a terminal failure with the last attempt's message, else re-queue with a backoff.
   const nextAttempt = attempt + 1;
   if (nextAttempt >= maxAttempts) {
     ctx.journal.markFailed(item.id, { errorClass: outcome.errorClass, terminal: true });
-    report({ type: "item:failed", itemId: item.id, errorClass: outcome.errorClass });
+    reportItemFailed(ctx, item, itemFailureOf(outcome.errorClass, outcome.message), report);
     return { verdict: OPEN_VERDICT };
   }
 

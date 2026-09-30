@@ -153,8 +153,11 @@ emits) are stripped by zod, not rejected.
 | `task` | `string` | yes | Task name — `"voiceover"`, `"translate"`, `"prompt-gen"`, or any registered task (open set; existence is checked by the runner, not here). |
 | `id` | `string` | no | Human label (export file name) and `$ref` target. Unique within a build file. Not identity. |
 | `provider` | `string` | no | Provider override; the runner falls back to `defaults.provider`, else the task's first registered provider. |
-| `input` | `Record<string, unknown>` | yes | Task-specific request payload, handed to the provider flat (`{ ...input, params }`). May hold `$ref` / `$file` values. |
-| `params` | `Record<string, unknown>` | no | Output-relevant parameters — part of the runner's planning key. |
+| `input` | `Record<string, unknown>` | yes | Task-specific request payload, handed to the provider flat (`{ ...input, params }`). May hold `$ref` / `$file` values. A `params` key inside `input` is refused. Put params next to input. |
+| `params` | `Record<string, unknown>` | no | Output-relevant parameters — part of the runner's planning key. Goes next to `input`, never inside it. |
+
+`compile()` refuses `input.params`. The runner would drop it silently. The error reads
+`items.0.input.params: params go next to input, not inside it; move input.params to params.`
 | `pack` | `{ name: string; version: string }` | no | Asset-pack association. |
 
 ### References: `$ref` and `$file`

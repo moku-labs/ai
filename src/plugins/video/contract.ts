@@ -61,6 +61,22 @@ export type VideoRequest = {
   audio?: boolean;
   /** Pass-through provider params, merged last into the provider body. */
   params?: Record<string, unknown>;
+  /**
+   * The draft clip this request turns into a final render. Providers without a
+   * draft mode refuse it. When set, the provider reuses the draft's prompt,
+   * frames, duration, ratio, seed and audio; `prompt` and those fields on this
+   * request are ignored for the provider body. A build file may omit `prompt`
+   * when `fromDraft` is set; the typed request keeps `prompt: string` (pass
+   * `""` from code).
+   *
+   * @example
+   * ```ts
+   * const final: VideoRequest = {
+   *   model: "dreamina-seedance-2-5-260628", prompt: "", fromDraft: draftClip, resolution: "1080p"
+   * };
+   * ```
+   */
+  fromDraft?: VideoFile;
 };
 
 /**
@@ -76,8 +92,8 @@ export type VideoRequest = {
 export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
 
 /**
- * A video request at estimate time: its first frame, end frame and refs may
- * still be build-file references. Every `VideoRequest` is one.
+ * A video request at estimate time: its first frame, end frame, refs and
+ * draft clip may still be build-file references. Every `VideoRequest` is one.
  *
  * @example
  * ```ts
@@ -86,13 +102,15 @@ export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
  * };
  * ```
  */
-export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs"> & {
+export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs" | "fromDraft"> & {
   /** First frame, resolved or not. */
   image?: EstimateInput;
   /** End frame, resolved or not. */
   endImage?: EstimateInput;
   /** Refs, resolved or not. */
   refs?: EstimateInput[];
+  /** Draft clip this final is rendered from, resolved or not. */
+  fromDraft?: EstimateInput;
 };
 
 /**
@@ -149,8 +167,8 @@ export type VideoHandler = {
   /**
    * Estimates the cost of `request` without executing it — used by the
    * runner's budget gate and by `app.video.estimate()`. The runner estimates
-   * at plan time, so `image`, `endImage` and `refs` may still be `$ref` /
-   * `$file` references.
+   * at plan time, so `image`, `endImage`, `refs` and `fromDraft` may still be
+   * `$ref` / `$file` references.
    *
    * @param request - The request to estimate, resolved or not.
    * @returns The estimated cost in US dollars.

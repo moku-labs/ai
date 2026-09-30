@@ -490,6 +490,37 @@ describe("submit", () => {
   });
 });
 
+describe("fromDraft", () => {
+  const DRAFT_REFUSAL =
+    "[ai] apimodels takes no draft render (input.fromDraft).\n  Use provider ark with a Seedance 2.5 draft.";
+
+  /** Asserts `error` is the plain draft refusal: no status, no kind. */
+  function expectDraftRefusal(error: unknown): void {
+    expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
+    expect(error).not.toHaveProperty("status");
+    expect((error as Error).message).toBe(DRAFT_REFUSAL);
+  }
+
+  it("estimate refuses a draft render, resolved or not, with no network call", () => {
+    const fetchMock = stubFetch();
+    const handler = createVideoHandler(createTestCtx());
+
+    expectDraftRefusal(thrownBy(() => handler.estimate(shot({ fromDraft: tail }))));
+    const unresolved: EstimateRequest = { ...shot(), fromDraft: { $ref: "shot-03-draft" } };
+    expectDraftRefusal(thrownBy(() => handler.estimate(unresolved)));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("submit refuses a draft render before any upload or POST", async () => {
+    const api = stubApi();
+    const handler = createVideoHandler(createTestCtx());
+
+    const error = await rejectionOf(() => handler.submit(shot({ fromDraft: tail }), {}));
+    expectDraftRefusal(error);
+    expect(api.fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("poll", () => {
   it.each([
     ["pending"],

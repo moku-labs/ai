@@ -66,9 +66,28 @@ function buildRunOptions(
 }
 
 /**
+ * The one-line summary of a failed item: its label (the item id when the row
+ * has no label), two spaces, then the first line of its message, or its
+ * error class when there is no message. `ui.error` adds the `✗` glyph.
+ *
+ * @param event - The `item:failed` stream event.
+ * @returns The line text, without the glyph.
+ * @example
+ * ```ts
+ * failedItemLine({ type: "item:failed", runId: "r", itemId: "i", label: null, errorClass: "timeout" });
+ * // "i  timeout"
+ * ```
+ */
+function failedItemLine(event: Extract<RunEvent, { type: "item:failed" }>): string {
+  const name = event.label ?? event.itemId;
+  const detail = event.message?.split("\n")[0] ?? event.errorClass;
+  return `${name}  ${detail}`;
+}
+
+/**
  * Renders one per-item stream event: a spinner-prefixed progress line for
- * coalesced `"progress"` events, and a final branded box for the
- * authoritative `"terminal"` record.
+ * coalesced `"progress"` events, a `✗` line per `"item:failed"` event, and a
+ * final branded box for the authoritative `"terminal"` record.
  *
  * @param context - CommandContext (branded console + required plugin APIs).
  * @param startedAt - Epoch ms the render loop began, for the spinner frame.
@@ -84,6 +103,11 @@ function renderRunEvent(context: CommandContext, startedAt: number, event: RunEv
     context.ui.info(
       `${frame}${event.totals.done}/${event.totals.total} done · $${event.totals.spendUsd.toFixed(4)} spent`
     );
+    return;
+  }
+
+  if (event.type === "item:failed") {
+    context.ui.error(failedItemLine(event));
     return;
   }
 

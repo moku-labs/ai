@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   extensionOfMimeType,
+  imageMimeTypeOfBytes,
+  mimeTypeOfFile,
   mimeTypeOfPath,
   normalizeResult,
   OCTET_STREAM,
@@ -29,6 +31,43 @@ describe("mimeTypeOfPath", () => {
 
   it("keeps a .json $file as plain JSON, never an asset record", () => {
     expect(mimeTypeOfPath("x.json")).toBe("application/json");
+  });
+});
+
+describe("imageMimeTypeOfBytes", () => {
+  it.each<[string, string | undefined, number[]]>([
+    ["PNG", "image/png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]],
+    ["JPEG", "image/jpeg", [0xff, 0xd8, 0xff, 0xdb]],
+    ["GIF", "image/gif", [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]],
+    ["WEBP", "image/webp", [0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x45, 0x42, 0x50]],
+    ["RIFF WAVE", undefined, [0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 0x57, 0x41, 0x56, 0x45]],
+    ["a cut JPEG", undefined, [0xff, 0xd8]],
+    ["empty", undefined, []]
+  ])("reads %s bytes as %s", (_name, mime, bytes) => {
+    expect(imageMimeTypeOfBytes(new Uint8Array(bytes))).toBe(mime);
+  });
+});
+
+describe("mimeTypeOfFile", () => {
+  const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
+
+  it("lets the signature win over the extension and names the mismatch", () => {
+    expect(mimeTypeOfFile("/refs/akari.PNG", JPEG)).toEqual({
+      mimeType: "image/jpeg",
+      mismatch: { extension: "png", detected: "image/jpeg" }
+    });
+  });
+
+  it("names no mismatch when the signature and the extension agree", () => {
+    const result = mimeTypeOfFile("/refs/akari.jpeg", JPEG);
+    expect(result).toEqual({ mimeType: "image/jpeg" });
+    expect(result).not.toHaveProperty("mismatch");
+  });
+
+  it("keeps the extension map for bytes with no image signature", () => {
+    expect(mimeTypeOfFile("/voice/line.mp3", new Uint8Array([0x49, 0x44, 0x33]))).toEqual({
+      mimeType: "audio/mpeg"
+    });
   });
 });
 

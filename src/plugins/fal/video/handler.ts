@@ -125,6 +125,27 @@ function requireEndFrameSupport(
 }
 
 /**
+ * Refuses a draft render, before any upload or call. fal has no draft mode;
+ * only ark renders a Seedance 2.5 draft into a final clip.
+ *
+ * @param request - The video request; its draft may still be an unresolved `$ref`.
+ * @returns {void} Nothing; a request without a draft passes.
+ * @throws {Error} A plain (terminal) two-line error naming provider ark.
+ * @example
+ * ```ts
+ * refuseDraft({ model: "seedance-2.5", prompt: "", fromDraft: { $ref: "s01.draft" } });
+ * // throws: '[ai] fal takes no draft render (input.fromDraft).\n  Use provider ark with a Seedance 2.5 draft.'
+ * ```
+ */
+function refuseDraft(request: Pick<EstimateRequest, "fromDraft">): void {
+  if (request.fromDraft === undefined) return;
+
+  throw new Error(
+    "[ai] fal takes no draft render (input.fromDraft).\n  Use provider ark with a Seedance 2.5 draft."
+  );
+}
+
+/**
  * Refuses a registered asset as the first frame, the end frame or a ref,
  * before any upload. fal takes image URLs only; an asset's bytes are its
  * record's JSON, which fal would reject late as a broken image.
@@ -303,6 +324,7 @@ async function submitVideo(
   signal: AbortSignal | undefined
 ): Promise<{ jobId: string }> {
   // Refuse what the model cannot take and read the key, before any upload.
+  refuseDraft(request);
   const model = resolveFalModel(request.model);
   rejectAssetReferences(request);
   const image = requireImage(model, request);
@@ -482,8 +504,8 @@ async function pollJob(
 
 /**
  * Creates the fal video handler registered under `("video", "fal")`.
- * `estimate` touches no network: it refuses an end frame the model cannot
- * take, with the same error as `submit`, then prices the request. `submit`
+ * `estimate` touches no network: it refuses a draft render and an end frame
+ * the model cannot take, with the same errors as `submit`, then prices the request. `submit`
  * uploads the inputs and queues the job; an abort stops the uploads, but once
  * the queue POST is sent it runs to the end, so a billed job always returns
  * its id. With `config.requestLog` set, each queue POST writes one JSONL line.
@@ -495,6 +517,7 @@ export function createVideoHandler(ctx: FalContext): FalVideoHandler {
   const requestLog = createRequestLog(ctx);
   return {
     estimate: (request: EstimateRequest): { usd: number } => {
+      refuseDraft(request);
       requireEndFrameSupport(resolveFalModel(request.model), request);
       return { usd: videoCostUsd(ctx, request) };
     },

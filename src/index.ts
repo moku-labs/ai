@@ -13,7 +13,7 @@
  * |---|---|---|
  * | journal (core) | `path` · `checkpointIntervalMs` · `busyTimeoutMs` | `".moku/journal.db"` · `30_000` · `5000` |
  * | store (core) | `dir` · `algo` | `".moku/store"` · `"sha256"` |
- * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 } }`. A `lanes` override replaces the whole map: repeat this lane. |
+ * | limits (core) | `defaults` · `lanes` | `{ rpm: 60, concurrency: 4, breakerThreshold: 5, breakerCooldownMs: 30_000 }` · `{ "video/apimodels": { concurrency: 2, rpm: 20 }, "video/ark": { concurrency: 3, rpm: 180 } }`. A `lanes` override replaces the whole map: repeat these lanes. |
  * | registry | — | — |
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
  * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
@@ -30,7 +30,7 @@
  * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` · `runUrl` · `imageDefaultModel` · `llmDefaultModel` · `pollIntervalMs` · `jobTimeoutMs` · `requestLog` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` · `"https://fal.run"` · `"gpt-image-2.5"` · `"anthropic/claude-opus-5.5"` · `2000` · `900_000` · `""` (off) |
  * | apimodels | `apiKeyEnv` · `baseUrl` · `assetGroup` · `timeoutMs` · `priceOverrides` | `"APIMODELS_API_KEY"` · `"https://api.apimodels.app/v1"` · `"moku-ai"` · `60_000` · `{}` |
- * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `{}` · `7.1` |
+ * | ark | `region` · `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` · `baseUrl` · `controlUrl` · `groupId` · `groupName` · `timeoutMs` · `downloadTimeoutMs` · `priceOverrides` · `cnyPerUsd` | `"intl"` · `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` · `null` · `null` · `null` · `"moku-ai"` · `60_000` · `300_000` · `{}` · `7.1` |
  * | compose | `provider` · `maxRepairAttempts` | `"openai"` · `2` |
  * | cli | `plain` | `false` (auto on when not a TTY or `NO_COLOR`) |
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
@@ -107,7 +107,14 @@ const framework = createCore(coreConfig, {
     // the process environment first, then `.env.local` in the working directory.
     env: { providers: [processEnv(), dotenv(".env.local")] },
     // apimodels.app documents no rate limits: a conservative lane until real limits are known.
-    limits: { lanes: { "video/apimodels": { concurrency: 2, rpm: 20 } } }
+    // BytePlus individual accounts allow 3 concurrent Seedance 2.x tasks and 180 RPM (enterprise: 10 / 600).
+    // Source: docs.byteplus.com/en/docs/modelark/seedance-2-0 (rate limits).
+    limits: {
+      lanes: {
+        "video/apimodels": { concurrency: 2, rpm: 20 },
+        "video/ark": { concurrency: 3, rpm: 180 }
+      }
+    }
   }
 });
 

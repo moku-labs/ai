@@ -1,7 +1,8 @@
 /**
  * @file runner planning — glob → item intents + canonical keys.
  * Resolves each build item's provider and handler (for cost estimation),
- * orders items by their `$ref` edges, hashes `$file` inputs, computes the
+ * orders items by their `$ref` edges, hashes `$file` inputs (an image's MIME
+ * comes from its first bytes), computes the
  * planning key and the artifact key, and pairs the resulting `ItemIntent`
  * with the in-memory request (the flat task request — never journaled).
  */
@@ -13,7 +14,7 @@ import type { ItemIntent } from "../journal/types";
 import { registryPlugin } from "../registry";
 import { canonicalJson, sha256Hex } from "./keys";
 import { resolveHandler } from "./pipeline";
-import { mimeTypeOfPath } from "./resolve";
+import { mimeTypeOfFile } from "./resolve";
 import type { HandlerRequest, PlannedItem, ResolvedFile, RunnerContext } from "./types";
 
 // eslint-disable-next-line unicorn/no-null -- ItemIntent.packVersion is typed `string | null`, matching the nullable SQL column (mirrors journal's SQL_NULL sentinel)
@@ -131,9 +132,28 @@ function buildDirectoryOf(build: CompiledBuild): string {
 }
 
 /**
- * Reads and hashes every `$file` of one item. Hashes are cached per absolute
- * path so a reference sheet used by twenty items is read once.
+ * Mime type of a `$file` from the bytes the planner already read: an image
+ * signature wins over the extension. A disagreement logs
+ * `runner:mime:mismatch` (`{ path, extension, detected }`); the caller reads
+ * each file once per plan, so it is logged once per file.
  *
+ * @param ctx - Runner domain context.
+ * @param absolute - The file's absolute path.
+ * @param bytes - The file's bytes.
+ * @returns The mime type.
+ */
+function fileMimeType(ctx: RunnerContext, absolute: string, bytes: Uint8Array): string {
+  const { mimeType, mismatch } = mimeTypeOfFile(absolute, bytes);
+  if (mismatch) ctx.log.warn("runner:mime:mismatch", { path: absolute, ...mismatch });
+  return mimeType;
+}
+
+/**
+ * Reads and hashes every `$file` of one item, and takes an image's mime type
+ * from the same bytes. Files are cached per absolute path so a reference
+ * sheet used by twenty items is read once.
+ *
+ * @param ctx - Runner domain context.
  * @param item - The build item.
  * @param buildDirectory - Directory relative paths resolve against.
  * @param cache - Resolved files by absolute path, shared across the plan.
@@ -143,10 +163,11 @@ function buildDirectoryOf(build: CompiledBuild): string {
  * @throws {Error} When a `$file` does not exist.
  * @example
  * ```ts
- * const files = await resolveItemFiles(item, dir, cache, "e01.s01", "e01.moku.yaml");
+ * const files = await resolveItemFiles(ctx, item, dir, cache, "e01.s01", "e01.moku.yaml");
  * ```
  */
 async function resolveItemFiles(
+  ctx: RunnerContext,
   item: BuildItem,
   buildDirectory: string,
   cache: Map<string, ResolvedFile>,
@@ -170,7 +191,7 @@ async function resolveItemFiles(
     });
     const resolved: ResolvedFile = {
       path: absolute,
-      mimeType: mimeTypeOfPath(absolute),
+      mimeType: fileMimeType(ctx, absolute, bytes),
       hash: sha256Hex(bytes)
     };
     cache.set(absolute, resolved);
@@ -254,7 +275,7 @@ async function planBuild(
     const provider = resolveProvider(ctx, build, item);
     const packVersion = item.pack?.version ?? NO_PACK_VERSION;
     const params = item.params ?? {};
-    const files = await resolveItemFiles(item, buildDirectory, fileCache, label, build.file);
+    const files = await resolveItemFiles(ctx, item, buildDirectory, fileCache, label, build.file);
 
     // Keys: references are replaced by their target's key (or the file hash).
     const planningInput = keyedInput(item.input, id => keysById.get(id)?.planningKey, files);
