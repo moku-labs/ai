@@ -31,8 +31,8 @@ export class RetryableProviderError extends Error {
 }
 
 /**
- * Terminal failure: CLI not startable, non-zero exit, no image written, or
- * no (valid) prompt-gen answer. Has no
+ * Terminal failure: CLI present but not startable, non-zero exit not caused
+ * by auth or limits, no image written, or no (valid) prompt-gen answer. Has no
  * `kind` and no `status`, so the runner buckets it as "unknown" (terminal,
  * never retried).
  */

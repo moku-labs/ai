@@ -86,11 +86,11 @@ codex exec [-m <model>] -c model_reasoning_effort="<effort>" --sandbox read-only
   `z.toJSONSchema` makes: `propertyNames`, record maps, optional keys, `$schema`.
 - The answer is `last-message.txt`, trimmed.
 - `estimate()` validates the params and returns `{ usd: 0 }`.
-- `meta` is `{ provider: "codex", model?, modelRequested?, reasoningEffort, ignored? }`.
+- `meta` is `Codex.CodexPromptMeta`: `{ provider: "codex", model?, modelRequested?, effort, ignored? }`. `effort` is the key claude uses too.
 
 ```ts
 await app.promptGen.generate({ prompt: "Say ok", system: "Be terse." }, { provider: "codex" });
-// => { text: "ok", costUsd: 0, meta: { provider: "codex", reasoningEffort: "low" } }
+// => { text: "ok", costUsd: 0, meta: { provider: "codex", effort: "low" } }
 ```
 
 ### Params

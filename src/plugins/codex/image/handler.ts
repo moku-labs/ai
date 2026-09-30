@@ -110,7 +110,8 @@ export function createImageHandler(ctx: CodexContext): ImageHandler {
      * @param opts - Execution options.
      * @param opts.signal - Abort signal; aborting kills codex and rethrows its reason.
      * @returns The generated image, its MIME type, price and meta.
-     * @throws {TerminalProviderError} CLI missing, non-zero exit, or no image.
+     * @throws {PromptGenUnavailableError} CLI missing ("missing"), not logged in ("auth") or out of plan or rate limit ("limit"); the runner treats it as terminal.
+     * @throws {TerminalProviderError} Any other non-zero exit, or no image written.
      * @throws {RetryableProviderError} With kind "timeout" after `timeoutMs`.
      */
     async execute(request: ImageRequest, opts: { signal?: AbortSignal }): Promise<ImageResult> {

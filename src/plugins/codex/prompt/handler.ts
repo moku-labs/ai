@@ -14,7 +14,7 @@ import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
 import { BY_HAND } from "../message";
-import type { CodexContext } from "../types";
+import type { CodexContext, CodexPromptMeta } from "../types";
 import { createCallDirectory } from "../workdir";
 import { parseSchemaAnswer, schemaBlock } from "./answer";
 import { mapModel } from "./model";
@@ -29,15 +29,6 @@ type PromptPlan = {
   model: string | undefined;
   /** Validated params. */
   params: PromptParameters;
-};
-
-/** `meta` of every codex prompt-gen result. */
-type CodexPromptMeta = {
-  provider: "codex";
-  model?: string;
-  modelRequested?: string;
-  reasoningEffort: string;
-  ignored?: string[];
 };
 
 /**
@@ -148,7 +139,7 @@ async function answerIn(
  * @returns The meta object.
  * @example
  * ```ts
- * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params: { images: [], schema: undefined, reasoningEffort: "low", ignored: [] } }); // => { provider: "codex", reasoningEffort: "low" }
+ * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params: { images: [], schema: undefined, reasoningEffort: "low", ignored: [] } }); // => { provider: "codex", effort: "low" }
  * ```
  */
 function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
@@ -156,7 +147,7 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
     provider: "codex",
     ...(plan.model === undefined ? {} : { model: plan.model }),
     ...(request.model === undefined ? {} : { modelRequested: request.model }),
-    reasoningEffort: plan.params.reasoningEffort,
+    effort: plan.params.reasoningEffort,
     ...(plan.params.ignored.length === 0 ? {} : { ignored: plan.params.ignored })
   };
 }
