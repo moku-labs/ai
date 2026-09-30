@@ -50,7 +50,7 @@ export type ImageBodyInput = {
   imageUrls: readonly string[];
   /** `params.quality` when it is a string (gpt-image only). */
   quality: string | undefined;
-  /** `params.output_format` when it is a string (gpt-image only; the others keep their own). */
+  /** `params.output_format` when it is a string: gpt-image maps it, nano keeps png, seedream gets it as a pass-through param. */
   outputFormat: string | undefined;
 };
 

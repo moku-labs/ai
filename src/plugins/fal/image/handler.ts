@@ -30,7 +30,7 @@ import {
   promptWithNegative,
   resolveImageModel
 } from "./models";
-import { imagePriceOf, imageQualityFactor } from "./prices";
+import { imageCostUsd } from "./prices";
 
 /**
  * One poll of an image job. The image contract has no job form, so it is declared here.
@@ -102,9 +102,6 @@ const MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
 /** Status of a request refused before any upload or charge. */
 const BAD_REQUEST = 400;
 
-/** Micro-dollars per dollar: prices are rounded to whole micro-dollars. */
-const MICROS = 1_000_000;
-
 /**
  * A param value when it is a string, else undefined.
  *
@@ -146,10 +143,9 @@ export function planImage(ctx: FalContext, request: ImageRequest): ImagePlan {
   const aspect = request.aspect ?? DEFAULT_IMAGE_ASPECT;
   checkImageAspect(model, aspect, resolution);
 
-  // GPT Image costs more at xhigh and max; rounded to whole micro-dollars.
-  const tablePrice = imagePriceOf(resolvePrices(ctx), model.alias, resolution);
-  const factor = imageQualityFactor(model.alias, stringParameter(request.params?.quality));
-  const costUsd = Math.round(tablePrice * factor * MICROS) / MICROS;
+  // GPT Image costs more at xhigh and max.
+  const quality = stringParameter(request.params?.quality);
+  const costUsd = imageCostUsd(resolvePrices(ctx), model.alias, resolution, quality);
   return { model, aspect, resolution, refCount, costUsd };
 }
 

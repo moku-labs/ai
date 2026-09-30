@@ -342,12 +342,12 @@ other tasks' keys carry the task:
 | `image:seedream-4.5-edit` | 0.04 | per image |
 | `image:gpt-image-2.5` | 0.05 | per image |
 | `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |
-
-GPT Image prices are the `high` quality price. `params.quality` `xhigh` multiplies the row by 1.78, `max` by 4,
-the same ratio at every size in fal's table. Lower qualities keep the `high` price as an upper bound.
 | `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
 | `music:stable-audio-2.5` | 0.20 | per generation |
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
+
+GPT Image prices are the `high` quality price. `params.quality` `xhigh` multiplies the row by 1.78, `max` by 4,
+the same ratio at every size in fal's table. Lower qualities keep the `high` price as an upper bound.
 
 Image lookup: `image:<alias>@<resolution>` when a resolution is planned, then `image:<alias>`. A missing price is
 a terminal error before any upload or charge:

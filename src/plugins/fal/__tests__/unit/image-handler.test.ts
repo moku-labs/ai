@@ -88,6 +88,34 @@ describe("estimate", () => {
     expect(handler.estimate({ prompt: "p", params: { quality } })).toEqual({ usd });
   });
 
+  it("prices gpt-image-2.5 at 2K and quality xhigh from the 2K row", () => {
+    const handler = createImageHandler(createTestCtx());
+
+    expect(
+      handler.estimate({ prompt: "p", params: { quality: "xhigh", resolution: "2K" } })
+    ).toEqual({
+      usd: 0.1068
+    });
+  });
+
+  it("keeps other models at their price whatever the quality", () => {
+    const handler = createImageHandler(createTestCtx());
+
+    expect(
+      handler.estimate({ prompt: "p", model: "nano-banana-pro", params: { quality: "max" } })
+    ).toEqual({ usd: 0.15 });
+  });
+
+  it.each([
+    "constructor",
+    "__proto__",
+    "toString"
+  ])("keeps the high price for the prototype key %s, never NaN", quality => {
+    const handler = createImageHandler(createTestCtx());
+
+    expect(handler.estimate({ prompt: "p", params: { quality } })).toEqual({ usd: 0.05 });
+  });
+
   it("prices nano-banana-pro by resolution", () => {
     const handler = createImageHandler(createTestCtx());
     expect(handler.estimate({ prompt: "p", model: "nano-banana-pro" })).toEqual({ usd: 0.15 });
