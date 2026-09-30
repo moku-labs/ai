@@ -2,19 +2,19 @@
  * @file codex CLI boundary — builds the `codex exec` argv (image and
  * prompt-gen), runs the process with stdin closed, and turns its outcome into
  * the plugin's error classes: missing binary, not logged in and plan or rate
- * limit become `PromptGenUnavailableError`. The only file that spawns anything.
+ * limit become `PromptGenUnavailableError`. An `ERROR: {…}` API error in the
+ * output gives the message. The only file that spawns anything.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { z } from "zod";
 import { PromptGenUnavailableError } from "../promptGen/contract";
 import { RetryableProviderError, TerminalProviderError } from "./errors";
+import { BY_HAND, withoutPeriod } from "./message";
 
 /** File codex writes its final answer to (`-o`), inside the call dir. */
 export const LAST_MESSAGE_FILE = "last-message.txt";
-
-/** File the prompt-gen handler writes `params.responseSchema` to, inside the call dir. */
-export const SCHEMA_FILE = "schema.json";
 
 /** Inputs for {@link buildCodexArguments}. */
 export type CodexArgumentsOptions = {
@@ -36,12 +36,10 @@ export type CodexPromptArgumentsOptions = {
   model: string | undefined;
   /** Reasoning effort, passed as a TOML string override. */
   reasoningEffort: string;
-  /** Per-call working directory (`-C`); holds the answer, schema and images. */
+  /** Per-call working directory (`-C`); holds the answer and images. */
   dir: string;
   /** Absolute paths of the images to attach. */
   imagePaths: string[];
-  /** True when `<dir>/schema.json` was written and codex must follow it. */
-  hasSchema: boolean;
   /** Full prompt text, system text already prepended. */
   prompt: string;
 };
@@ -62,8 +60,8 @@ export type RunCodexOptions = {
   killGraceMs?: number;
 };
 
-/** How many trailing stderr characters are kept for error messages. */
-const STDERR_TAIL_CHARS = 4096;
+/** How many trailing stderr and stdout characters are kept for error messages. */
+const OUTPUT_TAIL_CHARS = 4096;
 
 /** How long a killed process gets to exit after SIGTERM before SIGKILL, ms. */
 const KILL_GRACE_MS = 5000;
@@ -73,6 +71,45 @@ const AUTH_PATTERN = /401 Unauthorized|not logged in|codex login/i;
 
 /** stderr that means the ChatGPT plan or the API rate limit is used up. */
 const LIMIT_PATTERN = /usage limit|rate limit|\b429\b|too many requests/i;
+
+/** HTTP statuses of an auth failure. */
+const AUTH_STATUSES: ReadonlySet<number> = new Set([401, 403]);
+
+/** HTTP status of a rate limit. */
+const LIMIT_STATUS = 429;
+
+/** Where codex prints an API error as JSON: `ERROR: {` on stderr. */
+const API_ERROR_MARKER = "ERROR: {";
+
+/** Longest detail kept in an exit error: an API message, or the last stderr line. */
+const ERROR_EXCERPT_CHARS = 300;
+
+/** Message per unavailable reason; two lines, never the prompt. */
+const UNAVAILABLE_MESSAGES = {
+  auth: "[ai] Codex CLI is not logged in.\n  Run codex login, or use another provider.",
+  limit:
+    "[ai] Codex CLI hit its plan or rate limit.\n  Wait for the reset, or use another provider."
+} as const;
+
+/** The fields of a codex API error this plugin reads; the rest is ignored. */
+const apiErrorSchema = z.object({
+  error: z.object({ message: z.string() }),
+  status: z.number().optional()
+});
+
+/** A codex API error, as read. */
+type ApiError = z.infer<typeof apiErrorSchema>;
+
+/** Why a provider cannot serve now. */
+type UnavailableReason = "auth" | "limit";
+
+/** What a finished process printed: the kept tails of stderr and stdout. */
+type CapturedOutput = {
+  /** Captured stderr tail. */
+  stderr: string;
+  /** Captured stdout tail. */
+  stdout: string;
+};
 
 /**
  * Builds the `codex exec` argv. `--` always precedes the prompt, because
@@ -108,21 +145,20 @@ export function buildCodexArguments(options: CodexArgumentsOptions): string[] {
 
 /**
  * Builds the prompt-gen `codex exec` argv: read-only sandbox, optional
- * model, optional `--output-schema`, one `--image` per image. `--` always
- * precedes the prompt, because `--image` is greedy.
+ * model, one `--image` per image. Never `--output-schema`: codex sends it as
+ * an OpenAI strict schema, which rejects most zod-made schemas, so the
+ * schema travels in the prompt. `--` always precedes the prompt, because
+ * `--image` is greedy.
  *
- * @param options - Model, effort, dir, image paths, schema flag and prompt.
+ * @param options - Model, effort, dir, image paths and prompt.
  * @returns The argv, without the executable.
  * @example
  * ```ts
- * buildCodexPromptArguments({ model: undefined, reasoningEffort: "low", dir: "/d", imagePaths: [], hasSchema: false, prompt: "Say ok" }).slice(0, 5); // => ["exec", "-c", 'model_reasoning_effort="low"', "--sandbox", "read-only"]
+ * buildCodexPromptArguments({ model: undefined, reasoningEffort: "low", dir: "/d", imagePaths: [], prompt: "Say ok" }).slice(0, 5); // => ["exec", "-c", 'model_reasoning_effort="low"', "--sandbox", "read-only"]
  * ```
  */
 export function buildCodexPromptArguments(options: CodexPromptArgumentsOptions): string[] {
   const modelArguments = options.model === undefined ? [] : ["-m", options.model];
-  const schemaArguments = options.hasSchema
-    ? ["--output-schema", path.join(options.dir, SCHEMA_FILE)]
-    : [];
   const imageArguments = options.imagePaths.flatMap(imagePath => ["--image", imagePath]);
 
   return [
@@ -137,7 +173,6 @@ export function buildCodexPromptArguments(options: CodexPromptArgumentsOptions):
     options.dir,
     "-o",
     path.join(options.dir, LAST_MESSAGE_FILE),
-    ...schemaArguments,
     ...imageArguments,
     "--",
     options.prompt
@@ -180,43 +215,104 @@ function lastLineOf(stderr: string): string {
 }
 
 /**
- * Error for a process that ended without success. A stderr tail that says
- * "not logged in" or "limit reached" makes the provider unavailable, so
- * promptGen can fall back; anything else is terminal.
+ * The API error codex printed, if any: the JSON from the last `ERROR: {` to
+ * the last `}`, or the whole text when it is one JSON error (stdout).
+ *
+ * @param text - Captured stderr or stdout tail.
+ * @returns The parsed API error, or undefined when there is none.
+ * @example
+ * ```ts
+ * apiErrorOf('ERROR: {"error":{"message":"bad schema"},"status":400}\ndone')?.status; // => 400
+ * ```
+ */
+function apiErrorOf(text: string): ApiError | undefined {
+  // Cut the JSON out: keep the "{" after the marker, drop any line after the last "}"
+  const marker = text.lastIndexOf(API_ERROR_MARKER);
+  const start = marker === -1 ? 0 : marker + API_ERROR_MARKER.length - 1;
+  const json = text.slice(start, text.lastIndexOf("}") + 1);
+
+  // Parse, then keep only the fields this plugin reads
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  const parsed = apiErrorSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The unavailable reason some output text shows, if any.
+ *
+ * @param text - A stderr tail, or an API error message.
+ * @returns "auth", "limit", or undefined.
+ * @example
+ * ```ts
+ * reasonOfText("stream error: Rate limit reached"); // => "limit"
+ * ```
+ */
+function reasonOfText(text: string): UnavailableReason | undefined {
+  if (AUTH_PATTERN.test(text)) return "auth";
+  if (LIMIT_PATTERN.test(text)) return "limit";
+  return undefined;
+}
+
+/**
+ * The unavailable reason of an API error, if any. A status decides alone:
+ * 401/403 is "auth", 429 is "limit", any other status, a 400
+ * `invalid_json_schema` included, is an ordinary failure. Only an error
+ * without a status is read by its wording.
+ *
+ * @param apiError - The parsed API error.
+ * @returns "auth", "limit", or undefined.
+ * @example
+ * ```ts
+ * apiReason({ error: { message: "maximum is 429" }, status: 400 }); // => undefined
+ * ```
+ */
+function apiReason(apiError: ApiError): UnavailableReason | undefined {
+  const { status } = apiError;
+  if (status === undefined) return reasonOfText(apiError.error.message);
+  if (AUTH_STATUSES.has(status)) return "auth";
+  return status === LIMIT_STATUS ? "limit" : undefined;
+}
+
+/**
+ * Error for a process that ended without success. An API error in stderr
+ * or stdout decides by its status and gives its message. Without one, a
+ * stderr tail that says "not logged in" or "limit reached" makes the
+ * provider unavailable, so promptGen can fall back, and the last stderr
+ * line is the detail. Anything else is terminal. The detail is capped, as
+ * codex echoes the prompt, schema included, to stderr.
  *
  * @param code - Exit code, or null when killed by a signal.
  * @param exitSignal - Terminating signal name, when any.
- * @param stderr - Captured stderr tail.
+ * @param output - Captured stderr and stdout tails.
  * @returns The unavailable or terminal error to throw.
  * @example
  * ```ts
- * exitError(1, null, "boom").message; // => "[ai] Codex exited with code 1: boom.\n  Run the same ..."
+ * exitError(1, null, { stderr: "boom", stdout: "" }).message.startsWith("[ai] Codex exited with code 1: boom.\n"); // => true
  * ```
  */
 function exitError(
   code: number | null,
   exitSignal: NodeJS.Signals | null,
-  stderr: string
+  output: CapturedOutput
 ): TerminalProviderError | PromptGenUnavailableError {
-  if (AUTH_PATTERN.test(stderr)) {
-    return new PromptGenUnavailableError(
-      "[ai] Codex CLI is not logged in.\n  Run codex login, or use another provider.",
-      "auth"
-    );
-  }
-  if (LIMIT_PATTERN.test(stderr)) {
-    return new PromptGenUnavailableError(
-      "[ai] Codex CLI hit its plan or rate limit.\n  Wait for the reset, or use another provider.",
-      "limit"
-    );
-  }
+  // An API error decides by its own status; without one, the stderr wording decides
+  const apiError = apiErrorOf(output.stderr) ?? apiErrorOf(output.stdout);
+  const reason = apiError === undefined ? reasonOfText(output.stderr) : apiReason(apiError);
+  if (reason !== undefined)
+    return new PromptGenUnavailableError(UNAVAILABLE_MESSAGES[reason], reason);
 
+  // Otherwise terminal, with the API message or the last stderr line, capped
   const how = code === null ? `signal ${exitSignal ?? "unknown"}` : `code ${code}`;
-  const lastLine = lastLineOf(stderr).replace(/\.$/, "");
-  const detail = lastLine === "" ? "" : `: ${lastLine}`;
-  return new TerminalProviderError(
-    `[ai] Codex exited with ${how}${detail}.\n  Run the same codex exec by hand to see the full output.`
-  );
+  const message = (apiError?.error.message ?? lastLineOf(output.stderr))
+    .trim()
+    .slice(0, ERROR_EXCERPT_CHARS);
+  const detail = message === "" ? "" : `: ${withoutPeriod(message)}`;
+  return new TerminalProviderError(`[ai] Codex exited with ${how}${detail}.\n  ${BY_HAND}`);
 }
 
 /**
@@ -271,6 +367,7 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
       stdio: ["ignore", "pipe", "pipe"]
     });
     let stderr = "";
+    let stdout = "";
     let killedFor: "timeout" | "abort" | undefined;
     let settled = false;
 
@@ -310,9 +407,11 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
     };
 
     // Wire stream and exit events
-    child.stdout.resume();
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = (stdout + chunk.toString("utf8")).slice(-OUTPUT_TAIL_CHARS);
+    });
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString("utf8")).slice(-STDERR_TAIL_CHARS);
+      stderr = (stderr + chunk.toString("utf8")).slice(-OUTPUT_TAIL_CHARS);
     });
 
     child.on("error", error => settle(spawnError(error, options.bin)));
@@ -331,7 +430,7 @@ export function runCodex(options: RunCodexOptions): Promise<void> {
       }
     });
     child.on("close", (code, exitSignal) => {
-      settle(code === 0 ? undefined : exitError(code, exitSignal, stderr));
+      settle(code === 0 ? undefined : exitError(code, exitSignal, { stderr, stdout }));
     });
   });
 }

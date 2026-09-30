@@ -3,20 +3,37 @@
  * `params.responseSchema` and `params.reasoning`. A bad shape throws a
  * pinned two-line error before anything is spawned.
  */
+import type { ZodType } from "zod";
+import { z } from "zod";
 import type { ImageFile } from "../../image/contract";
 import type { PromptGenRequest } from "../../promptGen/contract";
+
+/** A response schema: its prompt text and the validator built from it. */
+export type AnswerSchema = {
+  /** The schema as compact JSON, appended to the prompt. */
+  text: string;
+  /** Zod validator built with `z.fromJSONSchema`. */
+  validator: ZodType;
+};
 
 /** Everything the prompt-gen handler reads from a request besides prompt, system and model. */
 export type PromptParameters = {
   /** Images to attach, in order. */
   images: ImageFile[];
-  /** `params.responseSchema` as JSON text, or undefined when no schema is set. */
-  schemaText: string | undefined;
+  /** `params.responseSchema` as prompt text and validator, or undefined when no schema is set. */
+  schema: AnswerSchema | undefined;
   /** Effort for `-c model_reasoning_effort`. */
   reasoningEffort: string;
   /** Request fields codex cannot honour, e.g. ["temperature"]. */
   ignored: string[];
 };
+
+/** A JSON-schema object as `z.fromJSONSchema` accepts it. */
+type JsonSchemaObject = z.core.JSONSchema.JSONSchema;
+
+/** Thrown for a bad `params.responseSchema`. */
+const SCHEMA_ERROR =
+  "[ai] Codex params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object.";
 
 /** Efforts codex accepts; `off` is mapped to `low` before this check. */
 const REASONING_EFFORTS: ReadonlySet<string> = new Set(["low", "medium", "high"]);
@@ -64,26 +81,41 @@ export function readImages(value: unknown): ImageFile[] {
 }
 
 /**
- * Reads `params.responseSchema` as the JSON text codex gets in `schema.json`.
+ * Whether `value` is a plain object (not null, not an array).
  *
- * @param value - The raw `params.responseSchema` value.
- * @returns The schema as JSON text; undefined when the param is absent.
- * @throws {Error} When the value is not a plain object.
+ * @param value - Any param value.
+ * @returns True for a plain object.
  * @example
  * ```ts
- * readResponseSchema({ type: "object" }); // => '{"type":"object"}'
+ * isSchemaObject({ type: "object" }); // => true
  * ```
  */
-export function readResponseSchema(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
+function isSchemaObject(value: unknown): value is JsonSchemaObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-  const isPlainObject = typeof value === "object" && value !== null && !Array.isArray(value);
-  if (!isPlainObject) {
-    throw new Error(
-      "[ai] Codex params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object."
-    );
+/**
+ * Reads `params.responseSchema` as the text codex gets in its prompt and the
+ * validator its answer must pass. The text is compact JSON: the prompt is one
+ * argv entry, and Linux caps one entry at 128 KiB.
+ *
+ * @param value - The raw `params.responseSchema` value.
+ * @returns The schema text and validator; undefined when the param is absent.
+ * @throws {Error} When the value is not a plain object, or zod cannot read it as a JSON schema.
+ * @example
+ * ```ts
+ * readResponseSchema({ type: "number" })?.text; // => '{"type":"number"}'
+ * ```
+ */
+export function readResponseSchema(value: unknown): AnswerSchema | undefined {
+  if (value === undefined) return undefined;
+  if (!isSchemaObject(value)) throw new Error(SCHEMA_ERROR);
+
+  try {
+    return { text: JSON.stringify(value), validator: z.fromJSONSchema(value) };
+  } catch {
+    throw new Error(SCHEMA_ERROR);
   }
-  return JSON.stringify(value);
 }
 
 /**
@@ -128,7 +160,7 @@ export function readPromptParameters(
 
   return {
     images: readImages(params.images),
-    schemaText: readResponseSchema(params.responseSchema),
+    schema: readResponseSchema(params.responseSchema),
     reasoningEffort: readReasoning(params.reasoning, defaultEffort),
     ignored: request.temperature === undefined ? [] : ["temperature"]
   };

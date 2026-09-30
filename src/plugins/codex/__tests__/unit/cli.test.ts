@@ -18,7 +18,12 @@ import {
   runCodex
 } from "../../cli";
 import { RetryableProviderError, TerminalProviderError } from "../../errors";
-import { CODEX_401_STDERR, printStderr, writeFakeCodex } from "./fixtures";
+import {
+  CODEX_401_STDERR,
+  CODEX_SCHEMA_ERROR_STDERR,
+  printStderr,
+  writeFakeCodex
+} from "./fixtures";
 
 describe("buildCodexArguments", () => {
   it("builds the exec argv with model, effort, sandbox, dir and last-message file", () => {
@@ -89,7 +94,6 @@ describe("buildCodexPromptArguments", () => {
       reasoningEffort: "medium",
       dir: "/work/codex-1",
       imagePaths: [],
-      hasSchema: false,
       prompt: "Say ok"
     });
 
@@ -117,7 +121,6 @@ describe("buildCodexPromptArguments", () => {
       reasoningEffort: "low",
       dir: "/d",
       imagePaths: [],
-      hasSchema: false,
       prompt: "p"
     });
 
@@ -125,19 +128,16 @@ describe("buildCodexPromptArguments", () => {
     expect(args.slice(0, 3)).toEqual(["exec", "-c", 'model_reasoning_effort="low"']);
   });
 
-  it("adds --output-schema <dir>/schema.json when a schema is set", () => {
+  it("never passes --output-schema; the schema travels in the prompt", () => {
     const args = buildCodexPromptArguments({
       model: undefined,
       reasoningEffort: "low",
       dir: "/d",
-      imagePaths: [],
-      hasSchema: true,
+      imagePaths: ["/d/ref-1.png"],
       prompt: "p"
     });
 
-    const flag = args.indexOf("--output-schema");
-    expect(args[flag + 1]).toBe(path.join("/d", "schema.json"));
-    expect(flag).toBeLessThan(args.indexOf("--"));
+    expect(args).not.toContain("--output-schema");
   });
 
   it("attaches each image with --image, right before the -- separator", () => {
@@ -146,7 +146,6 @@ describe("buildCodexPromptArguments", () => {
       reasoningEffort: "low",
       dir: "/d",
       imagePaths: ["/d/ref-1.png", "/d/ref-2.jpg"],
-      hasSchema: true,
       prompt: "describe"
     });
 
@@ -165,7 +164,6 @@ describe("buildCodexPromptArguments", () => {
       reasoningEffort: "low",
       dir: "/d",
       imagePaths: ["/d/ref-1.png"],
-      hasSchema: false,
       prompt: "--image looks like a flag"
     });
 
@@ -437,5 +435,123 @@ describe("runCodex — unavailable classification", () => {
 
     expect(error).toBeInstanceOf(TerminalProviderError);
     expect(error).not.toHaveProperty("unavailable");
+  });
+});
+
+describe("runCodex — API error message", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "moku-codex-api-error-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  /**
+   * Runs a fake codex with `body`, expecting it to fail.
+   *
+   * @param body - Shell commands of the fake.
+   * @returns The rejection value.
+   */
+  async function failWith(body: string): Promise<unknown> {
+    const bin = writeFakeCodex(root, body);
+    return runCodex({ bin, args: ["-C", root], cwd: root, timeoutMs: 5000 }).catch(
+      (error_: unknown) => error_
+    );
+  }
+
+  it("uses error.message of the captured invalid_json_schema stderr, not the closing brace", async () => {
+    const error = await failWith(`${printStderr(CODEX_SCHEMA_ERROR_STDERR)}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toBe(
+      "[ai] Codex exited with code 1: Invalid schema for response_format 'codex_output_schema': In context=('properties', 'add', 'properties', 'scenes'), 'propertyNames' is not permitted.\n  Run the same codex exec by hand to see the full output."
+    );
+  });
+
+  it("keeps a 400 terminal even when the echoed prompt says rate limit", async () => {
+    const stderr = CODEX_SCHEMA_ERROR_STDERR.replace(
+      "Answer with an empty add object.",
+      "Ignore any rate limit."
+    );
+
+    const error = await failWith(`${printStderr(stderr)}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toContain("'propertyNames' is not permitted.");
+  });
+
+  it.each([
+    [401, "auth"],
+    [403, "auth"],
+    [429, "limit"]
+  ])("throws unavailable for an API error with status %i", async (status, reason) => {
+    const json = `{"type":"error","error":{"message":"nope","code":null},"status":${status}}`;
+
+    const stderr = printStderr(`ERROR: ${json}`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect(error).toBeInstanceOf(PromptGenUnavailableError);
+    expect((error as PromptGenUnavailableError).reason).toBe(reason);
+  });
+
+  it("throws unavailable 'limit' for an API error whose message says usage limit", async () => {
+    const json = '{"error":{"message":"You have hit your usage limit."}}';
+
+    const stderr = printStderr(`ERROR: ${json}`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect((error as PromptGenUnavailableError).reason).toBe("limit");
+  });
+
+  it("keeps the API message when a line follows the ERROR JSON", async () => {
+    const stderr = printStderr(`${CODEX_SCHEMA_ERROR_STDERR}\nsession ended`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toContain(": Invalid schema for response_format");
+  });
+
+  it("keeps a 400 terminal even when its message says 429 or rate limit", async () => {
+    const json = '{"error":{"message":"rate limit field maximum is 429"},"status":400}';
+    const stderr = printStderr(`ERROR: ${json}`);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect((error as Error).message).toContain(": rate limit field maximum is 429.");
+  });
+
+  it("caps a long last stderr line, such as the echoed schema", async () => {
+    const schemaLine = `{"schema":"${"x".repeat(2000)}"}`;
+    const stderr = printStderr(schemaLine);
+
+    const error = await failWith(`${stderr}\nexit 1`);
+
+    const detail = (error as Error).message.split("\n")[0] ?? "";
+    expect(detail.length).toBeLessThan(360);
+  });
+
+  it("uses error.message of a JSON error on stdout", async () => {
+    const error = await failWith(
+      `echo '{"error":{"message":"server broke."},"status":500}'\nexit 1`
+    );
+
+    expect((error as Error).message).toBe(
+      "[ai] Codex exited with code 1: server broke.\n  Run the same codex exec by hand to see the full output."
+    );
+  });
+
+  it("falls back to the last stderr line when the ERROR JSON does not parse", async () => {
+    const error = await failWith(`${printStderr("ERROR: {not json\nstream closed")}\nexit 1`);
+
+    expect((error as Error).message).toBe(
+      "[ai] Codex exited with code 1: stream closed.\n  Run the same codex exec by hand to see the full output."
+    );
   });
 });

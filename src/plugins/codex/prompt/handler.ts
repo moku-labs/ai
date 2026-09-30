@@ -1,26 +1,29 @@
 /**
  * @file codex prompt-gen handler — implements the task-owned contract
  * (`../../promptGen/contract.ts`). Each call owns a temp dir under
- * `config.workDir` (`os.tmpdir()` when it is ""): images and the schema
- * are written in, `codex exec` runs read-only there, the answer is read from
- * `last-message.txt`, and the dir is removed in `finally`. Plan-billed: every
- * result costs $0.
+ * `config.workDir` (`os.tmpdir()` when it is ""): images are copied in,
+ * `codex exec` runs read-only there, the answer is read from
+ * `last-message.txt`, and the dir is removed in `finally`. A response schema
+ * goes in the prompt and the answer is checked with zod (see `./answer.ts`).
+ * Plan-billed: every result costs $0.
  */
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
-import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex, SCHEMA_FILE } from "../cli";
+import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
+import { BY_HAND } from "../message";
 import type { CodexContext } from "../types";
 import { createCallDirectory } from "../workdir";
+import { parseSchemaAnswer, schemaBlock } from "./answer";
 import { mapModel } from "./model";
 import type { PromptParameters } from "./params";
 import { readPromptParameters } from "./params";
 
 /** What one call runs: the full prompt, the codex model and the read params. */
 type PromptPlan = {
-  /** Prompt text, system text already prepended. */
+  /** Prompt text, system text prepended and schema block appended. */
   prompt: string;
   /** Codex model, or undefined for codex's own default. */
   model: string | undefined;
@@ -39,18 +42,23 @@ type CodexPromptMeta = {
 
 /**
  * Prompt text codex receives: codex has no system flag, so the system text
- * comes first, then a blank line, then the prompt.
+ * comes first, then the prompt, then the schema block when a schema is set.
+ * Blocks are separated by a blank line.
  *
  * @param request - The prompt-gen request.
+ * @param schemaText - The schema as compact JSON, when the request has one.
  * @returns The prompt text.
  * @example
  * ```ts
- * promptTextOf({ prompt: "Say ok", system: "Be terse." }); // => "Be terse.\n\nSay ok"
+ * promptTextOf({ prompt: "Say ok", system: "Be terse." }, undefined); // => "Be terse.\n\nSay ok"
  * ```
  */
-function promptTextOf(request: PromptGenRequest): string {
+function promptTextOf(request: PromptGenRequest, schemaText: string | undefined): string {
   const hasSystem = request.system !== undefined && request.system !== "";
-  return hasSystem ? `${request.system}\n\n${request.prompt}` : request.prompt;
+  const blocks = hasSystem ? [request.system, request.prompt] : [request.prompt];
+  if (schemaText !== undefined) blocks.push(schemaBlock(schemaText));
+
+  return blocks.join("\n\n");
 }
 
 /**
@@ -65,25 +73,6 @@ function promptTextOf(request: PromptGenRequest): string {
  */
 function isMissingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
-}
-
-/**
- * Whether `text` parses as JSON.
- *
- * @param text - The answer text.
- * @returns True when `JSON.parse` accepts it.
- * @example
- * ```ts
- * isJson('{"ok":true}'); // => true
- * ```
- */
-function isJson(text: string): boolean {
-  try {
-    JSON.parse(text);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -105,9 +94,7 @@ async function readAnswer(dir: string): Promise<string> {
 
   const text = raw.trim();
   if (text === "") {
-    throw new TerminalProviderError(
-      "[ai] Codex wrote no answer.\n  Run the same codex exec by hand to see the full output."
-    );
+    throw new TerminalProviderError(`[ai] Codex wrote no answer.\n  ${BY_HAND}`);
   }
   return text;
 }
@@ -119,8 +106,8 @@ async function readAnswer(dir: string): Promise<string> {
  * @param plan - Prompt, model and params.
  * @param dir - Per-call temp dir.
  * @param signal - Caller abort signal, if any.
- * @returns The answer text.
- * @throws {TerminalProviderError} When codex writes no answer, or no JSON while a schema is set.
+ * @returns The answer text; with a schema, the validated JSON.
+ * @throws {TerminalProviderError} When codex writes no answer, or an answer off the schema.
  */
 async function answerIn(
   ctx: CodexContext,
@@ -128,10 +115,8 @@ async function answerIn(
   dir: string,
   signal: AbortSignal | undefined
 ): Promise<string> {
-  // Stage the reference images and schema in the call dir
-  const { schemaText } = plan.params;
+  // Stage the reference images in the call dir
   const imagePaths = await copyReferences(plan.params.images, dir);
-  if (schemaText !== undefined) await writeFile(path.join(dir, SCHEMA_FILE), schemaText);
 
   // Run codex read-only in the call dir
   const args = buildCodexPromptArguments({
@@ -139,7 +124,6 @@ async function answerIn(
     reasoningEffort: plan.params.reasoningEffort,
     dir,
     imagePaths,
-    hasSchema: schemaText !== undefined,
     prompt: plan.prompt
   });
   await runCodex({
@@ -150,14 +134,10 @@ async function answerIn(
     ...(signal === undefined ? {} : { signal })
   });
 
-  // Read the answer and enforce JSON when a schema is set
+  // Read the answer and check it against the schema, if any
   const text = await readAnswer(dir);
-  if (schemaText !== undefined && !isJson(text)) {
-    throw new TerminalProviderError(
-      "[ai] Codex answer is not valid JSON.\n  Check params.responseSchema; codex needs a strict schema."
-    );
-  }
-  return text;
+  const { schema } = plan.params;
+  return schema === undefined ? text : parseSchemaAnswer(text, schema.validator);
 }
 
 /**
@@ -168,7 +148,7 @@ async function answerIn(
  * @returns The meta object.
  * @example
  * ```ts
- * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params: { images: [], schemaText: undefined, reasoningEffort: "low", ignored: [] } }); // => { provider: "codex", reasoningEffort: "low" }
+ * metaOf({ prompt: "p" }, { prompt: "p", model: undefined, params: { images: [], schema: undefined, reasoningEffort: "low", ignored: [] } }); // => { provider: "codex", reasoningEffort: "low" }
  * ```
  */
 function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
@@ -188,8 +168,8 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
  * answer. Both throw `Error` when `images`, `responseSchema` or `reasoning`
  * has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
  * the CLI is missing, not logged in, or out of plan or rate limit;
- * `TerminalProviderError` on a non-zero exit, no answer, or no JSON while a
- * schema is set; `RetryableProviderError` with kind "timeout" after
+ * `TerminalProviderError` on a non-zero exit, no answer, or an answer that
+ * does not match the schema; `RetryableProviderError` with kind "timeout" after
  * `timeoutMs`; and the caller's `signal.reason`, unchanged, on abort.
  *
  * @param ctx - Plugin context (config, log).
@@ -207,10 +187,11 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
       // Validate params and map the model
+      const params = readPromptParameters(request, ctx.config.reasoningEffort);
       const plan: PromptPlan = {
-        prompt: promptTextOf(request),
+        prompt: promptTextOf(request, params.schema?.text),
         model: mapModel(ctx.config, request.model),
-        params: readPromptParameters(request, ctx.config.reasoningEffort)
+        params
       };
 
       // Run in a fresh call dir, always cleaned up
