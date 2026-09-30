@@ -172,7 +172,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
 | [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Four tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. `app.fal.models(task)` lists each task's models with prices. |
 | [`apimodels`](./src/plugins/apimodels/README.md) | Complex | regular (`app.apimodels`) | Video provider over apimodels.app: Seedance 2.5 and 2.0 official, which accept real faces; optional `asset://` registration via item `params.assets`, cached in the journal. |
-| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0 and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video and asset providers, `asset://` portraits, per-token prices. |
+| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0, 2.0 fast, 2.0 mini and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video, image (Seedream 5.0 lite) and asset providers, 2.5 draft → 1080p final, trusted Seedream faces and `asset://` portraits, per-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
@@ -316,11 +316,35 @@ const track = await app.music.generate({
 await Bun.write("teaser.mp3", track.audio);
 ```
 
-### Faces: register first, then `$ref`
+### Faces: Seedream first, or register a portrait
 
-Seedance on Ark refuses a plain photo of a real face, but takes the same face as a
-registered asset. An `asset` item registers the portrait once, in your own Ark account;
-the video items `$ref` it and Ark gets `asset://<id>` instead of the photo:
+Seedance on Ark refuses a real face in an image from outside. It trusts a face that
+Seedream 5.0 lite made on the same account, as long as the bytes are unchanged. So make
+the keyframe with ark, and `$ref` it. A Seedance 2.5 draft can then become a 1080p final:
+
+```yaml
+items:
+  - id: key-01
+    task: image
+    provider: ark
+    input: { prompt: "Vertical 9:16 photo. Close-up, Akari lifts a cake box lid", aspect: "9:16" }
+  - id: draft-01
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, prompt: "Akari lifts the lid, smiles",
+             image: { $ref: key-01 }, seconds: 5 }
+    params: { draft: true }
+  - id: final-01
+    task: video
+    provider: ark
+    input: { model: dreamina-seedance-2-5-260628, fromDraft: { $ref: draft-01 } }
+```
+
+The draft is 480p and cheap. The final re-renders that draft at 1080p, with the same
+motion, face and audio. A draft can be finalized for 7 days.
+
+For a real person, register the portrait instead. An `asset` item registers it once,
+in your own Ark account; the video items `$ref` it and Ark gets `asset://<id>`:
 
 ```yaml
 items:
