@@ -34,19 +34,21 @@ claude -p --output-format json --no-session-persistence
   --system-prompt <request.system or the default>
   --restricted --tools Read --allowedTools Read --permission-prompts none    (with images)
   --tools ""                                                    (without images)
-  [--model <mapped>] [--effort <low|medium|high>]
+  [--model <mapped>] [--effort <low|medium|high>] [--json-schema <schema>]
 ```
 
 - The default system prompt is `Answer the request directly. Output only the answer.` It replaces Claude Code's coding-agent prompt.
 - No `--bare`: it disables OAuth, so plan billing breaks.
-- No `--json-schema`: the schema goes into the prompt and the answer is validated with zod.
+- `--json-schema` carries `params.responseSchema` as compact JSON, without a top-level `$schema`. The CLI rejects
+  that key. It accepts `propertyNames`, record maps and optional keys (checked live with 2.1.280). The schema is
+  not in the prompt.
 
 ## Params
 
 | Param | Shape | Effect |
 | --- | --- | --- |
 | `params.images` | `ImageFile` or `ImageFile[]` | Copied into the call dir. The prompt lists them by relative path, to be read with the Read tool. |
-| `params.responseSchema` | plain JSON-schema object | Appended to the prompt. The answer is parsed (one ```` ```json ```` fence stripped) and checked with `z.fromJSONSchema(schema)`. `text` is the validated JSON, re-stringified. |
+| `params.responseSchema` | plain JSON-schema object | Passed as `--json-schema`. The answer is `structured_output`. Without it, `result` is parsed with one ```` ```json ```` fence stripped. Either is checked with `z.fromJSONSchema(schema)`. `text` is the validated JSON, re-stringified. |
 | `params.reasoning` | `"off" \| "low" \| "medium" \| "high"` | `--effort <x>`. `off` becomes `low`. Echoed in `meta.effort`. Absent: no flag. |
 | `temperature` | number | Ignored. Listed in `meta.ignored`. |
 | any other param | | Ignored. |

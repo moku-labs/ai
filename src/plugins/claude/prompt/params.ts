@@ -9,9 +9,9 @@ import { z } from "zod";
 import type { ImageFile } from "../../image/contract";
 import type { Reasoning } from "../types";
 
-/** A response schema: its prompt text and the validator built from it. */
+/** A response schema: its `--json-schema` text and the validator built from it. */
 export type AnswerSchema = {
-  /** The schema as pretty JSON, appended to the prompt. */
+  /** The schema as compact JSON without a top-level `$schema`, passed as `--json-schema`. */
   text: string;
   /** Zod validator built with `z.fromJSONSchema`. */
   validator: ZodType;
@@ -81,22 +81,26 @@ function readImages(value: unknown): ImageFile[] {
 }
 
 /**
- * Validates `params.responseSchema` and builds its validator.
+ * Validates `params.responseSchema` and builds its validator. The flag text
+ * drops a top-level `$schema`, which `--json-schema` rejects (its validator
+ * does not know the draft URI, checked live 2026-09-30), and is compact,
+ * because it is one argv entry.
  *
  * @param value - The raw `params.responseSchema`.
- * @returns The schema text and validator; undefined when absent.
+ * @returns The flag text and validator; undefined when absent.
  * @throws {Error} When it is not a plain object, or zod cannot read it as a JSON schema.
  * @example
  * ```ts
- * readSchema({ type: "number" })?.text; // => '{\n  "type": "number"\n}'
+ * readSchema({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "number" })?.text; // => '{"type":"number"}'
  * ```
  */
 function readSchema(value: unknown): AnswerSchema | undefined {
   if (value === undefined) return value;
   if (!isSchemaObject(value)) throw new Error(SCHEMA_ERROR);
 
+  const flagSchema = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "$schema"));
   try {
-    return { text: JSON.stringify(value, undefined, 2), validator: z.fromJSONSchema(value) };
+    return { text: JSON.stringify(flagSchema), validator: z.fromJSONSchema(value) };
   } catch {
     throw new Error(SCHEMA_ERROR);
   }

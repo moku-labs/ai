@@ -21,14 +21,31 @@ describe("readParameters", () => {
     expect(readParameters({ reasoning: "off" }).reasoning).toBe("off");
   });
 
-  it("pretty-prints the schema and builds its validator", () => {
+  it("gives the schema as compact --json-schema text and builds its validator", () => {
     const schema = { type: "object", properties: { score: { type: "number" } } };
 
     const params = readParameters({ responseSchema: schema });
 
-    expect(params.schema?.text).toBe(JSON.stringify(schema, undefined, 2));
+    expect(params.schema?.text).toBe(JSON.stringify(schema));
     expect(params.schema?.validator.safeParse({ score: 1 }).success).toBe(true);
     expect(params.schema?.validator.safeParse({ score: "1" }).success).toBe(false);
+  });
+
+  it("drops a top-level $schema from the flag text, which --json-schema rejects, and keeps it for zod", () => {
+    const schema = {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      propertyNames: { pattern: "^t" },
+      additionalProperties: { type: "string" }
+    };
+
+    const params = readParameters({ responseSchema: schema });
+
+    expect(params.schema?.text).toBe(
+      '{"type":"object","propertyNames":{"pattern":"^t"},"additionalProperties":{"type":"string"}}'
+    );
+    expect(params.schema?.validator.safeParse({ t1: "a" }).success).toBe(true);
+    expect(params.schema?.validator.safeParse({ t1: 1 }).success).toBe(false);
   });
 
   it("rejects images that are not image files", () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import { TerminalProviderError } from "../../errors";
-import { parseClaudeResult, parseSchemaAnswer } from "../../prompt/result";
+import { parseClaudeResult, parseSchemaAnswer, schemaAnswerOf } from "../../prompt/result";
 import { claudeJson, NOT_LOGGED_IN_STDOUT, SUCCESS_STDOUT } from "./fixtures";
 
 const NOT_LOGGED_IN =
@@ -198,5 +198,52 @@ describe("parseSchemaAnswer", () => {
 
   it("names the root when the whole value is wrong", () => {
     expect(() => parseSchemaAnswer("[1]", validator)).toThrow(/\n {2}\(root\): /);
+  });
+});
+
+describe("parseClaudeResult — structured_output", () => {
+  it("keeps structured_output of a --json-schema run", () => {
+    const stdout = claudeJson({ result: '{"score":7}', structured_output: { score: 7 } });
+
+    expect(parseClaudeResult(run(stdout)).structured).toEqual({ score: 7 });
+  });
+
+  it("accepts a blank result when structured_output is there", () => {
+    const stdout = claudeJson({ result: "", structured_output: { score: 7 } });
+
+    expect(parseClaudeResult(run(stdout)).structured).toEqual({ score: 7 });
+  });
+
+  it("leaves structured undefined without structured_output", () => {
+    expect(parseClaudeResult(run(SUCCESS_STDOUT)).structured).toBeUndefined();
+  });
+});
+
+describe("schemaAnswerOf", () => {
+  const validator = z.fromJSONSchema({
+    type: "object",
+    properties: { score: { type: "number" } },
+    required: ["score"]
+  });
+  const base = { text: "", listCostUsd: 0, inputTokens: 0, outputTokens: 0 };
+
+  it("checks structured_output first and stringifies it compactly", () => {
+    const answer = { ...base, text: "ignored", structured: { score: 7 } };
+
+    expect(schemaAnswerOf(answer, validator)).toBe('{"score":7}');
+  });
+
+  it("throws terminal when structured_output is off-schema", () => {
+    const answer = { ...base, structured: { score: "high" } };
+
+    expect(() => schemaAnswerOf(answer, validator)).toThrow(
+      /^\[ai] Claude answer does not match params\.responseSchema\.\n {2}score: /
+    );
+  });
+
+  it("falls back to the answer text without structured_output", () => {
+    const answer = { ...base, text: '```json\n{"score":8}\n```', structured: undefined };
+
+    expect(schemaAnswerOf(answer, validator)).toBe('{"score":8}');
   });
 });

@@ -53,6 +53,13 @@ describe("buildClaudeArguments", () => {
     expect(args.slice(-4)).toEqual(["--model", "claude-opus-5-5", "--effort", "high"]);
     expect(args).not.toContain("--bare");
   });
+
+  it("adds --json-schema last when a schema is given, and leaves it out otherwise", () => {
+    const args = buildClaudeArguments({ withImages: false, jsonSchema: '{"type":"object"}' });
+
+    expect(args.slice(-2)).toEqual(["--json-schema", '{"type":"object"}']);
+    expect(buildClaudeArguments({ withImages: false })).not.toContain("--json-schema");
+  });
 });
 
 describe("isBinResolvable", () => {

@@ -21,6 +21,8 @@ export type ClaudeArgumentsOptions = {
   model?: string | undefined;
   /** Effort level; no `--effort` when absent. */
   effort?: Effort | undefined;
+  /** Response schema as JSON text for `--json-schema`; no flag when absent. */
+  jsonSchema?: string | undefined;
 };
 
 /** Inputs for {@link runClaude}. */
@@ -69,7 +71,7 @@ const READ_TOOL = "Read";
  * Builds the `claude -p` argv. The prompt is not in it: it goes on stdin.
  * Never `--bare`, which disables OAuth and so breaks plan billing.
  *
- * @param options - System prompt, images flag, model and effort.
+ * @param options - System prompt, images flag, model, effort and response schema.
  * @returns The argv, without the executable.
  * @example
  * ```ts
@@ -92,6 +94,8 @@ export function buildClaudeArguments(options: ClaudeArgumentsOptions): string[] 
     : ["--tools", ""];
   const modelArguments = options.model === undefined ? [] : ["--model", options.model];
   const effortArguments = options.effort === undefined ? [] : ["--effort", options.effort];
+  const schemaArguments =
+    options.jsonSchema === undefined ? [] : ["--json-schema", options.jsonSchema];
 
   return [
     "-p",
@@ -106,7 +110,8 @@ export function buildClaudeArguments(options: ClaudeArgumentsOptions): string[] 
     options.system ?? DEFAULT_SYSTEM,
     ...toolArguments,
     ...modelArguments,
-    ...effortArguments
+    ...effortArguments,
+    ...schemaArguments
   ];
 }
 
