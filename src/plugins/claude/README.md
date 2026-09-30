@@ -50,7 +50,7 @@ claude -p --output-format json --no-session-persistence
 | Param | Shape | Effect |
 | --- | --- | --- |
 | `params.images` | `ImageFile` or `ImageFile[]` | Copied into the call dir. The prompt lists them by relative path, to be read with the Read tool. |
-| `params.responseSchema` | plain JSON-schema object | Passed as `--json-schema`. The answer is `structured_output`. Without it, `result` is parsed with one ```` ```json ```` fence stripped. Either is checked with `z.fromJSONSchema(schema)`. `text` is the validated JSON, re-stringified. |
+| `params.responseSchema` | plain JSON-schema object | Passed as `--json-schema` when the root is `type: "object"`, else put in the prompt. The answer is `structured_output`. Without it, `result` is parsed with one ```` ```json ```` fence stripped. Either is checked with `z.fromJSONSchema(schema)`. `text` is the validated JSON, re-stringified. |
 | `params.reasoning` | `"off" \| "low" \| "medium" \| "high"` | `--effort <x>`. `off` becomes `low`. Echoed in `meta.effort`. Absent: no flag. |
 | `temperature` | number | Ignored. Listed in `meta.ignored`. |
 | any other param | | Ignored. |
