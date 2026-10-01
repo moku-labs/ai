@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImageRequest } from "../../../image/contract";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { ImageFile, ImageRequest } from "../../../image/contract";
 import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import {
   ARK_IMAGE_SIZES,
   buildImageBody,
   checkImageRequest,
   imageMimeOf,
+  readReferenceImages,
   sniffImageMime
 } from "../../image/body";
 import { createImageHandler } from "../../image/handler";
@@ -15,10 +16,12 @@ import {
   imageModelsOf,
   resolveArkImageModel
 } from "../../image/models";
+import type { TempFiles } from "../fixtures";
 import {
   bytesResponse,
   callsOf,
   createFakeEnv,
+  createTempFiles,
   createTestCtx,
   INTL_IMAGES_URL,
   jpegHeader,
@@ -26,6 +29,8 @@ import {
   jsonResponse,
   LIVE_ERROR_SEEDREAM_SIZE,
   LIVE_SEEDREAM_RESPONSE,
+  LOCAL_IMAGE_BYTES,
+  LOCAL_IMAGE_DATA_URI,
   loggedText,
   pngHeader,
   SEEDREAM_IMAGE_URL,
@@ -36,10 +41,36 @@ import {
 const PROMPT = "Vertical 9:16 photo. Close-up, Akari at the counter";
 const SEEDREAM = resolveArkImageModel(undefined, "intl");
 const JPEG = jpegHeader(1440, 2560);
+const TOO_MANY_REFS =
+  '[ai] ark image model "seedream-5-0-lite-260128" takes at most 14 reference images, got 15.\n  Remove refs from input.refs.';
+
+let temp: TempFiles;
+let face: ImageFile;
+let sketch: ImageFile;
+
+beforeAll(() => {
+  temp = createTempFiles();
+  face = temp.file("face.png", LOCAL_IMAGE_BYTES, "image/png");
+  sketch = temp.file("sketch.jpg", new Uint8Array([4, 5, 6]), "image/JPEG");
+});
+
+afterAll(() => {
+  temp.cleanup();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+/** A ref whose file does not exist. */
+function missingRef(): ImageFile {
+  return { path: `${temp.dir}/gone.png`, mimeType: "image/png", hash: "h" };
+}
+
+/** `count` copies of one unread ref (the check reads only the count). */
+function refsOf(count: number): ImageFile[] {
+  return Array.from({ length: count }, () => ({ path: "a.png", mimeType: "image/png", hash: "h" }));
+}
 
 /** A request with defaults for everything but the given fields. */
 function request(overrides: Partial<ImageRequest> = {}): ImageRequest {
@@ -64,7 +95,13 @@ async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
 describe("image catalog", () => {
   it("has Seedream 5.0 lite on intl at $0.035 with its minimum size", () => {
     expect(arkImageModels).toEqual([
-      { id: "seedream-5-0-lite-260128", region: "intl", minPixels: 3_686_400, priceUsd: 0.035 }
+      {
+        id: "seedream-5-0-lite-260128",
+        region: "intl",
+        minPixels: 3_686_400,
+        maxRefImages: 14,
+        priceUsd: 0.035
+      }
     ]);
     expect(DEFAULT_IMAGE_MODEL).toBe("seedream-5-0-lite-260128");
     expect(imageModelsOf("intl")).toEqual(["seedream-5-0-lite-260128"]);
@@ -122,11 +159,9 @@ describe("image body", () => {
     );
   });
 
-  it("refuses refs and unknown params", () => {
-    const ref = { path: "a.png", mimeType: "image/png", hash: "h" };
-    expect(() => checkImageRequest(SEEDREAM, request({ refs: [ref] }))).toThrow(
-      "[ai] ark images are text-to-image only.\n  Remove input.refs."
-    );
+  it("takes up to the model's refs, refuses more, and refuses unknown params", () => {
+    expect(checkImageRequest(SEEDREAM, request({ refs: refsOf(14) })).size).toBe("1440x2560");
+    expect(() => checkImageRequest(SEEDREAM, request({ refs: refsOf(15) }))).toThrow(TOO_MANY_REFS);
     expect(() => checkImageRequest(SEEDREAM, request({ params: { style: "anime" } }))).toThrow(
       '[ai] Unknown ark image param "style".\n  Allowed: size, seed, generation, watermark.'
     );
@@ -137,7 +172,7 @@ describe("image body", () => {
       SEEDREAM,
       request({ params: { seed: 7, watermark: true, generation: 2 } })
     );
-    expect(buildImageBody(SEEDREAM, PROMPT, checked)).toEqual({
+    expect(buildImageBody(SEEDREAM, PROMPT, checked, [])).toEqual({
       model: DEFAULT_IMAGE_MODEL,
       prompt: PROMPT,
       size: "1440x2560",
@@ -145,6 +180,42 @@ describe("image body", () => {
       watermark: true,
       seed: 7
     });
+  });
+
+  it("sends one ref as an image string and several as an array, in request order", () => {
+    const checked = checkImageRequest(SEEDREAM, request());
+    const text = buildImageBody(SEEDREAM, PROMPT, checked, []);
+    const one = buildImageBody(SEEDREAM, PROMPT, checked, ["data:image/png;base64,AQID"]);
+    const two = buildImageBody(SEEDREAM, PROMPT, checked, [
+      "data:image/png;base64,AQID",
+      "data:image/jpeg;base64,BAUG"
+    ]);
+
+    expect(text).not.toHaveProperty("image");
+    expect(one).toEqual({ ...text, image: "data:image/png;base64,AQID" });
+    expect(two).toEqual({
+      ...text,
+      image: ["data:image/png;base64,AQID", "data:image/jpeg;base64,BAUG"]
+    });
+  });
+
+  it("reads refs as data URIs with a lowercase format", async () => {
+    expect(await readReferenceImages([])).toEqual([]);
+    expect(await readReferenceImages([face, sketch])).toEqual([
+      LOCAL_IMAGE_DATA_URI,
+      "data:image/jpeg;base64,BAUG"
+    ]);
+  });
+
+  it("refuses a ref it cannot read, and an unresolved ref", async () => {
+    const missing = missingRef();
+    await expect(readReferenceImages([missing])).rejects.toThrow(
+      `[ai] Cannot read ark image ref "${missing.path}".\n  Check that the $ref or $file it came from still exists.`
+    );
+    const unresolved = { $ref: "e01.face" } as unknown as ImageFile;
+    await expect(readReferenceImages([unresolved])).rejects.toThrow(
+      "[ai] ark image got an unresolved reference.\n  Run the item through app.runner, or pass { path, mimeType, hash } files."
+    );
   });
 
   it("names the bytes from Content-Type, else from their signature", () => {
@@ -181,6 +252,18 @@ describe("image handler: estimate", () => {
     expect(() => handler.estimate(request({ params: { size: "1152x2048" } }))).toThrow(
       "is below 3686400 pixels."
     );
+    expect(() => handler.estimate(request({ refs: refsOf(15) }))).toThrow(TOO_MANY_REFS);
+  });
+
+  it("prices image-to-image like text-to-image: one image", () => {
+    const handler = createImageHandler(createTestCtx());
+    expect(handler.estimate(request({ refs: refsOf(2) }))).toEqual({ usd: 0.035 });
+  });
+
+  it("reads only the ref count, so an unresolved $ref still estimates", () => {
+    const handler = createImageHandler(createTestCtx());
+    const unresolved = { $ref: "e01.face" } as unknown as ImageFile;
+    expect(handler.estimate(request({ refs: [unresolved] }))).toEqual({ usd: 0.035 });
   });
 });
 
@@ -217,6 +300,40 @@ describe("image handler: execute", () => {
     expect(ctx.log.info).toHaveBeenCalledWith("ark:image:done", {
       model: "seedream-5-0-lite-260128",
       bytes: JPEG.length
+    });
+  });
+
+  it("POSTs local refs as data URIs in image, the rest of the body unchanged", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, LIVE_SEEDREAM_RESPONSE),
+      bytesResponse(JPEG, "image/jpeg")
+    );
+
+    const result = await createImageHandler(createTestCtx()).execute(request({ refs: [face] }), {});
+
+    const [generate] = callsOf(fetchMock);
+    expect(jsonBodyOf(generate)).toEqual({
+      model: "seedream-5-0-lite-260128",
+      prompt: PROMPT,
+      size: "1440x2560",
+      response_format: "url",
+      watermark: false,
+      image: LOCAL_IMAGE_DATA_URI
+    });
+    expect(result.costUsd).toBe(0.035);
+  });
+
+  it("POSTs several refs as an image array, in request order", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, LIVE_SEEDREAM_RESPONSE),
+      bytesResponse(JPEG, "image/jpeg")
+    );
+
+    await createImageHandler(createTestCtx()).execute(request({ refs: [face, sketch] }), {});
+
+    const [generate] = callsOf(fetchMock);
+    expect(jsonBodyOf(generate)).toMatchObject({
+      image: [LOCAL_IMAGE_DATA_URI, "data:image/jpeg;base64,BAUG"]
     });
   });
 
@@ -257,11 +374,20 @@ describe("image handler: execute", () => {
     expect(result.costUsd).toBe(0.07);
   });
 
-  it("fails before any fetch for a size below the minimum, refs, or a missing key", async () => {
-    const ref = { path: "a.png", mimeType: "image/png", hash: "h" };
+  it("fails before any fetch for a size below the minimum, too many refs, or a missing key", async () => {
     const cases: Array<[ReturnType<typeof createTestCtx>, ImageRequest, string]> = [
       [createTestCtx(), request({ params: { size: "1152x2048" } }), "is below 3686400 pixels."],
-      [createTestCtx(), request({ refs: [ref] }), "ark images are text-to-image only."],
+      [
+        createTestCtx(),
+        request({ refs: refsOf(15) }),
+        "takes at most 14 reference images, got 15."
+      ],
+      [createTestCtx(), request({ refs: [missingRef()] }), "Cannot read ark image ref"],
+      [
+        createTestCtx(),
+        request({ refs: [{ $ref: "e01.face" } as unknown as ImageFile] }),
+        "ark image got an unresolved reference."
+      ],
       [createTestCtx({ env: createFakeEnv({}) }), request(), 'required variable "ARK_API_KEY"']
     ];
     for (const [ctx, input, message] of cases) {

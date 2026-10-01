@@ -1,12 +1,15 @@
 /**
  * @file ark image body — maps an `ImageRequest` plus `params` to the Seedream
  * body (`POST {base}/images/generations`). `checkImageRequest` refuses what
- * Seedream here cannot take (no I/O): refs, unknown params, an unknown
- * aspect, a size below the model's minimum. `buildImageBody` assembles the
- * body (pure). `imageMimeOf` names the downloaded bytes without touching
- * them: ark trusts a face only in the original bytes.
+ * Seedream here cannot take (no I/O): too many refs, unknown params, an
+ * unknown aspect, a size below the model's minimum. `readReferenceImages` reads the
+ * local refs as data URIs. `buildImageBody` assembles the body (pure).
+ * `imageMimeOf` names the downloaded bytes without touching them: ark trusts
+ * a face only in the original bytes.
  */
-import type { ImageRequest } from "../../image/contract";
+import { readFile } from "node:fs/promises";
+import type { ImageFile, ImageRequest } from "../../image/contract";
+import { readString } from "../client";
 import type { ArkContext } from "../types";
 import type { ArkImageModel } from "./models";
 
@@ -53,6 +56,8 @@ export type ArkImageBody = {
   watermark: unknown;
   /** `params.seed` as given, when set. */
   seed?: unknown;
+  /** Reference images as data URIs: a string for one, an array for several. Absent without refs. */
+  image?: string | string[];
 };
 
 /**
@@ -94,8 +99,9 @@ const WEBP_SIGNATURE = [0x57, 0x45, 0x42, 0x50] as const;
 /** Where `WEBP` starts in a RIFF file: after `RIFF` and the 4-byte chunk size. */
 const WEBP_TAG_OFFSET = 8;
 
-/** The error for a request with refs. */
-const REFS_ERROR = "[ai] ark images are text-to-image only.\n  Remove input.refs.";
+/** The error for a ref the runner did not resolve to a local file. */
+const UNRESOLVED_REF_ERROR =
+  "[ai] ark image got an unresolved reference.\n  Run the item through app.runner, or pass { path, mimeType, hash } files.";
 
 /** The error for a `params.size` that is not `<width>x<height>`. */
 const SIZE_SHAPE_ERROR =
@@ -184,7 +190,27 @@ function checkSize(model: ArkImageModel, value: unknown, aspect: string | undefi
 }
 
 /**
- * Checks an image request against the model, with no I/O: no refs, known
+ * Refuses more refs than the model takes. Only the count is read: refs may
+ * still be unresolved `$ref`s at estimate time.
+ *
+ * @param model - The image catalog row.
+ * @param referenceCount - How many refs the request has.
+ * @throws {Error} A plain two-line error naming the limit and the count.
+ * @example
+ * ```ts
+ * checkReferenceCount(resolveArkImageModel(undefined, "intl"), 15);
+ * // throws: '[ai] ark image model "seedream-5-0-lite-260128" takes at most 14 reference images, got 15.\n  Remove refs from input.refs.'
+ * ```
+ */
+function checkReferenceCount(model: ArkImageModel, referenceCount: number): void {
+  if (referenceCount <= model.maxRefImages) return;
+  throw new Error(
+    `[ai] ark image model "${model.id}" takes at most ${model.maxRefImages} reference images, got ${referenceCount}.\n  Remove refs from input.refs.`
+  );
+}
+
+/**
+ * Checks an image request against the model, with no I/O: at most the model's refs, known
  * params only, and a size (`params.size`, else the aspect's) of at least the
  * model's minimum pixels. Every failure is a plain two-line error.
  *
@@ -202,7 +228,7 @@ export function checkImageRequest(
   model: ArkImageModel,
   request: Pick<ImageRequest, "refs" | "params" | "aspect">
 ): CheckedImageRequest {
-  if ((request.refs?.length ?? 0) > 0) throw new Error(REFS_ERROR);
+  checkReferenceCount(model, request.refs?.length ?? 0);
 
   const params = request.params ?? {};
   checkImageParameters(params);
@@ -214,31 +240,94 @@ export function checkImageRequest(
 }
 
 /**
+ * Whether a ref is a resolved local file.
+ *
+ * @param value - One entry of `request.refs`.
+ * @returns True for `{ path, mimeType, hash }`.
+ * @example
+ * ```ts
+ * isImageFile({ $ref: "e01.face" }); // => false
+ * ```
+ */
+function isImageFile(value: unknown): value is ImageFile {
+  return (
+    readString(value, "path") !== undefined &&
+    readString(value, "mimeType") !== undefined &&
+    readString(value, "hash") !== undefined
+  );
+}
+
+/**
+ * Reads one ref as a data URI. Ark wants the format in lowercase.
+ *
+ * @param file - A resolved ref.
+ * @returns `data:<mime>;base64,<bytes>`.
+ * @throws {Error} A plain two-line error when the file cannot be read.
+ */
+async function readReferenceImage(file: ImageFile): Promise<string> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(file.path);
+  } catch (error) {
+    throw new Error(
+      `[ai] Cannot read ark image ref "${file.path}".\n  Check that the $ref or $file it came from still exists.`,
+      { cause: error }
+    );
+  }
+  return `data:${file.mimeType.toLowerCase()};base64,${bytes.toString("base64")}`;
+}
+
+/**
+ * Reads the refs as data URIs, in request order. No public hosting needed.
+ *
+ * @param references - `request.refs`, typed unknown: a ref the runner did not resolve may still be a `$ref` object here.
+ * @returns The data URIs; empty without refs.
+ * @throws {Error} A plain two-line error for an unresolved or unreadable ref.
+ * @example
+ * ```ts
+ * await readReferenceImages([{ path: "face.png", mimeType: "image/png", hash: "h" }]);
+ * // => ["data:image/png;base64,..."]
+ * ```
+ */
+export async function readReferenceImages(references: readonly unknown[]): Promise<string[]> {
+  if (!references.every(reference => isImageFile(reference))) {
+    throw new Error(UNRESOLVED_REF_ERROR);
+  }
+  return Promise.all(references.map(reference => readReferenceImage(reference)));
+}
+
+/**
  * Assembles the Seedream body: one image by URL, `watermark` false by default,
- * the seed only when given.
+ * the seed only when given. Refs go in `image`: a string for one, an array for
+ * several, absent without refs, so text-to-image keeps its body.
  *
  * @param model - The image catalog row.
  * @param prompt - The prompt, sent as given.
  * @param checked - The checked request.
+ * @param images - The refs as data URIs, from {@link readReferenceImages}.
  * @returns The body.
  * @example
  * ```ts
- * buildImageBody(resolveArkImageModel(undefined, "intl"), "p", { size: "1440x2560", watermark: false, seed: undefined });
+ * buildImageBody(resolveArkImageModel(undefined, "intl"), "p", { size: "1440x2560", watermark: false, seed: undefined }, []);
  * // => { model: "seedream-5-0-lite-260128", prompt: "p", size: "1440x2560", response_format: "url", watermark: false }
  * ```
  */
 export function buildImageBody(
   model: ArkImageModel,
   prompt: string,
-  checked: CheckedImageRequest
+  checked: CheckedImageRequest,
+  images: readonly string[]
 ): ArkImageBody {
+  const [first, ...rest] = images;
+  const image = rest.length === 0 ? first : [...images];
   return {
     model: model.id,
     prompt,
     size: checked.size,
     response_format: "url",
     watermark: checked.watermark,
-    ...(checked.seed === undefined ? {} : { seed: checked.seed })
+    ...(checked.seed === undefined ? {} : { seed: checked.seed }),
+    ...(image === undefined ? {} : { image })
   };
 }
 

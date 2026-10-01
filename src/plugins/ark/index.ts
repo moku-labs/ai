@@ -4,7 +4,7 @@
  * Registers three handlers in onInit: `video/ark` (Seedance video tasks, with
  * an asset preflight before any paid call, and draft → final), `asset/ark`
  * (portrait registration into an AIGC group through the signed asset OpenAPI)
- * and `image/ark` (Seedream text-to-image, bytes unchanged). Emits no events.
+ * and `image/ark` (Seedream text- and image-to-image, bytes unchanged). Emits no events.
  *
  * @see README.md
  */
