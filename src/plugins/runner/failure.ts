@@ -55,14 +55,9 @@ function ownErrorMessageOf(error: unknown): string | undefined {
  * @returns The safe message, or undefined.
  * @example
  * ```ts
- * failureMessageOf(
- *   Object.assign(new Error("ffmpeg exited 1: /Users/alex/ep01/s01.mp4"), {
- *     kind: "local-failure",
- *     publicMessage: "[studio] ffmpeg could not join the clips.\n  Check the clip files."
- *   })
- * ); // => "[studio] ffmpeg could not join the clips.\n  Check the clip files."
- * failureMessageOf(new Error("[ai] fal rejected the image.\n  Use a PNG or JPEG.\n  Detail."));
- * // => "[ai] fal rejected the image.\n  Use a PNG or JPEG."
+ * failureMessageOf({ publicMessage: "[studio] ffmpeg failed.\n  Check the clips.\n  more" });
+ * // => "[studio] ffmpeg failed.\n  Check the clips."
+ * failureMessageOf(new Error("[ai] fal rejected the image.")); // => "[ai] fal rejected the image."
  * failureMessageOf(new Error("401 Unauthorized")); // => undefined
  * ```
  */

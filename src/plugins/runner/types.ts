@@ -83,6 +83,11 @@ export type RunEvent =
  * `publicMessage` (see {@link ProviderErrorHint}) or our own `[ai]` error,
  * that text's first two lines (max 300 chars). Carried on `item:failed` and
  * the `runner:item:failed` log, never written to the journal.
+ *
+ * @example
+ * ```ts
+ * const failure: ItemFailure = { errorClass: "invalid-request", message: "[studio] Invalid assemble request.\n  Name at least one clip." };
+ * ```
  */
 export type ItemFailure = { errorClass: ErrorClass; message?: string };
 

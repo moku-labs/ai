@@ -27,6 +27,16 @@ const OWN_SIDE_CLASSES: ReadonlySet<ErrorClass> = new Set([
   "local-failure"
 ]);
 
+/** The error class each classifying hint `kind` names; `resubmit` names none. */
+const KIND_CLASSES: Readonly<Partial<Record<NonNullable<ProviderErrorHint["kind"]>, ErrorClass>>> =
+  {
+    "content-policy": "content-policy",
+    timeout: "timeout",
+    network: "network",
+    "invalid-request": "invalid-request",
+    "local-failure": "local-failure"
+  };
+
 /** Minimum jitter factor applied to the exponential backoff base delay. */
 const MIN_JITTER_FACTOR = 0.5;
 
@@ -112,17 +122,15 @@ export function classifyError(error: unknown): ErrorClass {
   if (!isProviderErrorHint(error)) return "unknown";
 
   // A kind that names a class wins over the status.
-  if (error.kind === "content-policy") return "content-policy";
-  if (error.kind === "timeout") return "timeout";
-  if (error.kind === "network") return "network";
-  if (error.kind === "invalid-request") return "invalid-request";
-  if (error.kind === "local-failure") return "local-failure";
+  const kindClass = error.kind === undefined ? undefined : KIND_CLASSES[error.kind];
+  if (kindClass !== undefined) return kindClass;
 
   // Otherwise the HTTP status decides; no status at all is a bug.
-  if (error.status === 429) return "http-429";
-  if (typeof error.status === "number" && error.status >= 500) return "http-5xx";
-  if (typeof error.status === "number" && error.status >= 400) return "http-4xx";
-  return "unknown";
+  const { status } = error;
+  if (typeof status !== "number") return "unknown";
+  if (status === 429) return "http-429";
+  if (status >= 500) return "http-5xx";
+  return status >= 400 ? "http-4xx" : "unknown";
 }
 
 /**
