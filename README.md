@@ -273,7 +273,10 @@ A handler for a long provider job exposes `submit` + `poll` instead of (or next 
 `runner.pollIntervalMs`, and after a crash or pause polls that job again instead of
 re-submitting it. Throw errors with `status` or `kind: "timeout" | "network" |
 "content-policy"` to have them retried or flagged; an error without a hint is a
-programming error and fails the item after one attempt.
+programming error and fails the item after one attempt. `kind: "invalid-request" |
+"local-failure"` fails the item after one attempt under that class (the handler refused
+the request, or its own machine failed). Set `publicMessage` to a text that is safe to
+show (no keys, no prompts) and `item:failed` carries it as `message`.
 
 ### Images, video and references
 

@@ -1431,3 +1431,143 @@ describe("executeItem — item:failed label and message", () => {
     });
   });
 });
+
+/**
+ * A job handler (`submit` + `poll`) whose `poll` throws `error` for `job-1`
+ * and finishes any later job done. Logs every submit and poll.
+ *
+ * @param log - Shared call-order log to append to.
+ * @param error - The error a poll of `job-1` throws.
+ * @returns The fake job handler.
+ * @example
+ * ```ts
+ * const handler = throwingPollHandler(log, Object.assign(new Error("[studio] no."), { kind: "local-failure" }));
+ * ```
+ */
+function throwingPollHandler(log: CallLog, error: Error): ExecutableHandler {
+  let submits = 0;
+  return {
+    estimate: () => ({ usd: 0.1 }),
+    submit: async () => {
+      submits += 1;
+      log.push(`handler.submit(job-${submits})`);
+      return { jobId: `job-${submits}` };
+    },
+    poll: async (jobId): Promise<JobPoll> => {
+      log.push(`handler.poll(${jobId})`);
+      if (jobId === "job-1") throw error;
+      return {
+        state: "done",
+        video: new TextEncoder().encode("clip"),
+        mimeType: "video/mp4",
+        costUsd: 0.5
+      };
+    }
+  };
+}
+
+// ---------------------------------------------------------------------------
+// executeItem — invalid-request and local-failure: our own side's verdict
+// ---------------------------------------------------------------------------
+
+describe("executeItem — invalid-request and local-failure", () => {
+  const OWN_SIDE_KINDS = ["invalid-request", "local-failure"] as const;
+  const PUBLIC_MESSAGE = "[studio] Invalid assemble request.\n  Name at least one clip.";
+
+  it.each(
+    OWN_SIDE_KINDS
+  )("kind:%s fails after one attempt with its class and publicMessage, and no breaker outcome", async kind => {
+    const log: CallLog = [];
+    let attempts = 0;
+    const handler = fakeHandler(log, {
+      execute: async () => {
+        attempts += 1;
+        throw Object.assign(new Error(`${PUBLIC_MESSAGE}\n  ffmpeg: /Users/alex/clip.mp4`), {
+          kind,
+          status: 503,
+          publicMessage: PUBLIC_MESSAGE
+        });
+      }
+    });
+    const ctx = createFakeRunnerContext(log, {
+      config: { retryBaseMs: 1 },
+      registry: { resolve: (): unknown => handler }
+    });
+    const item = fakeItemRow();
+    const { report, events } = collectReports();
+
+    await executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+
+    expect(attempts).toBe(1);
+    expect(log).toContain("journal.finishAttempt(terminal-error)");
+    expect(log).toContain(`journal.markFailed(${item.id},terminal)`);
+    expect(log.filter(entry => entry.startsWith("limits.reportOutcome"))).toEqual([]);
+    expect(events.at(-1)).toEqual({
+      type: "item:failed",
+      itemId: item.id,
+      label: "01-fakeTask",
+      errorClass: kind,
+      message: PUBLIC_MESSAGE
+    });
+  });
+
+  it.each(
+    OWN_SIDE_KINDS
+  )("a poll that throws kind:%s marks the job expired, not failed, even with a 400", async kind => {
+    const log: CallLog = [];
+    const error = Object.assign(new Error("[studio] no."), { kind, status: 400 });
+    const handler = throwingPollHandler(log, error);
+    const ctx = createFakeRunnerContext(log, { registry: { resolve: (): unknown => handler } });
+    const { report, events } = collectReports();
+
+    await executeItem(
+      ctx,
+      fakeItemRow(),
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+
+    expect(log.filter(entry => entry.startsWith("journal.setAttemptJob"))).toEqual([
+      "journal.setAttemptJob(submitted)",
+      "journal.setAttemptJob(expired)"
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "item:failed", errorClass: kind });
+  });
+
+  it.each(
+    OWN_SIDE_KINDS
+  )("the first poll of an adopted expired job that throws kind:%s rethrows, with no new submit", async kind => {
+    const log: CallLog = [];
+    const error = Object.assign(new Error("[studio] no."), { kind, status: 404 });
+    const handler = throwingPollHandler(log, error);
+    const ctx = createFakeRunnerContext(log, {
+      registry: { resolve: (): unknown => handler },
+      journal: {
+        findLiveJob: () => ({ externalId: "job-1", jobState: "expired", attemptId: 7 })
+      }
+    });
+    const { report, events } = collectReports();
+
+    await executeItem(
+      ctx,
+      fakeItemRow({ artifactKey: "ak-1" }),
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+
+    expect(log.filter(entry => entry.startsWith("handler.submit"))).toEqual([]);
+    expect(log).toContain("journal.setAttemptJob(expired)");
+    expect(events.at(-1)).toMatchObject({ type: "item:failed", errorClass: kind });
+  });
+});

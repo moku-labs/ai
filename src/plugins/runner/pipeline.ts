@@ -15,6 +15,7 @@ import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import {
   backoffMs,
   classifyError,
+  isOwnSideErrorClass,
   isResubmitVerdict,
   isRetryableErrorClass,
   retryAfterMsOf
@@ -34,9 +35,10 @@ import type {
 
 /**
  * Discriminated outcome of a single provider attempt. A failed attempt
- * carries its {@link ItemFailure}: the class, plus the `[ai]` message when the
- * error was ours, so a retryable failure that exhausts the attempts still
- * reports the last attempt's message.
+ * carries its {@link ItemFailure}: the class, plus the safe message (the
+ * handler's `publicMessage` or our own `[ai]` text) when there is one, so a
+ * retryable failure that exhausts the attempts still reports the last
+ * attempt's message.
  */
 type AttemptOutcomeResult =
   | { kind: "done"; costUsd: number; contentHash: string }
@@ -301,8 +303,8 @@ export function createDrainController(externalSignal: AbortSignal | undefined): 
 
 /**
  * Maps an error class to its attempt outcome: content-policy is `flagged`,
- * the other retryable classes are `retryable-error`, everything else is a
- * `terminal-error`.
+ * the retryable classes are `retryable-error`, everything else (`http-4xx`,
+ * `invalid-request`, `local-failure`, `unknown`) is a `terminal-error`.
  *
  * @param errorClass - The classified error class.
  * @returns The attempt outcome for `errorClass`.
@@ -323,7 +325,8 @@ function outcomeOf(errorClass: ErrorClass): AttemptOutcome {
  * (`flagged`, terminal `failed`), and reports the breaker outcome for
  * retryable failures. A provider's `kind: "resubmit"` verdict retries like
  * its status says but never feeds the lane breaker. A failed outcome carries
- * the error's safe `[ai]` message ({@link failureMessageOf}). The
+ * the error's safe message, its `publicMessage` or our own `[ai]` text
+ * ({@link failureMessageOf}). The
  * retryable-vs-exhausted decision is left to the caller, which tracks the
  * cross-attempt count.
  *
@@ -475,7 +478,9 @@ async function submitJob(
  * failed, or does not know it (a thrown 4xx), the job is lost: the source
  * attempt and this attempt are marked `failed` and a new job is submitted in
  * this attempt. A content-policy verdict, pending and done are returned for
- * the normal loop; an abort or an unclassified error is rethrown.
+ * the normal loop; an abort or an error of our own side (`unknown`,
+ * `invalid-request`, `local-failure`: {@link isOwnSideErrorClass}) is
+ * rethrown.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -501,8 +506,8 @@ async function pollAdoptedExpired(
   try {
     poll = await pollOnce(ctx, handler, job.jobId, request, attemptId, signal);
   } catch (error) {
-    // An abort pauses; an unclassified error is a bug, never a reason to pay for a new job.
-    if (signal.aborted || classifyError(error) === "unknown") throw error;
+    // An abort pauses; an error of our own side is never a reason to pay for a new job.
+    if (signal.aborted || isOwnSideErrorClass(classifyError(error))) throw error;
     poll = { state: "failed", error };
   }
 
@@ -524,11 +529,12 @@ async function pollAdoptedExpired(
  * Drives one provider job to an end state (D8): start or adopt it, then poll
  * every `pollIntervalMs`. A retryable poll failure (a transport problem) keeps
  * polling; a job the provider finished with an error, or a terminal poll
- * failure, marks the job `failed` and throws; a job still pending after
- * `jobTimeoutMs` is marked `expired` and throws a retryable timeout. A job
- * adopted after it expired is polled first and re-submitted only when the
- * provider lost or failed it. An abort leaves the job `submitted`, so resume
- * or a later run adopts it.
+ * failure the provider gave, marks the job `failed` and throws (a poll error
+ * of our own side marks it `expired`, see {@link pollOnce}); a job still
+ * pending after `jobTimeoutMs` is marked `expired` and throws a retryable
+ * timeout. A job adopted after it expired is polled first and re-submitted
+ * only when the provider lost or failed it. An abort leaves the job
+ * `submitted`, so resume or a later run adopts it.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
@@ -596,11 +602,12 @@ async function runJob(
 
 /**
  * One poll of a provider job. A thrown retryable error (transport problem)
- * reads as `pending`; a classified non-retryable error marks the job `failed`
- * and is rethrown. An abort is rethrown with the job left `submitted`. An
- * unclassified error (a bug, not the provider's verdict) marks the job
- * `expired` and is rethrown: a later run adopts it instead of paying for a
- * new one, and after two expiries a new job is submitted.
+ * reads as `pending`; a non-retryable error the provider gave (`http-4xx`,
+ * `content-policy`) marks the job `failed` and is rethrown. An abort is
+ * rethrown with the job left `submitted`. An error of our own side
+ * (`unknown`, `invalid-request`, `local-failure`: not the provider's verdict)
+ * marks the job `expired` and is rethrown: a later run adopts it instead of
+ * paying for a new one, and after two expiries a new job is submitted.
  *
  * @param ctx - Runner domain context.
  * @param handler - A job handler.
@@ -625,10 +632,10 @@ async function pollOnce(
 
     const errorClass = classifyError(error);
     if (!isRetryableErrorClass(errorClass)) {
-      // An unclassified error is a bug on our side, not the provider's verdict: the job is marked
-      // expired, so it stays adoptable and the two-expiry cap still ends in one new submit.
+      // An error of our own side is not the provider's verdict: the job is marked expired,
+      // so it stays adoptable and the two-expiry cap still ends in one new submit.
       ctx.journal.setAttemptJob(attemptId, {
-        jobState: errorClass === "unknown" ? "expired" : "failed"
+        jobState: isOwnSideErrorClass(errorClass) ? "expired" : "failed"
       });
       throw error;
     }
@@ -737,7 +744,7 @@ type AttemptStep = { verdict: ClaimVerdict } | { attempt: number; waitMs: number
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
  * computed backoff delay. Every `item:failed` carries the item's label and
- * the attempt's `[ai]` message, if any (see {@link reportItemFailed}). A stop
+ * the attempt's safe message, if any (see {@link reportItemFailed}). A stop
  * carries the item's claim verdict: `done`, `flagged`, `failed` with its class
  * (and message) for a non-retryable failure, or `open`
  * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
