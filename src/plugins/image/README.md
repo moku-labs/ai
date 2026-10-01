@@ -6,7 +6,7 @@
 
 `image` is the task plugin for still images in the `@moku-labs/ai` build system. It owns the
 capability contract (`contract.ts`) that every image provider implements — `ImageFile`,
-`ImageRequest`, `ImageResult`, and `ImageHandler` — and exposes a small typed facade,
+`ImageRequest`, `ImageResult`, `ImageOutput`, and `ImageHandler` — and exposes a small typed facade,
 `app.image.*`, for one-off generation, cost estimation, and provider discovery. Provider plugins
 (e.g. `codex`, `fal`) implement `ImageHandler` and register it with the `registry` plugin under the
 `"image"` task.
@@ -64,8 +64,16 @@ type-import it via `import type { ImageHandler } from "../image/contract"`.
 |-------|------|-------------|
 | `image` | `Uint8Array` | The generated image bytes. |
 | `mimeType` | `string` | MIME type of `image`. |
+| `images` | `ImageOutput[]?` | Every image of a group, in order. `images[0]` is `image`. Absent for a single image. |
 | `costUsd` | `number` | Actual cost of this generation, in US dollars. |
 | `meta` | `Record<string, unknown>?` | Metadata only, never a payload echo. |
+
+**Groups.** A provider that makes several consistent images in one call (ark Seedream with
+`params.images`) returns all of them in `images`, each an `ImageOutput` `{ image, mimeType }`, and
+the first one again as `image` / `mimeType`. Single-image code keeps reading `image`. The runner
+stores every entry of `images` and journals them as the item's ordered outputs; `export` writes
+`<label>.<ext>`, `<label>-2.<ext>` … `<label>-N.<ext>`, and a `$ref` to the item is the first image.
+`app.image.generate()` passes the result through unchanged.
 
 ### `ImageHandler`
 

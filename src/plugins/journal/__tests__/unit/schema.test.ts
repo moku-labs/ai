@@ -103,6 +103,32 @@ describe("migrateSchema", () => {
     expect(columnsOf("attempts")).toEqual(expect.arrayContaining(["external_id", "job_state"]));
   });
 
+  it("adds outputs to a journal from before it, and a second run changes nothing", () => {
+    driver.exec(`
+      CREATE TABLE items (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, build_file TEXT NOT NULL,
+        planning_key TEXT NOT NULL, task TEXT NOT NULL, provider TEXT NOT NULL, pack_version TEXT,
+        artifact_key TEXT, content_hash TEXT, status TEXT NOT NULL, estimated_cost_usd REAL NOT NULL,
+        actual_cost_usd REAL, attempt_count INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+        label TEXT, build_name TEXT, mime_type TEXT);
+      CREATE TABLE attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id TEXT NOT NULL,
+        provider TEXT NOT NULL, account TEXT NOT NULL DEFAULT 'default', started_at INTEGER NOT NULL,
+        ended_at INTEGER, outcome TEXT, error_class TEXT, cost_usd REAL, external_id TEXT, job_state TEXT);
+    `);
+
+    migrateSchema(driver);
+    const once = columnsOf("items");
+    migrateSchema(driver);
+
+    expect(once.at(-1)).toBe("outputs");
+    expect(columnsOf("items")).toEqual(once);
+  });
+
+  it("creates outputs on a new journal", () => {
+    createSchema(driver);
+
+    expect(columnsOf("items")).toContain("outputs");
+  });
+
   it("adds the provider_records table to a journal from before it", () => {
     driver.exec(`
       CREATE TABLE runs (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, status TEXT NOT NULL,

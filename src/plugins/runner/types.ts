@@ -61,7 +61,16 @@ export type RunStatusReport = {
 export type RunEvent =
   | { type: "item:queued"; runId: string; itemId: string; task: string; provider: string }
   | { type: "item:dispatching"; runId: string; itemId: string }
-  | { type: "item:done"; runId: string; itemId: string; costUsd: number; contentHash: string }
+  | {
+      type: "item:done";
+      runId: string;
+      itemId: string;
+      costUsd: number;
+      /** The item's (first) artifact. */
+      contentHash: string;
+      /** Every output hash in order; only for a multi-output item (the handler returned `images`). */
+      contentHashes?: string[];
+    }
   | { type: "item:retry"; runId: string; itemId: string; errorClass: ErrorClass; attempt: number }
   | {
       type: "item:failed";
@@ -144,7 +153,9 @@ export type ResolvedFile = { path: string; mimeType: string; hash: string };
 /**
  * What a handler may return: the bytes under the field its task contract
  * names (`body`, `audio`, `image`, `video`) or `text`, plus cost and mime.
- * The runner normalizes it before storing.
+ * The runner normalizes it before storing. A non-empty `images` makes the
+ * item multi-output: every entry is stored, in order, and the first is the
+ * item's artifact.
  */
 export type HandlerResult = {
   body?: Uint8Array;
@@ -153,6 +164,8 @@ export type HandlerResult = {
   video?: Uint8Array;
   text?: string;
   mimeType?: string;
+  /** Every image of a multi-image result, in order. The runner stores each one. */
+  images?: { image: Uint8Array; mimeType: string }[];
   costUsd: number;
   meta?: Record<string, unknown>;
 };
@@ -252,7 +265,11 @@ export type PlannedItem = {
   files: ReadonlyMap<string, ResolvedFile>;
 };
 
-/** One file written by {@link RunnerApi.export}. */
+/**
+ * One file written by {@link RunnerApi.export}. An item with several outputs
+ * writes one file per output: `label` is the item's label for the first and
+ * `<label>-<k>` (k from 2) for the others, which carry `costUsd` 0.
+ */
 export type ExportedFile = {
   label: string;
   path: string;
@@ -448,7 +465,9 @@ export type RunnerApi = {
    */
   events(opts?: { runId?: string }): AsyncIterable<RunEvent>;
   /**
-   * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`.
+   * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`. An item
+   * with several outputs (an image group) writes `<label>.<ext>`, then
+   * `<label>-2.<ext>` … `<label>-N.<ext>`; the item cost is on the first file.
    *
    * @param opts - Run id (default: newest run) and output directory (default "out").
    * @param opts.runId - Run to export.
@@ -459,6 +478,7 @@ export type RunnerApi = {
    * // Hand the newest run's clips to the editor.
    * const { files, skipped } = await app.runner.export({ outDir: "out" });
    * // files[0]: { label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }
+   * // a group of 3 keyframes "e01.keys": labels "e01.keys", "e01.keys-2", "e01.keys-3"; costUsd 0.105, 0, 0
    * ```
    */
   export(opts?: { runId?: string; outDir?: string }): Promise<ExportResult>;

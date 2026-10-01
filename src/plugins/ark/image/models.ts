@@ -1,7 +1,8 @@
 /**
  * @file ark image model catalog — data module. One row per Seedream model id:
  * region, the smallest image it makes (in pixels), how many reference images
- * it takes and the price per image in USD. BytePlus trusts a face in a
+ * it takes, how many images one group request counts (refs included) and the
+ * price per image in USD. BytePlus trusts a face in a
  * Seedance request when it comes from Seedream 5.0 lite text-to-image on the
  * same account, with the bytes unchanged.
  */
@@ -19,6 +20,8 @@ export type ArkImageModel = {
   minPixels: number;
   /** Most reference images one request takes, sent as `image`. */
   maxRefImages: number;
+  /** Most images one group request counts: refs plus `params.images`. */
+  maxGroupImages: number;
   /** Price of one image, USD. */
   priceUsd: number;
 };
@@ -35,11 +38,13 @@ export const arkImageModels: readonly ArkImageModel[] = [
   // source: https://docs.byteplus.com/en/docs/modelark/model-pricing (checked 2026-09-30)
   // minPixels: live BytePlus intl run 2026-09-30 (400 on 1152x2048, 200 on 1440x2560)
   // maxRefImages: https://docs.byteplus.com/en/docs/ModelArk/1541523 (checked 2026-10-01)
+  // source: https://docs.byteplus.com/en/docs/ModelArk/1541523 (checked 2026-10-01), maxGroupImages: refs + images <= 15
   {
     id: "seedream-5-0-lite-260128",
     region: "intl",
     minPixels: 3_686_400,
     maxRefImages: 14,
+    maxGroupImages: 15,
     priceUsd: 0.035
   }
 ];

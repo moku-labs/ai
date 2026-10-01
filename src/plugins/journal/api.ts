@@ -31,6 +31,7 @@ import type {
   AttemptStart,
   Config,
   DoneArtifact,
+  DoneResult,
   ErrorClass,
   ItemFilter,
   ItemIntent,
@@ -72,10 +73,7 @@ export function createJournalApi(ctx: CorePluginContext<Config, State>): Journal
       finishAttempt(state, attemptId, end);
     },
     // Transitions an item to done.
-    commitDone: (
-      itemId: string,
-      result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
-    ) => {
+    commitDone: (itemId: string, result: DoneResult) => {
       commitDone(state, itemId, result);
     },
     // Finds a reusable done artifact by key, in any run.

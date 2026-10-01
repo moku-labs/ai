@@ -86,6 +86,7 @@ export function fakeItemRow(overrides: Partial<ItemRow> = {}): ItemRow {
     label: "01-fakeTask",
     buildName: "build",
     mimeType: FAKE_NULL,
+    outputs: FAKE_NULL,
     ...overrides
   };
 }

@@ -1,7 +1,8 @@
 /**
  * @file ark image body — maps an `ImageRequest` plus `params` to the Seedream
  * body (`POST {base}/images/generations`). `checkImageRequest` refuses what
- * Seedream here cannot take (no I/O): too many refs, unknown params, an
+ * Seedream here cannot take (no I/O): too many refs, a bad `params.images` or
+ * more refs plus images than a group takes, unknown params, an
  * unknown aspect, a size below the model's minimum. `readReferenceImages` reads the
  * local refs as data URIs. `buildImageBody` assembles the body (pure).
  * `imageMimeOf` names the downloaded bytes without touching them: ark trusts
@@ -31,14 +32,14 @@ export const ARK_IMAGE_SIZES: Readonly<Record<string, string>> = {
 
 /**
  * The `params` keys an ark image takes. `generation` is never sent: it only
- * changes the item key.
+ * changes the item key. `images` asks for a group of that many images.
  *
  * @example
  * ```ts
- * ARK_IMAGE_PARAMS.join(", "); // => "size, seed, generation, watermark"
+ * ARK_IMAGE_PARAMS.join(", "); // => "size, seed, generation, watermark, images"
  * ```
  */
-export const ARK_IMAGE_PARAMS = ["size", "seed", "generation", "watermark"] as const;
+export const ARK_IMAGE_PARAMS = ["size", "seed", "generation", "watermark", "images"] as const;
 
 /**
  * The Seedream body POSTed to ark.
@@ -58,6 +59,10 @@ export type ArkImageBody = {
   seed?: unknown;
   /** Reference images as data URIs: a string for one, an array for several. Absent without refs. */
   image?: string | string[];
+  /** `"auto"` asks for a group; only with `params.images`. */
+  sequential_image_generation?: "auto";
+  /** The group's cap, `params.images`; only with `params.images`. */
+  sequential_image_generation_options?: { max_images: number };
 };
 
 /**
@@ -70,6 +75,8 @@ export type CheckedImageRequest = {
   watermark: unknown;
   /** `params.seed`, when set. Ark validates the value. */
   seed: unknown;
+  /** `params.images`: how many images the group may make; undefined for one image. */
+  images: number | undefined;
 };
 
 /** `aspect` when the request names none. */
@@ -129,7 +136,7 @@ function isImageParameter(key: string): boolean {
  * @example
  * ```ts
  * checkImageParameters({ style: "anime" });
- * // throws: '[ai] Unknown ark image param "style".\n  Allowed: size, seed, generation, watermark.'
+ * // throws: '[ai] Unknown ark image param "style".\n  Allowed: size, seed, generation, watermark, images.'
  * ```
  */
 function checkImageParameters(params: Record<string, unknown>): void {
@@ -210,7 +217,47 @@ function checkReferenceCount(model: ArkImageModel, referenceCount: number): void
 }
 
 /**
- * Checks an image request against the model, with no I/O: at most the model's refs, known
+ * Checks `params.images`: a whole number from 1 to the model's group limit,
+ * and with the refs no more than that limit.
+ *
+ * @param model - The image catalog row.
+ * @param referenceCount - How many refs the request has.
+ * @param value - `params.images`, as given; undefined for one image.
+ * @returns The group size, or undefined for one image.
+ * @throws {Error} A plain two-line error for another value, or too many images with the refs.
+ * @example
+ * ```ts
+ * checkGroupSize(resolveArkImageModel(undefined, "intl"), 14, 2);
+ * // throws: '[ai] ark image model "seedream-5-0-lite-260128" makes at most 15 images including refs, got 14 refs + 2 images.\n  Set params.images to 1 or less, or remove refs.'
+ * ```
+ */
+function checkGroupSize(
+  model: ArkImageModel,
+  referenceCount: number,
+  value: unknown
+): number | undefined {
+  if (value === undefined) return undefined;
+
+  // A whole number from 1 to the group limit.
+  const limit = model.maxGroupImages;
+  const isValidGroupSize =
+    typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= limit;
+  if (!isValidGroupSize) {
+    throw new Error(
+      `[ai] ark params.images must be a whole number from 1 to ${limit}.\n  Pass it like 6.`
+    );
+  }
+
+  // The refs count against the same limit.
+  if (referenceCount + value <= limit) return value;
+  throw new Error(
+    `[ai] ark image model "${model.id}" makes at most ${limit} images including refs, got ${referenceCount} refs + ${value} images.\n  Set params.images to ${limit - referenceCount} or less, or remove refs.`
+  );
+}
+
+/**
+ * Checks an image request against the model, with no I/O: at most the model's refs, a
+ * `params.images` group that fits with the refs, known
  * params only, and a size (`params.size`, else the aspect's) of at least the
  * model's minimum pixels. Every failure is a plain two-line error.
  *
@@ -221,22 +268,26 @@ function checkReferenceCount(model: ArkImageModel, referenceCount: number): void
  * @example
  * ```ts
  * checkImageRequest(resolveArkImageModel(undefined, "intl"), { prompt: "p", aspect: "1:1" });
- * // => { size: "2048x2048", watermark: false, seed: undefined }
+ * // => { size: "2048x2048", watermark: false, seed: undefined, images: undefined }
  * ```
  */
 export function checkImageRequest(
   model: ArkImageModel,
   request: Pick<ImageRequest, "refs" | "params" | "aspect">
 ): CheckedImageRequest {
-  checkReferenceCount(model, request.refs?.length ?? 0);
-
+  // Counts first: the refs, then the group they share the limit with.
+  const referenceCount = request.refs?.length ?? 0;
+  checkReferenceCount(model, referenceCount);
   const params = request.params ?? {};
+  const images = checkGroupSize(model, referenceCount, params.images);
+
+  // Then the params and the size.
   checkImageParameters(params);
   const size =
     params.size === undefined
       ? sizeOfAspect(request.aspect)
       : checkSize(model, params.size, request.aspect);
-  return { size, watermark: params.watermark ?? false, seed: params.seed };
+  return { size, watermark: params.watermark ?? false, seed: params.seed, images };
 }
 
 /**
@@ -297,9 +348,11 @@ export async function readReferenceImages(references: readonly unknown[]): Promi
 }
 
 /**
- * Assembles the Seedream body: one image by URL, `watermark` false by default,
+ * Assembles the Seedream body: images by URL, `watermark` false by default,
  * the seed only when given. Refs go in `image`: a string for one, an array for
- * several, absent without refs, so text-to-image keeps its body.
+ * several, absent without refs, so text-to-image keeps its body. A group
+ * (`checked.images`) adds `sequential_image_generation: "auto"` and its
+ * `max_images` after them; without it the body is the one-image body, key for key.
  *
  * @param model - The image catalog row.
  * @param prompt - The prompt, sent as given.
@@ -308,7 +361,7 @@ export async function readReferenceImages(references: readonly unknown[]): Promi
  * @returns The body.
  * @example
  * ```ts
- * buildImageBody(resolveArkImageModel(undefined, "intl"), "p", { size: "1440x2560", watermark: false, seed: undefined }, []);
+ * buildImageBody(resolveArkImageModel(undefined, "intl"), "p", { size: "1440x2560", watermark: false, seed: undefined, images: undefined }, []);
  * // => { model: "seedream-5-0-lite-260128", prompt: "p", size: "1440x2560", response_format: "url", watermark: false }
  * ```
  */
@@ -327,7 +380,13 @@ export function buildImageBody(
     response_format: "url",
     watermark: checked.watermark,
     ...(checked.seed === undefined ? {} : { seed: checked.seed }),
-    ...(image === undefined ? {} : { image })
+    ...(image === undefined ? {} : { image }),
+    ...(checked.images === undefined
+      ? {}
+      : {
+          sequential_image_generation: "auto",
+          sequential_image_generation_options: { max_images: checked.images }
+        })
   };
 }
 

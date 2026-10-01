@@ -2,7 +2,8 @@
  * @file runner resolve — the data edges of one item: `$ref`/`$file` values
  * turned into local files for the handler, mime ⇄ extension tables, image
  * signatures read from a file's first bytes, and the normalization of a
- * handler result into bytes + mime type (D1, D9, D10).
+ * handler result into bytes + mime type, or into every output of a
+ * multi-image result (D1, D9, D10).
  */
 import path from "node:path";
 import { isFileValue, isReferenceValue } from "../buildfile";
@@ -227,6 +228,31 @@ function requireResolved(
     );
   }
   return resolved;
+}
+
+/**
+ * Every image of a multi-image handler result, in order, as bytes to store
+ * and their mime types. An entry's empty `mimeType` falls back to
+ * `application/octet-stream`. A group of one is still a list of one, so the
+ * caller sees the count.
+ *
+ * @param result - What the handler returned.
+ * @returns The outputs in order, or undefined when `images` is absent or empty.
+ * @example
+ * ```ts
+ * normalizeOutputs({ images: [{ image: new Uint8Array([1]), mimeType: "" }], costUsd: 0 });
+ * // => [{ bytes: Uint8Array [1], mimeType: "application/octet-stream" }]
+ * ```
+ */
+export function normalizeOutputs(
+  result: HandlerResult
+): { bytes: Uint8Array; mimeType: string }[] | undefined {
+  if (result.images === undefined || result.images.length === 0) return undefined;
+
+  return result.images.map(entry => ({
+    bytes: entry.image,
+    mimeType: entry.mimeType === "" ? OCTET_STREAM : entry.mimeType
+  }));
 }
 
 /**
