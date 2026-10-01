@@ -10,8 +10,8 @@ talks to one region and one account. It registers three handlers with the regist
 - `("video", "ark")`: Seedance text-to-video and image-to-video through the Ark video task API.
   It maps asset refs to `asset://<id>` and checks every asset before any paid call. It also makes
   cheap 480p drafts and renders a draft again at 1080p ([Draft → final](#draft--final)).
-- `("image", "ark")`: Seedream 5.0 lite text-to-image. The bytes come back unchanged, so Seedance
-  trusts a face in them ([Faces](#faces)).
+- `("image", "ark")`: Seedream 5.0 lite text-to-image, and image-to-image from local refs. The bytes
+  come back unchanged, so Seedance trusts a face in them ([Faces](#faces)).
 - `("asset", "ark")`: registers one portrait into an AIGC asset group through the signed Ark asset
   OpenAPI, and returns an `AssetRecord` (see the [asset README](../asset/README.md)).
 
@@ -338,9 +338,9 @@ one `ark:journal:closed` warning, and a final fails.
 `image` items on provider ark. `POST {dataPlane}/images/generations` with the API key, then one
 download of the image URL, without the key, with `downloadTimeoutMs`.
 
-| Model | Region | Smallest size | Price |
-| --- | --- | --- | --- |
-| `seedream-5-0-lite-260128` (default) | intl | 3,686,400 px | $0.035 per image |
+| Model | Region | Smallest size | Refs | Price |
+| --- | --- | --- | --- | --- |
+| `seedream-5-0-lite-260128` (default) | intl | 3,686,400 px | 14 | $0.035 per image, with or without refs |
 
 There is no cn image model yet. `input.model` defaults to the table's model. Any other id fails:
 `[ai] Unknown ark image model "<id>".\n  Known: <list>.`
@@ -349,9 +349,28 @@ There is no cn image model yet. `input.model` defaults to the table's model. Any
 | --- | --- |
 | `prompt` | `prompt`, sent as written |
 | `aspect` | `size`: `9:16` → `1440x2560` (default), `16:9` → `2560x1440`, `1:1` → `2048x2048`, `3:4` → `1728x2304`, `4:3` → `2304x1728`. Another aspect fails |
-| `refs` | Not taken: text-to-image only. `[ai] ark images are text-to-image only.\n  Remove input.refs.` |
+| `refs` | `image`: one ref as a string, several as an array, in request order. Absent without refs, so the text-to-image body is unchanged |
 | `negative` | Dropped, with one `ark:negative:ignored` warning per process |
 | — | `response_format: "url"`, `watermark: false` |
+
+**Refs (image-to-image).** Each local ref goes out as `data:<mime>;base64,...`, the format in
+lowercase. Nothing is hosted. The prompt cites refs by position ("image 1"). Seedream makes one image:
+`sequential_image_generation` is left at its default, `disabled`. Ark limits each ref to jpeg, png,
+webp, bmp, tiff, gif, heic or heif, up to 30 MB and 6000×6000 px. More refs than the model takes
+fail before any call, also at estimate time:
+
+```
+[ai] ark image model "seedream-5-0-lite-260128" takes at most 14 reference images, got 15.
+  Remove refs from input.refs.
+```
+
+```yaml
+- id: face-akari
+  task: image
+  provider: ark
+  input: { prompt: "Photo of the woman in image 1, soft window light", aspect: "3:4",
+           refs: [{ $file: refs/akari-lines.png }] }
+```
 
 `params` allowlist: `size`, `seed`, `generation`, `watermark`. `size` is `"<width>x<height>"` and
 wins over the aspect. A size under the minimum fails before the call:
