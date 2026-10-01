@@ -160,7 +160,7 @@ record also carries `runId`, the run it belongs to:
 |--------|--------|------|
 | `item:queued` | `runId, itemId, task, provider` | Item enters the pipeline |
 | `item:dispatching` | `runId, itemId` | Item passed the atomic gate |
-| `item:done` | `runId, itemId, costUsd, contentHash` | Artifact stored and committed (`costUsd: 0` when reused) |
+| `item:done` | `runId, itemId, costUsd, contentHash, contentHashes?` | Artifact stored and committed (`costUsd: 0` when reused). `contentHashes` lists every output hash in order, only for a [multi-output item](#multi-output-items) |
 | `item:retry` | `runId, itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
 | `item:failed` | `runId, itemId, label, errorClass, message?` | Terminal failure (4xx, `invalid-request`, `local-failure`, `unknown`, or attempts exhausted). `label` is the build-file id, `null` on old rows. `message` is the handler's `publicMessage` when it is a non-empty string, else our own `[ai]` error text, else absent: the first two lines, max 300 chars. Attempts exhausted carries the last attempt's message. A dedupe follower carries the leader's message. |
 | `item:flagged` | `runId, itemId, message?` | Content-policy rejection (terminal, never re-queued). `message` follows the `item:failed` rule. A dedupe follower carries the leader's message. |
@@ -211,7 +211,8 @@ const app = createApp({ plugins: [reporterPlugin] });
    `journal.insertItems` writes the items `queued` with label (`id`, else `<NN>-<task>`), build
    name and artifact key (idempotent per run).
 2. **Reuse** — `journal.findDoneArtifact(artifactKey)`: a `done` artifact from any run whose bytes
-   are still in the store completes the item at $0, no provider call.
+   are still in the store completes the item at $0, no provider call. A multi-output artifact is
+   reused only when the store has every output; otherwise the item builds again.
 3. **References** — wait for the item's `$ref` targets to settle; a target that is not `done`
    blocks the item (it stays `queued`, the run ends `paused`). Otherwise each `$ref` becomes the
    target's stored file and each `$file` the local file, as `{ path, mimeType, hash }`.
@@ -240,9 +241,30 @@ const app = createApp({ plugins: [reporterPlugin] });
    journal.
 9. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
    `store.put(bytes)` → `journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash,
-   mimeType })`.
+   mimeType })`. A result with `images` stores every entry and journals them as `outputs` (see
+   [Multi-output items](#multi-output-items)).
 10. **Report** — item record, stamped with its `runId`, to the `events()` consumers that follow
     the run; coalesced `run:progress` on the bus.
+
+### Multi-output items
+
+A handler may return `images: { image, mimeType }[]` next to `image` (an image group, such as ark
+Seedream with `params.images`). When `images` is present and not empty:
+
+- the runner `store.put`s every entry, in order, and calls `commitDone` with `contentHash` /
+  `mimeType` of the first entry and `outputs` = every entry `{ contentHash, mimeType }`. An entry
+  with an empty `mimeType` is stored as `application/octet-stream`;
+- `item:done` carries `contentHashes`, every output hash in order. A group that came back with one
+  image still journals one output and `contentHashes` of length 1, so the caller sees the count;
+- a `$ref` to the item resolves to the first output. A `$ref` to the k-th output does not exist yet;
+- reuse needs every output in the store; the reused `item:done` carries `contentHashes` too;
+- `export` writes one file per output: `<label>.<ext>`, then `<label>-2.<ext>` … `<label>-N.<ext>`,
+  each extension from that output's mime type. The item cost is on the first file, 0 on the others.
+  An item whose file this export already wrote (an item `x-2` next to a group `x`) is skipped and
+  listed in `skipped`, never overwritten;
+
+Without `images` (or with an empty list), nothing changes: one artifact, no `outputs`, no
+`contentHashes`.
 
 A retryable failure returns the item to `queued` (`markFailed` with `terminal: false`) and
 re-enters admit + gate after the backoff delay, until it settles or exhausts `maxAttempts`.
@@ -374,6 +396,7 @@ type HandlerRequest = Record<string, unknown>; // { ...item.input, params }
 type HandlerResult = {
   body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
   mimeType?: string; costUsd: number; meta?: Record<string, unknown>;
+  images?: { image: Uint8Array; mimeType: string }[]; // every image of a group, in order
 };
 type JobPoll =
   | { state: "pending" }
@@ -397,11 +420,15 @@ flat plus `params`. `$ref` / `$file` values arrive as `{ path, mimeType, hash }`
 
 Copies every `done` artifact of a run (default: the newest run) to
 `<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`). The extension comes from the
-stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`.
+stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`. A
+multi-output item writes one file per output: `<label>.<ext>`, `<label>-2.<ext>` …
+`<label>-N.<ext>`; the extra files have `label` `<label>-<k>` and `costUsd` 0. An item whose file
+this export already wrote is skipped and listed in `skipped`: one export never overwrites its own file.
 
 ```ts
 const { files } = await app.runner.export({ outDir: "out" });
 // [{ label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }]
+// a group of 3 keyframes: e01.keys.jpg, e01.keys-2.jpg, e01.keys-3.jpg
 ```
 
 ## Usage

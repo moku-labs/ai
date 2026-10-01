@@ -119,25 +119,36 @@ if (!gate.ok) {
 }
 ```
 
-#### `commitDone(itemId: string, result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }): void`
+#### `commitDone(itemId: string, result: DoneResult): void`
 
 Transitions an item `dispatching → done`, recording its realized cost, its artifact identity key, the CAS content hash of the produced artifact and its mime type. A no-op if the item is not currently `"dispatching"`.
 
+`DoneResult` is `{ actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string; outputs?: DoneOutput[] }`. A multi-output item (an image group) also passes `outputs`: every output in order, each a `DoneOutput` `{ contentHash: string; mimeType: string }`. `contentHash` and `mimeType` stay the first output. `outputs` is written as JSON to the `outputs` column, NULL when absent.
+
 ```ts
 ctx.journal.commitDone(item.id, { actualCostUsd: 0.2, artifactKey, contentHash, mimeType: "video/mp4" });
+
+// An image group of three: contentHash is the first output.
+ctx.journal.commitDone(item.id, {
+  actualCostUsd: 0.105,
+  artifactKey,
+  contentHash: hashes[0],
+  mimeType: "image/jpeg",
+  outputs: hashes.map(contentHash => ({ contentHash, mimeType: "image/jpeg" }))
+});
 ```
 
 #### `getItem(runId: string, planningKey: string): ItemRow | undefined`
 
-One item of a run by planning key. The runner reads `$ref` targets with it.
+One item of a run by planning key. The runner reads `$ref` targets with it. `ItemRow.outputs` is every output of a multi-output item, in order (`outputs[0]` is `contentHash`), or `null` for a single artifact.
 
-#### `findDoneArtifact(artifactKey: string): { contentHash: string; mimeType: string | null } | undefined`
+#### `findDoneArtifact(artifactKey: string): DoneArtifact | undefined`
 
-The newest `done` item with this artifact key, in **any** run — the cross-run reuse lookup.
+The newest `done` item with this artifact key, in **any** run — the cross-run reuse lookup. `DoneArtifact` is `{ contentHash: string; mimeType: string | null; outputs?: DoneOutput[] }`; `outputs` is there only when the row has them.
 
-#### `reuseDone(itemId: string, artifact: { contentHash: string; mimeType: string | null }): void`
+#### `reuseDone(itemId: string, artifact: DoneArtifact): void`
 
-Transitions a `queued` item straight to `done` with a reused artifact, `actual_cost_usd = 0`. A no-op when the item is not `queued`.
+Transitions a `queued` item straight to `done` with a reused artifact, `actual_cost_usd = 0`. Writes `artifact.outputs` too, NULL when absent. A no-op when the item is not `queued`.
 
 ```ts
 const hit = ctx.journal.findDoneArtifact(item.artifactKey);
@@ -343,7 +354,9 @@ if (run) {
 
 ## Internals
 
-- **Schema** (`schema.ts`) — four tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)`, indexes on `(run_id, status)` and `(artifact_key, status)`, plus `label`, `build_name`, `mime_type`), `attempts` (plus `external_id`, `job_state` for provider jobs), and `provider_records`. Metadata columns only. `migrateSchema` adds the newer columns to an older journal file in place (`PRAGMA table_info` → `ALTER TABLE … ADD COLUMN`), and `CREATE TABLE IF NOT EXISTS` adds `provider_records` to it, so existing `.moku/journal.db` files keep working.
+- **Schema** (`schema.ts`) — four tables, created idempotently on `onStart`: `runs`, `items` (with `UNIQUE (run_id, planning_key)`, indexes on `(run_id, status)` and `(artifact_key, status)`, plus `label`, `build_name`, `mime_type`, `outputs`), `attempts` (plus `external_id`, `job_state` for provider jobs), and `provider_records`. Metadata columns only. `migrateSchema` adds the newer columns to an older journal file in place (`PRAGMA table_info` → `ALTER TABLE … ADD COLUMN`), and `CREATE TABLE IF NOT EXISTS` adds `provider_records` to it, so existing `.moku/journal.db` files keep working.
+
+  `outputs TEXT` holds a JSON array of `{ "contentHash": string, "mimeType": string }`, in order, for a multi-output item; NULL for a single artifact. Hashes and mime types only, never bytes. A reader maps a NULL, missing, unparsable, empty or malformed value to `null`, so an older or damaged row stays a single-artifact item.
 
   ```sql
   CREATE TABLE IF NOT EXISTS provider_records (

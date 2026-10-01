@@ -6,12 +6,12 @@
  * attempt re-enters admit+gate, per the durable state machine (`markFailed`
  * returns the item to `queued`). The cross-run dedupe claim lives in claim.ts.
  */
-import type { AttemptOutcome, ErrorClass, ItemRow } from "../journal/types";
+import type { AttemptOutcome, DoneOutput, ErrorClass, ItemRow } from "../journal/types";
 import { registryPlugin } from "../registry";
 import { claimArtifact, OPEN_VERDICT, tryReuse } from "./claim";
 import { failureMessageOf, itemFailureOf, messageDetailOf, reportItemFailed } from "./failure";
 import { canonicalJson, sha256Hex } from "./keys";
-import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
+import { normalizeOutputs, normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import {
   backoffMs,
   classifyError,
@@ -38,10 +38,11 @@ import type {
  * attempt carries its {@link ItemFailure}: the class, plus the safe message (the
  * handler's `publicMessage` or our own `[ai]` text) when there is one, so a
  * retryable failure that exhausts the attempts still reports the last
- * attempt's message.
+ * attempt's message. A done attempt of a multi-output item carries every
+ * output hash, in order, in `contentHashes`.
  */
 type AttemptOutcomeResult =
-  | { kind: "done"; costUsd: number; contentHash: string }
+  | { kind: "done"; costUsd: number; contentHash: string; contentHashes?: string[] }
   | { kind: "aborted" }
   | ({ kind: "flagged" } & ItemFailure)
   | ({ kind: "terminal-failed" } & ItemFailure)
@@ -643,11 +644,57 @@ async function pollOnce(
   }
 }
 
+/** Bytes to store and their mime type: one artifact, or one output of a multi-image result. */
+type ArtifactBytes = ReturnType<typeof normalizeResult>;
+
+/**
+ * Stores what a successful attempt produced, then moves the item to `done`:
+ * the bytes are durable before the item is. A multi-image result stores
+ * every output in order, its first output being the item's content hash and
+ * mime type, and journals and reports all of them. That holds whenever the
+ * handler returned `images`, even a group of one, so the caller sees the count.
+ *
+ * @param ctx - Runner domain context.
+ * @param item - The dispatching item.
+ * @param costUsd - The attempt's actual cost.
+ * @param artifact - The item's (first) artifact.
+ * @param outputs - Every output of a multi-image result, `artifact` first; undefined for a single artifact.
+ * @returns The `done` outcome.
+ */
+async function commitArtifacts(
+  ctx: RunnerContext,
+  item: ItemRow,
+  costUsd: number,
+  artifact: ArtifactBytes,
+  outputs: ArtifactBytes[] | undefined
+): Promise<AttemptOutcomeResult> {
+  // Store the first artifact, then every further output in order.
+  const { hash } = await ctx.store.put(artifact.bytes);
+  const stored: DoneOutput[] = [{ contentHash: hash, mimeType: artifact.mimeType }];
+  for (const output of outputs?.slice(1) ?? []) {
+    const put = await ctx.store.put(output.bytes);
+    stored.push({ contentHash: put.hash, mimeType: output.mimeType });
+  }
+
+  // The item is done; a multi-output item also journals and reports every output.
+  ctx.journal.commitDone(item.id, {
+    actualCostUsd: costUsd,
+    artifactKey:
+      item.artifactKey ?? artifactKeyOf(item.planningKey, item.provider, item.packVersion),
+    contentHash: hash,
+    mimeType: artifact.mimeType,
+    ...(outputs ? { outputs: stored } : {})
+  });
+  const contentHashes = stored.map(output => output.contentHash);
+  return { kind: "done", costUsd, contentHash: hash, ...(outputs ? { contentHashes } : {}) };
+}
+
 /**
  * Runs one provider attempt for an item already gated to `dispatching`:
  * records the attempt, runs the handler (the job path for `submit` + `poll`
  * handlers, else `execute`), normalizes the result, and persists the
- * artifact (`store.put` → `journal.commitDone` with its mime type). On
+ * artifact, or every output of a multi-image result ({@link commitArtifacts}:
+ * `store.put` → `journal.commitDone` with its mime type). On
  * failure, classifies and transitions via {@link handleAttemptError}; when
  * the drain signal aborted, ends the attempt `aborted` and leaves the item
  * `dispatching` for resume.
@@ -673,8 +720,10 @@ async function attemptOnce(
   });
 
   try {
+    // Every image of a multi-image result, else the one artifact; no content at all throws here.
     const result = await runHandler(ctx, item, handler, request, attemptId, signal);
-    const { bytes, mimeType } = normalizeResult(result);
+    const outputs = normalizeOutputs(result);
+    const artifact = outputs?.[0] ?? normalizeResult(result);
     ctx.journal.finishAttempt(attemptId, {
       endedAt: Date.now(),
       outcome: "done",
@@ -682,15 +731,7 @@ async function attemptOnce(
     });
     ctx.limits.reportOutcome(lane, "ok");
 
-    const putResult = await ctx.store.put(bytes);
-    ctx.journal.commitDone(item.id, {
-      actualCostUsd: result.costUsd,
-      artifactKey:
-        item.artifactKey ?? artifactKeyOf(item.planningKey, item.provider, item.packVersion),
-      contentHash: putResult.hash,
-      mimeType
-    });
-    return { kind: "done", costUsd: result.costUsd, contentHash: putResult.hash };
+    return await commitArtifacts(ctx, item, result.costUsd, artifact, outputs);
   } catch (error) {
     // The drain's own abort (no provider hint) pauses; a real provider error still counts.
     if (signal.aborted && classifyError(error) === "unknown") {
@@ -774,7 +815,8 @@ function applyOutcome(
       type: "item:done",
       itemId: item.id,
       costUsd: outcome.costUsd,
-      contentHash: outcome.contentHash
+      contentHash: outcome.contentHash,
+      ...(outcome.contentHashes ? { contentHashes: outcome.contentHashes } : {})
     });
     return { verdict: { kind: "done" } };
   }

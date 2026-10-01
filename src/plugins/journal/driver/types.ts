@@ -44,6 +44,8 @@ export type ItemDatabaseRow = {
   label: string | null;
   build_name: string | null;
   mime_type: string | null;
+  /** JSON array of `{ contentHash, mimeType }`, in order; NULL for a single artifact. */
+  outputs: string | null;
 };
 
 /** Raw `runs` row shape, matching the SQL schema column-for-column. */

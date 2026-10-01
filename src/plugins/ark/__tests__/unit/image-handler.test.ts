@@ -100,6 +100,7 @@ describe("image catalog", () => {
         region: "intl",
         minPixels: 3_686_400,
         maxRefImages: 14,
+        maxGroupImages: 15,
         priceUsd: 0.035
       }
     ]);
@@ -163,7 +164,7 @@ describe("image body", () => {
     expect(checkImageRequest(SEEDREAM, request({ refs: refsOf(14) })).size).toBe("1440x2560");
     expect(() => checkImageRequest(SEEDREAM, request({ refs: refsOf(15) }))).toThrow(TOO_MANY_REFS);
     expect(() => checkImageRequest(SEEDREAM, request({ params: { style: "anime" } }))).toThrow(
-      '[ai] Unknown ark image param "style".\n  Allowed: size, seed, generation, watermark.'
+      '[ai] Unknown ark image param "style".\n  Allowed: size, seed, generation, watermark, images.'
     );
   });
 

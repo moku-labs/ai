@@ -5,7 +5,7 @@
  * recorded without a submit); an `open` verdict passes the key on, and the next
  * claimant adopts any live provider job through the journal.
  */
-import type { ItemRow } from "../journal/types";
+import type { DoneArtifact, ItemRow } from "../journal/types";
 import { itemFailureOf, messageDetailOf, reportItemFailed } from "./failure";
 import { openClaim } from "./state";
 import type { ClaimVerdict, DrainController, RunnerContext, UnstampedRunEvent } from "./types";
@@ -14,9 +14,26 @@ import type { ClaimVerdict, DrainController, RunnerContext, UnstampedRunEvent } 
 export const OPEN_VERDICT: ClaimVerdict = { kind: "open" };
 
 /**
+ * Whether the store still holds every byte of a done artifact: its content
+ * hash and, for a multi-output item, each output.
+ *
+ * @param ctx - Runner domain context.
+ * @param artifact - The done artifact found by key.
+ * @returns True when no output is missing.
+ */
+async function isFullyStored(ctx: RunnerContext, artifact: DoneArtifact): Promise<boolean> {
+  const outputHashes = artifact.outputs?.map(output => output.contentHash) ?? [];
+  const hashes = new Set([artifact.contentHash, ...outputHashes]);
+  const present = await Promise.all([...hashes].map(hash => ctx.store.has(hash)));
+  return present.every(Boolean);
+}
+
+/**
  * Cross-run reuse (D2): when a `done` artifact with this item's artifact key
  * exists in any run and its bytes are still in the store, completes the item
- * with it at cost 0 — no provider call, no budget reservation.
+ * with it at cost 0 — no provider call, no budget reservation. A
+ * multi-output artifact is reused only when every output is in the store;
+ * its `item:done` carries every output hash.
  *
  * @param ctx - Runner domain context.
  * @param item - The queued item.
@@ -31,11 +48,18 @@ export async function tryReuse(
   if (item.artifactKey === null) return false;
 
   const artifact = ctx.journal.findDoneArtifact(item.artifactKey);
-  if (!artifact || !(await ctx.store.has(artifact.contentHash))) return false;
+  if (!artifact || !(await isFullyStored(ctx, artifact))) return false;
 
   ctx.journal.reuseDone(item.id, artifact);
   ctx.log.info("runner:reused", { itemId: item.id });
-  report({ type: "item:done", itemId: item.id, costUsd: 0, contentHash: artifact.contentHash });
+  const contentHashes = artifact.outputs?.map(output => output.contentHash);
+  report({
+    type: "item:done",
+    itemId: item.id,
+    costUsd: 0,
+    contentHash: artifact.contentHash,
+    ...(contentHashes ? { contentHashes } : {})
+  });
   return true;
 }
 

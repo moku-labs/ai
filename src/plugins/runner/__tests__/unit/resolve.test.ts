@@ -4,6 +4,7 @@ import {
   imageMimeTypeOfBytes,
   mimeTypeOfFile,
   mimeTypeOfPath,
+  normalizeOutputs,
   normalizeResult,
   OCTET_STREAM,
   resolveReferences
@@ -126,5 +127,47 @@ describe("normalizeResult", () => {
 
   it("throws a terminal (hint-less) error when there is no content", () => {
     expect(() => normalizeResult({ costUsd: 0 })).toThrow(/Handler result has no content/);
+  });
+});
+
+describe("normalizeOutputs", () => {
+  const FIRST = new Uint8Array([1]);
+  const SECOND = new Uint8Array([2]);
+  const THIRD = new Uint8Array([3]);
+
+  it("is undefined for a result without images, or with an empty list", () => {
+    expect(normalizeOutputs({ image: FIRST, mimeType: "image/png", costUsd: 0 })).toBeUndefined();
+    expect(normalizeOutputs({ image: FIRST, images: [], costUsd: 0 })).toBeUndefined();
+  });
+
+  it("lists every image in order with its mime type", () => {
+    const result = {
+      image: FIRST,
+      mimeType: "image/jpeg",
+      images: [
+        { image: FIRST, mimeType: "image/jpeg" },
+        { image: SECOND, mimeType: "image/png" },
+        { image: THIRD, mimeType: "image/webp" }
+      ],
+      costUsd: 0.105
+    };
+
+    expect(normalizeOutputs(result)).toEqual([
+      { bytes: FIRST, mimeType: "image/jpeg" },
+      { bytes: SECOND, mimeType: "image/png" },
+      { bytes: THIRD, mimeType: "image/webp" }
+    ]);
+  });
+
+  it("keeps a group of one, so the caller sees the count", () => {
+    const result = { images: [{ image: FIRST, mimeType: "image/jpeg" }], costUsd: 0.035 };
+
+    expect(normalizeOutputs(result)).toEqual([{ bytes: FIRST, mimeType: "image/jpeg" }]);
+  });
+
+  it("falls back to application/octet-stream for an empty mime type", () => {
+    const result = { images: [{ image: FIRST, mimeType: "" }], costUsd: 0 };
+
+    expect(normalizeOutputs(result)).toEqual([{ bytes: FIRST, mimeType: OCTET_STREAM }]);
   });
 });

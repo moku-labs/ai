@@ -54,6 +54,15 @@ describe("journal items", () => {
       expect(mustExist(item).label).toBe("pk-1");
       expect(mustExist(item).mimeType).toBeNull();
     });
+
+    it("inserts new items with no outputs, and returns the same on a second insert", () => {
+      const run = openRun(state, { glob: "*.yaml" });
+      const [inserted] = insertItems(state, run.id, [intent("pk-1")]);
+      const [existing] = insertItems(state, run.id, [intent("pk-1")]);
+
+      expect(mustExist(inserted).outputs).toBeNull();
+      expect(mustExist(existing).outputs).toBeNull();
+    });
   });
 
   describe("requeueDispatching", () => {

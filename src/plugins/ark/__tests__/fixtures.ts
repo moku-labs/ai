@@ -434,6 +434,29 @@ export const LIVE_SEEDREAM_RESPONSE = {
   usage: { generated_images: 1, output_tokens: 14_400, total_tokens: 14_400 }
 };
 
+// ─── Documented examples: Seedream group generation (sequential_image_generation) ─
+
+/** Redacted image URLs of a Seedream group response, in `data[]` order. */
+export const SEEDREAM_GROUP_URLS: readonly string[] = [
+  "https://example.invalid/group-1.jpeg",
+  "https://example.invalid/group-2.jpeg",
+  "https://example.invalid/group-3.jpeg"
+];
+
+// source: https://docs.byteplus.com/en/docs/ModelArk/1541523 (group mode: one data[] entry per returned image, url and size; usage.generated_images counts the images made)
+export const SEEDREAM_GROUP_RESPONSE = {
+  data: SEEDREAM_GROUP_URLS.map(url => ({ url, size: "1440x2560" })),
+  usage: { generated_images: 3 }
+};
+
+// unverified: the shape of a per-image error entry in data[]; no source shows one. The handler skips any entry without a url.
+export const SEEDREAM_GROUP_ERROR_ENTRY = {
+  error: {
+    code: "OutputImageSensitiveContentDetected",
+    message: "The output image may contain sensitive content."
+  }
+};
+
 // ─── Documented examples: Ark asset OpenAPI (control plane, signed) ─────────
 // source: https://raw.githubusercontent.com/byteplus-sa/ark-mcp/main/scripts/ark_openapi_sign.py (signing: host, Action/Version query, signed headers)
 
