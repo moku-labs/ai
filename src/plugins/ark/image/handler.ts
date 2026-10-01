@@ -103,6 +103,20 @@ async function downloadImage(ctx: ArkContext, url: string): Promise<ImageOutput>
 }
 
 /**
+ * The error of the first failed download, for a group where every download failed.
+ *
+ * @param settled - The settled downloads, at least one, all rejected.
+ * @returns The first rejection reason.
+ * @example
+ * ```ts
+ * firstRejectionOf([{ status: "rejected", reason: new Error("x") }]); // => Error("x")
+ * ```
+ */
+function firstRejectionOf(settled: readonly PromiseSettledResult<ImageOutput>[]): unknown {
+  return settled.find(outcome => outcome.status === "rejected")?.reason;
+}
+
+/**
  * The one-image result: `data[0]` downloaded, priced per
  * `usage.generated_images` (1 without usage).
  *
@@ -154,10 +168,18 @@ async function groupImageResult(
   body: unknown,
   requested: number
 ): Promise<ImageResult> {
-  // Download every image once, in order; a response with none is unreadable.
-  const images = await Promise.all(imageUrlsOf(body).map(url => downloadImage(ctx, url)));
+  // A response without one image URL is unreadable.
+  const urls = imageUrlsOf(body);
+  if (urls.length === 0) throw unreadableResponse(GENERATIONS_PATH);
+
+  // Download every image once, in order. The group is paid: a failed download
+  // only shortens it, and the call fails only when no download worked.
+  const settled = await Promise.allSettled(urls.map(url => downloadImage(ctx, url)));
+  const images = settled.flatMap(outcome =>
+    outcome.status === "fulfilled" ? [outcome.value] : []
+  );
   const [first] = images;
-  if (first === undefined) throw unreadableResponse(GENERATIONS_PATH);
+  if (first === undefined) throw firstRejectionOf(settled);
 
   // A short group is a result, not an error: warn and bill what was made.
   const returned = images.length;

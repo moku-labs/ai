@@ -228,6 +228,23 @@ describe("journal attempts", () => {
       expect(item.mimeType).toBe("image/jpeg");
     });
 
+    it("commitDone refuses outputs whose first hash is not contentHash, and writes nothing", () => {
+      const { runId, itemId } = queuedItem(state, { artifactKey: "ak-1" });
+      gateToDispatching(state, itemId);
+
+      expect(() =>
+        commitDone(state, itemId, {
+          actualCostUsd: 0.105,
+          artifactKey: "ak-1",
+          contentHash: "ch-9",
+          outputs: OUTPUTS
+        })
+      ).toThrow(
+        "[ai] outputs[0] must be the item's contentHash.\n  Pass the first output's hash as contentHash."
+      );
+      expect(mustExist(getItem(state, runId, "pk-1")).status).toBe("dispatching");
+    });
+
     it("commitDone without outputs: outputs is null", () => {
       const runId = commitGroup(undefined);
 

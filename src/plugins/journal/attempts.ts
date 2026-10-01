@@ -65,8 +65,17 @@ export function finishAttempt(state: State, attemptId: number, end: AttemptEnd):
  * @param result.contentHash - CAS content hash of the (first) produced artifact.
  * @param result.mimeType - MIME type of the (first) produced artifact, when known.
  * @param result.outputs - Every output of a multi-output item, in order; NULL in the row when absent.
+ * @throws {Error} A plain two-line error when `outputs[0]` is not `contentHash`.
  */
 export function commitDone(state: State, itemId: string, result: DoneResult): void {
+  // The first output is the item's artifact: `$ref` and export read both.
+  const first = result.outputs?.[0];
+  if (first !== undefined && first.contentHash !== result.contentHash) {
+    throw new Error(
+      "[ai] outputs[0] must be the item's contentHash.\n  Pass the first output's hash as contentHash."
+    );
+  }
+
   const driver = requireDriver(state);
   driver.transactionImmediate<void>(() => {
     driver.run(

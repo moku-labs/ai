@@ -92,19 +92,33 @@ function exportEntriesOf(item: ItemRow & { contentHash: string }, label: string)
 }
 
 /**
- * Copies one stored artifact to `<buildDirectory>/<label>.<ext>`, the extension from its mime type.
+ * The file an entry is written to: `<buildDirectory>/<label>.<ext>`, the extension from its mime type.
+ *
+ * @param entry - What to write.
+ * @param buildDirectory - Absolute folder of the item's build.
+ * @returns The absolute target path.
+ * @example
+ * ```ts
+ * targetOf({ label: "x-2", contentHash: "h", mimeType: "image/png", costUsd: 0 }, "/repo/out/b"); // => "/repo/out/b/x-2.png"
+ * ```
+ */
+function targetOf(entry: ExportEntry, buildDirectory: string): string {
+  return path.join(buildDirectory, `${entry.label}.${extensionOfMimeType(entry.mimeType)}`);
+}
+
+/**
+ * Copies one stored artifact to its target file.
  *
  * @param ctx - Runner domain context.
  * @param entry - What to write.
- * @param buildDirectory - Absolute folder of the item's build.
+ * @param target - Absolute target path, from {@link targetOf}.
  * @returns The written file.
  */
 async function exportEntry(
   ctx: RunnerContext,
   entry: ExportEntry,
-  buildDirectory: string
+  target: string
 ): Promise<ExportedFile> {
-  const target = path.join(buildDirectory, `${entry.label}.${extensionOfMimeType(entry.mimeType)}`);
   await mkdir(path.dirname(target), { recursive: true });
   await copyFile(ctx.store.pathOf(entry.contentHash), target);
 
@@ -120,31 +134,41 @@ async function exportEntry(
  * @param ctx - Runner domain context.
  * @param item - A `done` item with a content hash.
  * @param outputDirectory - Absolute export directory.
- * @returns The written files, or undefined when the item's names are unsafe.
+ * @param taken - Target paths already written by this export; the item's targets are added.
+ * @returns The written files, or undefined when the item's names are unsafe or one of its
+ *   files would overwrite a file this export already wrote (a group's `x-2` next to an item `x-2`).
  */
 async function exportItem(
   ctx: RunnerContext,
   item: ItemRow & { contentHash: string },
-  outputDirectory: string
+  outputDirectory: string,
+  taken: Set<string>
 ): Promise<ExportedFile[] | undefined> {
   const label = item.label ?? item.id;
   const buildName = item.buildName ?? UNNAMED_BUILD;
   if (!isSafeRelativeName(label) || !isSafeRelativeName(buildName)) return undefined;
 
-  // One file per output, in order, so `<label>-2` never lands before `<label>`.
+  // Never overwrite a file this export already wrote.
   const buildDirectory = path.join(outputDirectory, buildName);
+  const writes = exportEntriesOf(item, label).map(entry => ({
+    entry,
+    target: targetOf(entry, buildDirectory)
+  }));
+  if (writes.some(write => taken.has(write.target))) return undefined;
+  for (const write of writes) taken.add(write.target);
+
+  // One file per output, in order, so `<label>-2` never lands before `<label>`.
   const files: ExportedFile[] = [];
-  for (const entry of exportEntriesOf(item, label)) {
-    files.push(await exportEntry(ctx, entry, buildDirectory));
-  }
+  for (const write of writes) files.push(await exportEntry(ctx, write.entry, write.target));
   return files;
 }
 
 /**
  * Copies every `done` artifact of a run to `<outDir>/<build>/<label>.<ext>`,
  * the extension coming from the stored mime type. A multi-output item adds
- * `<label>-2.<ext>` … `<label>-N.<ext>`. Existing files are
- * overwritten. Labels that would escape `outDir` are skipped and listed.
+ * `<label>-2.<ext>` … `<label>-N.<ext>`. Files from earlier exports are
+ * overwritten. Labels that would escape `outDir`, and items whose file this
+ * export already wrote, are skipped and listed.
  *
  * @param ctx - Runner domain context.
  * @param opts - Optional run id (default: the newest run) and output directory (default "out").
@@ -165,11 +189,12 @@ export async function exportRun(
   const outputDirectory = path.resolve(opts?.outDir ?? DEFAULT_OUT_DIR);
   const files: ExportedFile[] = [];
   const skipped: string[] = [];
+  const taken = new Set<string>();
 
   for (const item of ctx.journal.listItems(run.id, { status: "done" })) {
     if (item.contentHash === null) continue;
     const doneItem = { ...item, contentHash: item.contentHash };
-    const written = await exportItem(ctx, doneItem, outputDirectory);
+    const written = await exportItem(ctx, doneItem, outputDirectory, taken);
     if (written) files.push(...written);
     else skipped.push(item.label ?? item.id);
   }

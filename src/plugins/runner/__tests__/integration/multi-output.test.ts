@@ -245,4 +245,36 @@ describe("runner: an item with several outputs", () => {
       "png:patisserie at night:3"
     );
   });
+
+  it("export skips an item whose file a group already wrote: never overwrites x-2.png", async () => {
+    await writeFile(path.join(tempDir, "keys.moku.yaml"), COLLIDING_YAML);
+    const { app } = await startGroupApp();
+    await app.runner.run({ files });
+
+    const exported = await app.runner.export({ outDir: path.join(tempDir, "out") });
+
+    // Whichever item exports first keeps x-2.png; the other is skipped, never written over it.
+    const paths = exported.files.map(file => file.path);
+    expect(exported.files).toHaveLength(3);
+    expect(new Set(paths).size).toBe(3);
+    expect(exported.skipped).toHaveLength(1);
+    const kept = exported.files.find(file => file.label === "x-2");
+    const prompt = exported.skipped[0] === "x-2" ? "patisserie at night" : "bakery at dawn";
+    const image = exported.skipped[0] === "x-2" ? 2 : 1;
+    expect(await readFile(kept?.path ?? "", "utf8")).toBe(`png:${prompt}:${image}`);
+  });
 });
+
+/** Build file: group `x`, then an item labelled `x-2`, whose file would land on the group's second image. */
+const COLLIDING_YAML = `version: 1
+name: keys
+items:
+  - id: x
+    task: image
+    provider: fake
+    input: { prompt: "patisserie at night" }
+  - id: x-2
+    task: image
+    provider: fake
+    input: { prompt: "bakery at dawn" }
+`;

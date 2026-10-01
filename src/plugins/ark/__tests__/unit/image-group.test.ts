@@ -79,6 +79,21 @@ function stubSeedream(body: unknown): ReturnType<typeof vi.fn> {
   return fetchMock;
 }
 
+/**
+ * Stubs fetch like {@link stubSeedream}, but the downloads `fails` names
+ * throw a network error.
+ */
+function stubSeedreamFailing(body: unknown, fails: (url: string) => boolean): void {
+  const answer = stubSeedream(body).getMockImplementation() as (url: string) => Promise<Response>;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (fails(url)) throw new Error(`reset ${url}`);
+      return answer(url);
+    })
+  );
+}
+
 /** What a promise rejected with. */
 async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
   try {
@@ -287,6 +302,32 @@ describe("image group: execute", () => {
       expect(error).toMatchObject({ status: 502 });
       expect(callsOf(fetchMock)).toHaveLength(1);
     }
+  });
+
+  it("keeps the downloads that worked when one fails: a paid group is never lost", async () => {
+    stubSeedreamFailing(groupResponse(3, { generated_images: 3 }), url => url === groupUrl(2));
+    const ctx = createTestCtx();
+
+    const result = await createImageHandler(ctx).execute(request({ params: { images: 3 } }), {});
+
+    expect(result.images?.map(output => output.image)).toEqual([jpegNumber(1), jpegNumber(3)]);
+    expect(result.costUsd).toBe(0.105);
+    expect(ctx.log.warn).toHaveBeenCalledWith("ark:image:group-short", {
+      model: "seedream-5-0-lite-260128",
+      requested: 3,
+      returned: 2
+    });
+  });
+
+  it("throws the first download error when every download fails", async () => {
+    stubSeedreamFailing(groupResponse(2), url => url !== INTL_IMAGES_URL);
+
+    const error = await rejectionOf(
+      createImageHandler(createTestCtx()).execute(request({ params: { images: 2 } }), {})
+    );
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect(error.message).toBe("[ai] ark request failed (network, image download).");
   });
 
   it("keeps a group of one a group: images has one entry", async () => {

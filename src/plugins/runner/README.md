@@ -260,6 +260,8 @@ Seedream with `params.images`). When `images` is present and not empty:
 - reuse needs every output in the store; the reused `item:done` carries `contentHashes` too;
 - `export` writes one file per output: `<label>.<ext>`, then `<label>-2.<ext>` … `<label>-N.<ext>`,
   each extension from that output's mime type. The item cost is on the first file, 0 on the others.
+  An item whose file this export already wrote (an item `x-2` next to a group `x`) is skipped and
+  listed in `skipped`, never overwritten;
 
 Without `images` (or with an empty list), nothing changes: one artifact, no `outputs`, no
 `contentHashes`.
@@ -420,7 +422,8 @@ Copies every `done` artifact of a run (default: the newest run) to
 `<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`). The extension comes from the
 stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`. A
 multi-output item writes one file per output: `<label>.<ext>`, `<label>-2.<ext>` …
-`<label>-N.<ext>`; the extra files have `label` `<label>-<k>` and `costUsd` 0.
+`<label>-N.<ext>`; the extra files have `label` `<label>-<k>` and `costUsd` 0. An item whose file
+this export already wrote is skipped and listed in `skipped`: one export never overwrites its own file.
 
 ```ts
 const { files } = await app.runner.export({ outDir: "out" });

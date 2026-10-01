@@ -420,7 +420,9 @@ stores every image and exports `<label>.jpg`, `<label>-2.jpg` … `<label>-M.jpg
 is the first image.
 
 **Short groups.** N is a cap: the model may return fewer. M < N is a result, not an error: it logs
-`ark:image:group-short` (`{ model, requested: N, returned: M }`).
+`ark:image:group-short` (`{ model, requested: N, returned: M }`). A download that fails also
+shortens the group: the group is paid, so the images that did download are kept. The call fails only
+when no download worked.
 
 **Cost.** BytePlus bills each image it made; failed images are not charged. `costUsd` is the price
 per image times `usage.generated_images`, else times M. The estimate prices N images: an upper
