@@ -1571,3 +1571,106 @@ describe("executeItem — invalid-request and local-failure", () => {
     expect(events.at(-1)).toMatchObject({ type: "item:failed", errorClass: kind });
   });
 });
+
+// ---------------------------------------------------------------------------
+// executeItem — item:flagged carries the provider's safe message
+// ---------------------------------------------------------------------------
+
+describe("executeItem — item:flagged message", () => {
+  const ARK_FLAGGED =
+    "[ai] ark flagged the request: InputImageSensitiveContentDetected.PrivacyInformation.\n  Change the prompt or the inputs.";
+
+  it("a content-policy [ai] error reports its first two lines on item:flagged", async () => {
+    const { events, itemId } = await runFailingItem(() =>
+      Object.assign(new Error(`${ARK_FLAGGED}\n  Body: {"code":"x"}`), { kind: "content-policy" })
+    );
+
+    expect(events.at(-1)).toEqual({ type: "item:flagged", itemId, message: ARK_FLAGGED });
+  });
+
+  it("a content-policy error with a publicMessage reports that text", async () => {
+    const PUBLIC = "[studio] The portrait was refused.\n  Use another photo.";
+    const { events, itemId } = await runFailingItem(() =>
+      Object.assign(new Error("raw provider text"), {
+        kind: "content-policy",
+        publicMessage: PUBLIC
+      })
+    );
+
+    expect(events.at(-1)).toEqual({ type: "item:flagged", itemId, message: PUBLIC });
+  });
+
+  it("a content-policy error with no safe text reports no message key", async () => {
+    const { events } = await runFailingItem(() =>
+      Object.assign(new Error("flagged content"), { kind: "content-policy" })
+    );
+
+    expect(events.at(-1)?.type).toBe("item:flagged");
+    expect(events.at(-1)).not.toHaveProperty("message");
+  });
+
+  it("cuts a long flagged [ai] message at 300 characters", async () => {
+    const { events } = await runFailingItem(() =>
+      Object.assign(new Error(`[ai] ${"x".repeat(400)}`), { kind: "content-policy" })
+    );
+
+    const flagged = events.at(-1);
+    const message = flagged?.type === "item:flagged" ? flagged.message : undefined;
+    expect(message).toBe(`[ai] ${"x".repeat(295)}`);
+  });
+
+  it("the leader settles its claim with the flagged message", async () => {
+    const { verdict } = await leaderVerdict({
+      hint: { kind: "content-policy" },
+      message: ARK_FLAGGED
+    });
+    expect(verdict).toEqual({ kind: "flagged", message: ARK_FLAGGED });
+  });
+
+  it("a follower of a flagged leader reports the leader's message", async () => {
+    const log: CallLog = [];
+    const ctx = createFakeRunnerContext(log);
+    const settleLeader = openClaim(ctx.state, "ak-1", "leader-item");
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "flagged", message: ARK_FLAGGED });
+    await following;
+
+    expect(log).toEqual([
+      `journal.gateToDispatching(${item.id})`,
+      `journal.markFlagged(${item.id})`
+    ]);
+    expect(events.at(-1)).toEqual({ type: "item:flagged", itemId: item.id, message: ARK_FLAGGED });
+  });
+
+  it("a follower of a flagged leader with no message reports no message key", async () => {
+    const ctx = createFakeRunnerContext([]);
+    const settleLeader = openClaim(ctx.state, "ak-1", "leader-item");
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "flagged" });
+    await following;
+
+    expect(events.at(-1)).toEqual({ type: "item:flagged", itemId: item.id });
+  });
+});

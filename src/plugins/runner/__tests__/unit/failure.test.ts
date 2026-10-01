@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { failureMessageOf, itemFailureOf } from "../../failure";
+import { failureMessageOf, itemFailureOf, messageDetailOf } from "../../failure";
 
 describe("failureMessageOf", () => {
   it("keeps the first two lines of our own [ai] error", () => {
@@ -87,5 +87,12 @@ describe("itemFailureOf", () => {
       message: "[ai] no."
     });
     expect(itemFailureOf("http-4xx", undefined)).not.toHaveProperty("message");
+  });
+});
+
+describe("messageDetailOf", () => {
+  it("has the message key only when there is a message", () => {
+    expect(messageDetailOf("[ai] no.")).toEqual({ message: "[ai] no." });
+    expect(messageDetailOf(undefined)).toEqual({});
   });
 });
