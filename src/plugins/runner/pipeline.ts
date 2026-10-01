@@ -34,8 +34,8 @@ import type {
 } from "./types";
 
 /**
- * Discriminated outcome of a single provider attempt. A failed attempt
- * carries its {@link ItemFailure}: the class, plus the safe message (the
+ * Discriminated outcome of a single provider attempt. A failed or flagged
+ * attempt carries its {@link ItemFailure}: the class, plus the safe message (the
  * handler's `publicMessage` or our own `[ai]` text) when there is one, so a
  * retryable failure that exhausts the attempts still reports the last
  * attempt's message.
@@ -43,7 +43,7 @@ import type {
 type AttemptOutcomeResult =
   | { kind: "done"; costUsd: number; contentHash: string }
   | { kind: "aborted" }
-  | { kind: "flagged" }
+  | ({ kind: "flagged" } & ItemFailure)
   | ({ kind: "terminal-failed" } & ItemFailure)
   | ({ kind: "retryable"; retryAfterMs: number | undefined } & ItemFailure);
 
@@ -324,8 +324,8 @@ function outcomeOf(errorClass: ErrorClass): AttemptOutcome {
  * transitions the item for the two outcomes it can fully decide
  * (`flagged`, terminal `failed`), and reports the breaker outcome for
  * retryable failures. A provider's `kind: "resubmit"` verdict retries like
- * its status says but never feeds the lane breaker. A failed outcome carries
- * the error's safe message, its `publicMessage` or our own `[ai]` text
+ * its status says but never feeds the lane breaker. A failed or flagged
+ * outcome carries the error's safe message, its `publicMessage` or our own `[ai]` text
  * ({@link failureMessageOf}). The
  * retryable-vs-exhausted decision is left to the caller, which tracks the
  * cross-attempt count.
@@ -352,7 +352,7 @@ function handleAttemptError(
 
   if (outcome === "flagged") {
     ctx.journal.markFlagged(item.id);
-    return { kind: "flagged" };
+    return { kind: "flagged", ...failure };
   }
   if (outcome === "terminal-error") {
     ctx.journal.markFailed(item.id, { errorClass, terminal: true });
@@ -744,8 +744,9 @@ type AttemptStep = { verdict: ClaimVerdict } | { attempt: number; waitMs: number
  * retryable outcome — either exhausts `maxAttempts` (terminal `failed`) or
  * transitions the item back to `queued` and reports `item:retry` with the
  * computed backoff delay. Every `item:failed` carries the item's label and
- * the attempt's safe message, if any (see {@link reportItemFailed}). A stop
- * carries the item's claim verdict: `done`, `flagged`, `failed` with its class
+ * the attempt's safe message, if any (see {@link reportItemFailed}); every
+ * `item:flagged` carries the same safe message, if any. A stop carries the
+ * item's claim verdict: `done`, `flagged` (and message), `failed` with its class
  * (and message) for a non-retryable failure, or `open`
  * for an abort and for retryable attempts exhausted: a 5xx, 429, network or
  * timeout error can pass on a later try, so a follower tries for itself.
@@ -779,8 +780,9 @@ function applyOutcome(
     return { verdict: { kind: "done" } };
   }
   if (outcome.kind === "flagged") {
-    report({ type: "item:flagged", itemId: item.id });
-    return { verdict: { kind: "flagged" } };
+    const detail = outcome.message === undefined ? {} : { message: outcome.message };
+    report({ type: "item:flagged", itemId: item.id, ...detail });
+    return { verdict: { kind: "flagged", ...detail } };
   }
   if (outcome.kind === "terminal-failed") {
     const failure = itemFailureOf(outcome.errorClass, outcome.message);

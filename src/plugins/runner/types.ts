@@ -73,7 +73,13 @@ export type RunEvent =
       /** First two lines (max 300 chars) of the handler's `publicMessage`, else of our own `[ai]` error; absent for any other error. */
       message?: string;
     }
-  | { type: "item:flagged"; runId: string; itemId: string }
+  | {
+      type: "item:flagged";
+      runId: string;
+      itemId: string;
+      /** Same rule as `item:failed`: the handler's `publicMessage`, else our own `[ai]` error, first two lines (max 300 chars); absent for any other error. */
+      message?: string;
+    }
   | { type: "overflow"; runId: string; dropped: number }
   | { type: "progress"; runId: string; totals: RunTotals }
   | { type: "terminal"; runId: string; status: RunResultStatus; totals: RunTotals };
@@ -81,8 +87,8 @@ export type RunEvent =
 /**
  * Why an item failed: its error class and, only for an error with a
  * `publicMessage` (see {@link ProviderErrorHint}) or our own `[ai]` error,
- * that text's first two lines (max 300 chars). Carried on `item:failed` and
- * the `runner:item:failed` log, never written to the journal.
+ * that text's first two lines (max 300 chars). Carried on `item:failed`,
+ * `item:flagged` and the `runner:item:failed` log, never written to the journal.
  *
  * @example
  * ```ts
@@ -317,7 +323,7 @@ export type ActiveRun = {
 /**
  * How the item holding an artifact claim ended, copied by the items waiting
  * on it: `done` (reuse its artifact), `flagged` / `failed` (record the same
- * verdict, no submit; `failed` carries the leader's message, its
+ * verdict, no submit; both carry the leader's message, its
  * `publicMessage` or our own `[ai]` text, when it had one; `failed` is
  * shared for `http-4xx`, `invalid-request`, `local-failure` and `unknown`),
  * or `open` (it stopped without a final provider
@@ -326,7 +332,7 @@ export type ActiveRun = {
  */
 export type ClaimVerdict =
   | { kind: "done" }
-  | { kind: "flagged" }
+  | { kind: "flagged"; message?: string }
   | { kind: "failed"; errorClass: ErrorClass; message?: string }
   | { kind: "open" };
 
