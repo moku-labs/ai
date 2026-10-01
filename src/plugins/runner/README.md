@@ -163,7 +163,7 @@ record also carries `runId`, the run it belongs to:
 | `item:done` | `runId, itemId, costUsd, contentHash` | Artifact stored and committed (`costUsd: 0` when reused) |
 | `item:retry` | `runId, itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
 | `item:failed` | `runId, itemId, label, errorClass, message?` | Terminal failure (4xx, `invalid-request`, `local-failure`, `unknown`, or attempts exhausted). `label` is the build-file id, `null` on old rows. `message` is the handler's `publicMessage` when it is a non-empty string, else our own `[ai]` error text, else absent: the first two lines, max 300 chars. Attempts exhausted carries the last attempt's message. A dedupe follower carries the leader's message. |
-| `item:flagged` | `runId, itemId` | Content-policy rejection (terminal, never re-queued) |
+| `item:flagged` | `runId, itemId, message?` | Content-policy rejection (terminal, never re-queued). `message` follows the `item:failed` rule. A dedupe follower carries the leader's message. |
 | `overflow` | `runId, dropped` | Consumer buffer overflowed; `dropped` oldest item records of that run lost |
 | `progress` | `runId, totals` | Coalesced run totals (latest unconsumed wins) |
 | `terminal` | `runId, status, totals` | Run settled — always the last record of that run |
@@ -296,7 +296,7 @@ own runId, abort signal, `maxCostUsd`, totals and status.
   once. The first item claims the key; the others wait for its verdict and copy it:
   - `done` — reuse its artifact at cost 0 (`item:done` with `costUsd: 0`). If the bytes are gone
     from the store, treat it as `open`.
-  - `flagged` / `failed` — record the same verdict (and error class) through the gate, with no
+  - `flagged` / `failed` — record the same verdict (error class and message) through the gate, with no
     attempt row and no submit: the same request would get the same verdict and cost money.
     `failed` is shared only for a non-retryable class (4xx, `invalid-request`, `local-failure`,
     unknown).

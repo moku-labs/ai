@@ -276,7 +276,7 @@ re-submitting it. Throw errors with `status` or `kind: "timeout" | "network" |
 programming error and fails the item after one attempt. `kind: "invalid-request" |
 "local-failure"` fails the item after one attempt under that class (the handler refused
 the request, or its own machine failed). Set `publicMessage` to a text that is safe to
-show (no keys, no prompts) and `item:failed` carries it as `message`.
+show (no keys, no prompts) and `item:failed` or `item:flagged` carries it as `message`.
 
 ### Images, video and references
 
