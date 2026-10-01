@@ -1,7 +1,8 @@
 /**
  * @file ark image handler — implements the execute-only image contract
- * (`../../image/contract.ts`) over Seedream text-to-image
- * (`POST {dataPlane}/images/generations`, Bearer API key). One call makes one
+ * (`../../image/contract.ts`) over Seedream text-to-image and image-to-image
+ * (`POST {dataPlane}/images/generations`, Bearer API key). Local refs go out
+ * as data URIs, so nothing is hosted. One call makes one
  * image; its URL is downloaded once, without the key, and the bytes are
  * returned UNCHANGED: never decoded, resized, cropped or re-encoded. BytePlus
  * trusts a face in a later Seedance request only in those original bytes.
@@ -19,7 +20,13 @@ import {
 import { imageCostUsd } from "../prices";
 import { dataPlaneUrl } from "../regions";
 import type { ArkContext } from "../types";
-import { buildImageBody, checkImageRequest, imageMimeOf, warnImageNegativeOnce } from "./body";
+import {
+  buildImageBody,
+  checkImageRequest,
+  imageMimeOf,
+  readReferenceImages,
+  warnImageNegativeOnce
+} from "./body";
 import { resolveArkImageModel } from "./models";
 
 /** Data-plane path of the image generation API. */
@@ -61,6 +68,7 @@ async function executeImage(
   const checked = checkImageRequest(model, request);
   const apiKey = ctx.env.require(ctx.config.apiKeyEnv);
   warnImageNegativeOnce(ctx, model.id, request);
+  const referenceImages = await readReferenceImages(request.refs ?? []);
 
   // Generate one image; ark answers with its URL.
   signal?.throwIfAborted();
@@ -69,7 +77,7 @@ async function executeImage(
     {
       method: "POST",
       headers: bearerHeaders(apiKey),
-      body: JSON.stringify(buildImageBody(model, request.prompt, checked))
+      body: JSON.stringify(buildImageBody(model, request.prompt, checked, referenceImages))
     },
     { timeoutMs: ctx.config.timeoutMs, label: GENERATIONS_PATH }
   );
@@ -98,7 +106,7 @@ async function executeImage(
  * Creates the ark image handler registered under `("image", "ark")`.
  * `estimate` touches no network and needs no key: it checks the request with
  * the execute errors and prices one image. `execute` makes one Seedream
- * text-to-image call.
+ * call: text-to-image, or image-to-image when the request has refs.
  *
  * @param ctx - Plugin context (config, state, env, log).
  * @returns The handler: estimate and execute.
