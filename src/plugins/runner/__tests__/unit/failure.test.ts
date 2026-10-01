@@ -27,6 +27,59 @@ describe("failureMessageOf", () => {
   });
 });
 
+describe("failureMessageOf — a handler's publicMessage", () => {
+  const PUBLIC_MESSAGE = "[studio] Invalid assemble request.\n  Name at least one clip.";
+
+  it("forwards the first two lines of a publicMessage", () => {
+    const error = Object.assign(new Error("ffmpeg exited 1: /Users/alex/clip.mp4"), {
+      kind: "invalid-request",
+      publicMessage: `${PUBLIC_MESSAGE}\n  Detail line.`
+    });
+    expect(failureMessageOf(error)).toBe(PUBLIC_MESSAGE);
+  });
+
+  it("cuts a publicMessage at 300 characters", () => {
+    const error = Object.assign(new Error("boom"), {
+      publicMessage: `[studio] ${"z".repeat(500)}`
+    });
+    expect(failureMessageOf(error)).toBe(`[studio] ${"z".repeat(291)}`);
+  });
+
+  it("wins over our own [ai] message", () => {
+    const error = Object.assign(new Error("[ai] fal rejected the image."), {
+      publicMessage: PUBLIC_MESSAGE
+    });
+    expect(failureMessageOf(error)).toBe(PUBLIC_MESSAGE);
+  });
+
+  it("is read off a plain object too", () => {
+    expect(failureMessageOf({ publicMessage: "x" })).toBe("x");
+  });
+
+  it.each<[string, unknown]>([
+    ["an empty publicMessage", ""],
+    ["a number publicMessage", 42],
+    ["an object publicMessage", { text: "[studio] no." }]
+  ])("falls back to the [ai] rule for %s", (_name, publicMessage) => {
+    const ownError = Object.assign(
+      new Error("[ai] ark rejected the request.\n  Check it.\n  Body."),
+      {
+        publicMessage
+      }
+    );
+    const providerError = Object.assign(new Error("401 Unauthorized: key sk-live-123"), {
+      publicMessage
+    });
+
+    expect(failureMessageOf(ownError)).toBe("[ai] ark rejected the request.\n  Check it.");
+    expect(failureMessageOf(providerError)).toBeUndefined();
+  });
+
+  it("carries no message for a plain Error with neither", () => {
+    expect(failureMessageOf(new Error("ENOENT: /Users/alex/.secrets"))).toBeUndefined();
+  });
+});
+
 describe("itemFailureOf", () => {
   it("sets the message key only when there is a message", () => {
     expect(itemFailureOf("http-4xx", "[ai] no.")).toEqual({

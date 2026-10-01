@@ -3,6 +3,8 @@ import type { ErrorClass } from "../../../journal/types";
 import {
   backoffMs,
   classifyError,
+  isOwnSideErrorClass,
+  isProviderErrorHint,
   isResubmitVerdict,
   isRetryableErrorClass,
   retryAfterMsOf
@@ -65,6 +67,39 @@ describe("classifyError", () => {
   it("classifies a non-object thrown value as unknown", () => {
     expect(classifyError("just a string")).toBe("unknown");
   });
+
+  it.each<[string, ProviderErrorHint, ErrorClass]>([
+    ["kind:invalid-request", { kind: "invalid-request" }, "invalid-request"],
+    [
+      "kind:invalid-request with a 400",
+      { kind: "invalid-request", status: 400 },
+      "invalid-request"
+    ],
+    ["kind:local-failure", { kind: "local-failure" }, "local-failure"],
+    ["kind:local-failure with a 503", { kind: "local-failure", status: 503 }, "local-failure"]
+  ])("classifies a %s hint by its kind, never by the status", (_name, hint, errorClass) => {
+    expect(classifyError(Object.assign(new Error("[studio] ffmpeg failed."), hint))).toBe(
+      errorClass
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isProviderErrorHint — any thrown object may carry hint fields
+// ---------------------------------------------------------------------------
+
+describe("isProviderErrorHint", () => {
+  it("is true for an Error and for a plain object", () => {
+    expect(isProviderErrorHint(new Error("boom"))).toBe(true);
+    expect(isProviderErrorHint({ publicMessage: "[studio] no." })).toBe(true);
+  });
+
+  it("is false for a thrown string, null and undefined", () => {
+    expect(isProviderErrorHint("[studio] no.")).toBe(false);
+    // eslint-disable-next-line unicorn/no-null -- a `throw null` reaches the catch clause as null
+    expect(isProviderErrorHint(null)).toBe(false);
+    expect(isProviderErrorHint(undefined)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -109,7 +144,13 @@ describe("retryAfterMsOf", () => {
 
 describe("isRetryableErrorClass", () => {
   const retryableClasses: ErrorClass[] = ["http-5xx", "http-429", "timeout", "network"];
-  const terminalClasses: ErrorClass[] = ["http-4xx", "content-policy", "unknown"];
+  const terminalClasses: ErrorClass[] = [
+    "http-4xx",
+    "content-policy",
+    "invalid-request",
+    "local-failure",
+    "unknown"
+  ];
 
   it.each(retryableClasses)("treats %s as retryable", errorClass => {
     expect(isRetryableErrorClass(errorClass)).toBe(true);
@@ -117,6 +158,30 @@ describe("isRetryableErrorClass", () => {
 
   it.each(terminalClasses)("treats %s as terminal (not retryable)", errorClass => {
     expect(isRetryableErrorClass(errorClass)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isOwnSideErrorClass — our own side's verdict, not the provider's
+// ---------------------------------------------------------------------------
+
+describe("isOwnSideErrorClass", () => {
+  const ownSideClasses: ErrorClass[] = ["unknown", "invalid-request", "local-failure"];
+  const providerClasses: ErrorClass[] = [
+    "http-5xx",
+    "http-429",
+    "timeout",
+    "network",
+    "http-4xx",
+    "content-policy"
+  ];
+
+  it.each(ownSideClasses)("treats %s as our own side's verdict", errorClass => {
+    expect(isOwnSideErrorClass(errorClass)).toBe(true);
+  });
+
+  it.each(providerClasses)("treats %s as the provider's verdict", errorClass => {
+    expect(isOwnSideErrorClass(errorClass)).toBe(false);
   });
 });
 

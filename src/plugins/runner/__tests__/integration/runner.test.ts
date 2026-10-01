@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore, createPlugin } from "../../../../config";
 import { buildfilePlugin } from "../../../buildfile";
+import { openSqliteDriver } from "../../../journal/driver/select";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../index";
 import type {
@@ -434,6 +435,60 @@ describe("runner plugin integration", () => {
     expect(result.totals.done).toBe(0);
 
     await app.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: a handler's invalid-request and publicMessage reach item:failed
+  // -------------------------------------------------------------------------
+
+  it("fails a handler's invalid-request after one attempt and forwards its publicMessage", async () => {
+    let calls = 0;
+    const handler: ExecutableHandler = {
+      estimate: () => ({ usd: 0.1 }),
+      execute: async () => {
+        calls += 1;
+        throw Object.assign(new Error("[x] bad request.\n  Fix it.\n  more"), {
+          kind: "invalid-request",
+          publicMessage: "[x] bad request.\n  Fix it."
+        });
+      }
+    };
+    const fixture = createFakeProviderPlugin("fixtureJ", "fakeTask", "fakeProvider", handler);
+    const { createApp } = buildFramework(tempDir);
+    const app = createApp({
+      plugins: [fixture],
+      pluginConfigs: { runner: { retryBaseMs: 1 } }
+    });
+    await app.start();
+    await writeFile(path.join(tempDir, "a.moku.yaml"), buildFileYaml("build-a", { text: "a" }));
+
+    const runPromise = app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+    const received: RunEvent[] = [];
+    for await (const event of app.runner.events()) received.push(event);
+    const result = await runPromise;
+    await app.stop();
+
+    // One attempt, and item:failed names the class and carries the handler's own text.
+    expect(calls).toBe(1);
+    expect(result.totals).toMatchObject({ total: 1, failed: 1, queued: 0 });
+    expect(received.filter(event => event.type === "item:retry")).toEqual([]);
+    expect(received.find(event => event.type === "item:failed")).toMatchObject({
+      errorClass: "invalid-request",
+      message: "[x] bad request.\n  Fix it."
+    });
+
+    // The journal keeps the class and outcome, never the message.
+    const driver = openSqliteDriver({
+      path: path.join(tempDir, "journal.db"),
+      busyTimeoutMs: 5000
+    });
+    const attempts = driver.all<{ outcome: string; error_class: string | null }>(
+      "SELECT outcome, error_class FROM attempts"
+    );
+    const items = driver.all<{ status: string }>("SELECT status FROM items");
+    driver.close();
+    expect(attempts).toEqual([{ outcome: "terminal-error", error_class: "invalid-request" }]);
+    expect(items).toEqual([{ status: "failed" }]);
   });
 
   // -------------------------------------------------------------------------

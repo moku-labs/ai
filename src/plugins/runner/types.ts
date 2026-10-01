@@ -70,7 +70,7 @@ export type RunEvent =
       /** The item's build-file id (`ItemRow.label`); null only on rows written before labels existed. */
       label: string | null;
       errorClass: ErrorClass;
-      /** First two lines (max 300 chars) of our own `[ai]` error; absent for any other error. */
+      /** First two lines (max 300 chars) of the handler's `publicMessage`, else of our own `[ai]` error; absent for any other error. */
       message?: string;
     }
   | { type: "item:flagged"; runId: string; itemId: string }
@@ -79,8 +79,9 @@ export type RunEvent =
   | { type: "terminal"; runId: string; status: RunResultStatus; totals: RunTotals };
 
 /**
- * Why an item failed: its error class and, only for our own `[ai]` errors,
- * the error's first two lines (max 300 chars). Carried on `item:failed` and
+ * Why an item failed: its error class and, only for an error with a
+ * `publicMessage` (see {@link ProviderErrorHint}) or our own `[ai]` error,
+ * that text's first two lines (max 300 chars). Carried on `item:failed` and
  * the `runner:item:failed` log, never written to the journal.
  */
 export type ItemFailure = { errorClass: ErrorClass; message?: string };
@@ -171,14 +172,16 @@ export type ExecutableHandler = {
 };
 
 /**
- * Structural hint a provider handler may attach to a thrown error so the
- * retry taxonomy (`classifyError`/backoff in retry.ts) can classify it
- * without depending on a concrete HTTP client. All fields optional; an
- * error with none of them classifies as `"unknown"` (terminal).
+ * Structural hint a handler (a provider plugin, or a consumer's own handler)
+ * may attach to a thrown error so the retry taxonomy (`classifyError`/backoff
+ * in retry.ts) can classify it without depending on a concrete HTTP client,
+ * and so `item:failed` can say why. All fields optional; an error with no
+ * `kind` and no `status` classifies as `"unknown"` (terminal).
  *
- * A poll error with no hint marks the job expired, so the next run adopts
- * it (used for a lost or rejected key). `kind: "resubmit"` retries like its
- * status says but does not feed the lane breaker. A resubmit verdict must be
+ * A poll error with no hint, or with `kind: "invalid-request"` /
+ * `"local-failure"`, marks the job expired, so the next run adopts it (used
+ * for a lost or rejected key). `kind: "resubmit"` retries like its status
+ * says but does not feed the lane breaker. A resubmit verdict must be
  * returned from `poll` as `{ state: "failed", error }`; a thrown one is read
  * as pending.
  *
@@ -190,18 +193,43 @@ export type ExecutableHandler = {
  *   error: Object.assign(new Error("[ai] apimodels lost the task."), { status: 503, kind: "resubmit" })
  * };
  * ```
+ * @example
+ * ```ts
+ * // A studio's own assemble handler refuses a request it cannot run: one attempt,
+ * // item:failed { errorClass: "invalid-request", message: "[studio] Invalid assemble request.\n  Name at least one clip." }.
+ * throw Object.assign(new Error(`[studio] Invalid assemble request: ${detail}`), {
+ *   kind: "invalid-request",
+ *   publicMessage: "[studio] Invalid assemble request.\n  Name at least one clip."
+ * });
+ * ```
  */
 export type ProviderErrorHint = {
   /** HTTP status code, when the failure came from an HTTP response. */
   status?: number;
   /**
-   * Explicit classification hint. `timeout`, `network` and `content-policy`
-   * override status-based inference; `resubmit` keeps the status class and
-   * only keeps the failure off the lane breaker.
+   * Explicit classification hint. `timeout`, `network`, `content-policy`,
+   * `invalid-request` and `local-failure` override status-based inference;
+   * `resubmit` keeps the status class and only keeps the failure off the
+   * lane breaker. `invalid-request` (the handler refuses the request) and
+   * `local-failure` (the handler's own machine failed, e.g. a local tool)
+   * end the item `failed` after one attempt, with no breaker outcome.
    */
-  kind?: "timeout" | "network" | "content-policy" | "resubmit";
+  kind?:
+    | "timeout"
+    | "network"
+    | "content-policy"
+    | "resubmit"
+    | "invalid-request"
+    | "local-failure";
   /** Provider-supplied Retry-After delay, ms (honored when larger than computed backoff). */
   retryAfterMs?: number;
+  /**
+   * Text the handler declares safe to show: no keys, no prompts. When it is a
+   * non-empty string, `item:failed` and the `runner:item:failed` log carry
+   * its first two lines (max 300 chars) in place of the `[ai]` rule. Never
+   * journaled.
+   */
+  publicMessage?: string;
 };
 
 /**
@@ -284,8 +312,10 @@ export type ActiveRun = {
 /**
  * How the item holding an artifact claim ended, copied by the items waiting
  * on it: `done` (reuse its artifact), `flagged` / `failed` (record the same
- * verdict, no submit; `failed` carries the leader's `[ai]` message when it
- * had one), or `open` (it stopped without a final provider
+ * verdict, no submit; `failed` carries the leader's message, its
+ * `publicMessage` or our own `[ai]` text, when it had one; `failed` is
+ * shared for `http-4xx`, `invalid-request`, `local-failure` and `unknown`),
+ * or `open` (it stopped without a final provider
  * verdict: a drain, a budget stop, a refused gate, or retryable attempts
  * exhausted; its job, if any, stays adoptable).
  */

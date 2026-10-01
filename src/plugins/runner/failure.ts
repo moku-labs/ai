@@ -1,10 +1,12 @@
 /**
  * @file runner failure — the `item:failed` record: the safe message it may
- * carry, and the one place that reports and logs a terminal failure. Only our
- * own `[ai]` texts are passed on (they carry no keys or prompts); the message
- * is never written to the journal, which stays metadata only.
+ * carry, and the one place that reports and logs a terminal failure. Only a
+ * text the handler declared safe (`publicMessage`) or our own `[ai]` text is
+ * passed on (neither carries keys or prompts); the message is never written
+ * to the journal, which stays metadata only.
  */
 import type { ErrorClass, ItemRow } from "../journal/types";
+import { isProviderErrorHint } from "./retry";
 import type { ItemFailure, RunnerContext, UnstampedRunEvent } from "./types";
 
 /** Prefix of this framework's own error texts. */
@@ -17,8 +19,35 @@ const MAX_MESSAGE_LINES = 2;
 const MAX_MESSAGE_LENGTH = 300;
 
 /**
- * The message an `item:failed` record may carry: the first two lines of the
- * error, cut at 300 characters, only when it is an `Error` whose message
+ * The text a handler declared safe to show: the `publicMessage` of a thrown
+ * object, when it is a non-empty string.
+ *
+ * @param error - The thrown value.
+ * @returns The public message, or undefined.
+ */
+function publicMessageOf(error: unknown): string | undefined {
+  if (!isProviderErrorHint(error)) return undefined;
+
+  const { publicMessage } = error;
+  const isShowable = typeof publicMessage === "string" && publicMessage !== "";
+  return isShowable ? publicMessage : undefined;
+}
+
+/**
+ * Our own error text: the message of an `Error` that starts with `[ai]`.
+ *
+ * @param error - The thrown value.
+ * @returns The `[ai]` message, or undefined.
+ */
+function ownErrorMessageOf(error: unknown): string | undefined {
+  const isOwnError = error instanceof Error && error.message.startsWith(OWN_ERROR_PREFIX);
+  return isOwnError ? error.message : undefined;
+}
+
+/**
+ * The message an `item:failed` record may carry: the first two lines, cut at
+ * 300 characters, of the error's `publicMessage` when it is a non-empty
+ * string (the handler declares it safe), else of an `Error` message that
  * starts with `[ai]`. Any other error (a provider's raw text, a thrown
  * string) gives no message, so no key or prompt reaches the stream.
  *
@@ -26,16 +55,22 @@ const MAX_MESSAGE_LENGTH = 300;
  * @returns The safe message, or undefined.
  * @example
  * ```ts
+ * failureMessageOf(
+ *   Object.assign(new Error("ffmpeg exited 1: /Users/alex/ep01/s01.mp4"), {
+ *     kind: "local-failure",
+ *     publicMessage: "[studio] ffmpeg could not join the clips.\n  Check the clip files."
+ *   })
+ * ); // => "[studio] ffmpeg could not join the clips.\n  Check the clip files."
  * failureMessageOf(new Error("[ai] fal rejected the image.\n  Use a PNG or JPEG.\n  Detail."));
  * // => "[ai] fal rejected the image.\n  Use a PNG or JPEG."
  * failureMessageOf(new Error("401 Unauthorized")); // => undefined
  * ```
  */
 export function failureMessageOf(error: unknown): string | undefined {
-  const isOwnError = error instanceof Error && error.message.startsWith(OWN_ERROR_PREFIX);
-  if (!isOwnError) return undefined;
+  const text = publicMessageOf(error) ?? ownErrorMessageOf(error);
+  if (text === undefined) return undefined;
 
-  const firstLines = error.message.split("\n").slice(0, MAX_MESSAGE_LINES).join("\n");
+  const firstLines = text.split("\n").slice(0, MAX_MESSAGE_LINES).join("\n");
   return firstLines.slice(0, MAX_MESSAGE_LENGTH);
 }
 

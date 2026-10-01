@@ -162,7 +162,7 @@ record also carries `runId`, the run it belongs to:
 | `item:dispatching` | `runId, itemId` | Item passed the atomic gate |
 | `item:done` | `runId, itemId, costUsd, contentHash` | Artifact stored and committed (`costUsd: 0` when reused) |
 | `item:retry` | `runId, itemId, errorClass, attempt` | Retryable failure; item re-queued with backoff |
-| `item:failed` | `runId, itemId, label, errorClass, message?` | Terminal failure (4xx, or attempts exhausted). `label` is the build-file id, `null` on old rows. `message` is set only for our own `[ai]` errors: the first two lines, max 300 chars. Attempts exhausted carries the last attempt's message. A dedupe follower carries the leader's message. |
+| `item:failed` | `runId, itemId, label, errorClass, message?` | Terminal failure (4xx, `invalid-request`, `local-failure`, `unknown`, or attempts exhausted). `label` is the build-file id, `null` on old rows. `message` is the handler's `publicMessage` when it is a non-empty string, else our own `[ai]` error text, else absent: the first two lines, max 300 chars. Attempts exhausted carries the last attempt's message. A dedupe follower carries the leader's message. |
 | `item:flagged` | `runId, itemId` | Content-policy rejection (terminal, never re-queued) |
 | `overflow` | `runId, dropped` | Consumer buffer overflowed; `dropped` oldest item records of that run lost |
 | `progress` | `runId, totals` | Coalesced run totals (latest unconsumed wins) |
@@ -260,24 +260,25 @@ A handler with both `submit` and `poll` always runs through the job path:
    job is adopted too: its first poll decides. Pending or done → it continues. Failed, or unknown
    to the provider (a thrown 4xx) → both rows are marked `failed` and one new job is
    submitted in the same attempt, with its own `jobTimeoutMs`. A content-policy verdict ends the
-   item `flagged` with no new submit. An unclassified error ends the attempt as `unknown`, and an
-   abort pauses the run, both with no new submit. A job that expired twice is stuck and is not
-   adopted again.
+   item `flagged` with no new submit. An error of our own side (no hint, `invalid-request`,
+   `local-failure`) ends the attempt with its class, and an abort pauses the run, both with no
+   new submit. A job that expired twice is stuck and is not adopted again.
 2. Otherwise `submit()`, then `journal.setAttemptJob(attemptId, { externalId: jobId,
    jobState: "submitted" })` immediately, before any wait.
 3. `poll()` every `pollIntervalMs`. A thrown retryable error (5xx / 429 / timeout / network) is a
    transport problem and keeps polling. `{ state: "failed", error }` or a thrown classified error
    (4xx, content policy) marks the job `failed`; the error is classified as usual, and a
-   retryable one re-submits on the next attempt. A thrown unclassified error (a bug, not the
-   provider's verdict) ends the attempt as `unknown` and marks the job `expired`, so the next
+   retryable one re-submits on the next attempt. A thrown error of our own side (no hint: a bug;
+   `invalid-request` / `local-failure`: the handler's own refusal or failure; not the
+   provider's verdict) ends the attempt with its class and marks the job `expired`, so the next
    run adopts it instead of paying again; after two expiries a new job is submitted. `{ state: "done", ... }` marks it `done` and persists
    as above.
 4. After `jobTimeoutMs` the job is marked `expired` and the attempt fails with a retryable
    `timeout`. The next attempt adopts the expired job (step 1), so a slow provider is never
    billed twice for one shot.
 
-A poll error with no hint marks the job `expired`, so the next run adopts it: a provider uses
-this for a lost or rejected key. `kind: "resubmit"` retries like its status says (503 is
+A poll error with no hint, or tagged `invalid-request` / `local-failure`, marks the job
+`expired`, so the next run adopts it: a provider uses this for a lost or rejected key. `kind: "resubmit"` retries like its status says (503 is
 `http-5xx`) but never feeds the lane breaker: "submit again" is not a sick lane.
 
 ### Several runs at once
@@ -297,7 +298,8 @@ own runId, abort signal, `maxCostUsd`, totals and status.
     from the store, treat it as `open`.
   - `flagged` / `failed` — record the same verdict (and error class) through the gate, with no
     attempt row and no submit: the same request would get the same verdict and cost money.
-    `failed` is shared only for a non-retryable class (4xx, unknown).
+    `failed` is shared only for a non-retryable class (4xx, `invalid-request`, `local-failure`,
+    unknown).
   - `open` — the leader stopped without a final provider verdict (paused, budget stop, gate
     refused, or its attempts ran out on a retryable 5xx / 429 / network / timeout error). The
     leader's item is still `failed`, but the next waiter claims the key and tries for itself: a
@@ -336,13 +338,31 @@ const [ep1, ep2] = await Promise.all([
 | `network` | `kind: "network"` | Retry with backoff |
 | `http-4xx` | `400 <= status < 500` (except 429) | Terminal `failed` |
 | `content-policy` | `kind: "content-policy"` | Terminal `flagged`, never re-queued |
+| `invalid-request` | `kind: "invalid-request"` | Terminal `failed` after one attempt, no breaker outcome — the handler refuses the request |
+| `local-failure` | `kind: "local-failure"` | Terminal `failed` after one attempt, no breaker outcome — the handler's own machine failed (a local tool, a disk) |
 | `unknown` | no hint at all (a `TypeError`, a plain `Error`, a string) | Terminal `failed` after one attempt — a programming error must never re-run a paid job |
 
-Provider handlers steer classification by attaching an optional structural hint
-(`ProviderErrorHint`) to their thrown errors — `status?: number`,
-`kind?: "timeout" | "network" | "content-policy" | "resubmit"`, and `retryAfterMs?: number`.
-`timeout`, `network` and `content-policy` override the status. `resubmit` keeps the status class
-and stays off the lane breaker.
+Handlers (provider plugins, or a consumer's own) steer classification by attaching an optional
+structural hint (`ProviderErrorHint`) to their thrown errors:
+
+| Field | Type | Effect |
+|-------|------|--------|
+| `status` | `number` | HTTP status; classifies when no `kind` names a class |
+| `kind` | `"timeout" \| "network" \| "content-policy" \| "resubmit" \| "invalid-request" \| "local-failure"` | `timeout`, `network`, `content-policy`, `invalid-request` and `local-failure` override the status. `resubmit` keeps the status class and stays off the lane breaker |
+| `retryAfterMs` | `number` | Provider `Retry-After`, ms; honored when larger than the backoff |
+| `publicMessage` | `string` | Text the handler declares safe to show: no keys, no prompts. When non-empty, `item:failed` and the `runner:item:failed` log carry its first two lines (max 300 chars) in place of the `[ai]` rule. Never journaled |
+
+`invalid-request`, `local-failure` and `unknown` are our own side's verdict, not the provider's:
+in the job path they mark the job `expired`, never `failed` (see Provider jobs).
+
+```ts
+// A studio's own assemble handler refuses a request it cannot run: one attempt,
+// item:failed { errorClass: "invalid-request", message: "[studio] Invalid assemble request.\n  Name at least one clip." }.
+throw Object.assign(new Error(`[studio] Invalid assemble request: ${detail}`), {
+  kind: "invalid-request",
+  publicMessage: "[studio] Invalid assemble request.\n  Name at least one clip."
+});
+```
 
 ### The handler protocol
 

@@ -2,7 +2,9 @@
  * @file runner retry — error taxonomy + backoff. Owns the contractual
  * classification: retry ONLY 5xx/429/timeout/network; 4xx (except 429) is
  * terminal `failed`; content-policy is terminal `flagged`, never re-queued;
- * an error with no hint is `unknown` and terminal.
+ * `kind: "invalid-request"` / `"local-failure"` and an error with no hint
+ * (`unknown`) are terminal `failed`: our own side's verdict, not the
+ * provider's.
  */
 import type { ErrorClass } from "../journal/types";
 import type { ProviderErrorHint } from "./types";
@@ -15,28 +17,42 @@ const RETRYABLE_CLASSES: ReadonlySet<ErrorClass> = new Set([
   "network"
 ]);
 
+/**
+ * Error classes that are our own side's verdict, not the provider's: no hint
+ * (a bug), or a handler's own refusal or failure.
+ */
+const OWN_SIDE_CLASSES: ReadonlySet<ErrorClass> = new Set([
+  "unknown",
+  "invalid-request",
+  "local-failure"
+]);
+
 /** Minimum jitter factor applied to the exponential backoff base delay. */
 const MIN_JITTER_FACTOR = 0.5;
 
 /**
  * Type guard narrowing an unknown thrown value to the optional structural
- * hint a provider handler may attach ({@link ProviderErrorHint}).
+ * hint a handler may attach ({@link ProviderErrorHint}). Any non-null object
+ * passes: the guard says where hint fields may be read, not that they hold
+ * the right type, so a reader still checks each field it uses.
  *
  * @param error - The thrown value, from a `catch` clause.
  * @returns Whether `error` is a non-null object that may carry hint fields.
  * @example
  * ```ts
- * const hasHint = isProviderErrorHint(error);
+ * isProviderErrorHint(Object.assign(new Error("[studio] no."), { kind: "invalid-request" })); // => true
+ * isProviderErrorHint("[studio] no."); // => false: a thrown string carries no hint
  * ```
  */
-function isProviderErrorHint(error: unknown): error is ProviderErrorHint {
+export function isProviderErrorHint(error: unknown): error is ProviderErrorHint {
   return typeof error === "object" && error !== null;
 }
 
 /**
  * Whether the pipeline should retry an error of this class. `http-5xx`,
- * `http-429`, `timeout`, and `network` are retryable; `http-4xx` and
- * `content-policy` are terminal.
+ * `http-429`, `timeout`, and `network` are retryable; `http-4xx`,
+ * `content-policy`, `invalid-request`, `local-failure` and `unknown` are
+ * terminal.
  *
  * @param errorClass - The classified error class.
  * @returns True when the pipeline should re-queue the item for another attempt.
@@ -50,28 +66,59 @@ export function isRetryableErrorClass(errorClass: ErrorClass): boolean {
 }
 
 /**
- * Classifies a thrown provider error into the journal error taxonomy.
- * Reads the optional {@link ProviderErrorHint} fields (`kind`/`status`) a
- * handler may attach to its thrown error; falls back to `"unknown"` when
- * neither is present. `"unknown"` is terminal: a programming error (a
- * `TypeError`, a wrong request shape) must never re-run a paid job.
- * Providers tag real transport failures with `kind: "network"`.
+ * Whether an error class is our own side's verdict, not the provider's:
+ * `unknown` (no hint, a bug), `invalid-request` (a handler refused the
+ * request) or `local-failure` (a handler's own machine failed). A poll that
+ * throws one marks the job `expired`, not `failed`, and the first poll of an
+ * adopted expired job rethrows it: a later run adopts the job instead of
+ * paying for a new submit.
+ *
+ * @param errorClass - The classified error class.
+ * @returns True for `unknown`, `invalid-request` and `local-failure`.
+ * @example
+ * ```ts
+ * isOwnSideErrorClass("local-failure"); // => true
+ * isOwnSideErrorClass("http-4xx"); // => false: the provider refused the job
+ * ```
+ */
+export function isOwnSideErrorClass(errorClass: ErrorClass): boolean {
+  return OWN_SIDE_CLASSES.has(errorClass);
+}
+
+/**
+ * Classifies a thrown error into the journal error taxonomy. Reads the
+ * optional {@link ProviderErrorHint} fields (`kind`/`status`) a handler may
+ * attach to its thrown error; falls back to `"unknown"` when neither is
+ * present. A `kind` that names a class (`content-policy`, `timeout`,
+ * `network`, `invalid-request`, `local-failure`) wins over the status.
+ * `"unknown"` is terminal: a programming error (a `TypeError`, a wrong
+ * request shape) must never re-run a paid job. `invalid-request` (a handler
+ * refused the request) and `local-failure` (its own machine failed) are
+ * terminal too. Providers tag real transport failures with `kind: "network"`.
  * `kind: "resubmit"` falls through to the status (503 is `http-5xx`,
- * retried); the pipeline keeps it off the lane breaker. A poll error that
- * classifies `"unknown"` marks the job expired, so the next run adopts it.
+ * retried); the pipeline keeps it off the lane breaker. A poll error of our
+ * own side ({@link isOwnSideErrorClass}) marks the job expired, so the next
+ * run adopts it.
  *
  * @param error - The thrown error.
  * @returns The error's taxonomy class.
  * @example
  * ```ts
  * classifyError({ kind: "resubmit", status: 503 }); // "http-5xx"
+ * classifyError({ kind: "invalid-request", status: 400 }); // "invalid-request": the kind wins
  * ```
  */
 export function classifyError(error: unknown): ErrorClass {
   if (!isProviderErrorHint(error)) return "unknown";
+
+  // A kind that names a class wins over the status.
   if (error.kind === "content-policy") return "content-policy";
   if (error.kind === "timeout") return "timeout";
   if (error.kind === "network") return "network";
+  if (error.kind === "invalid-request") return "invalid-request";
+  if (error.kind === "local-failure") return "local-failure";
+
+  // Otherwise the HTTP status decides; no status at all is a bug.
   if (error.status === 429) return "http-429";
   if (typeof error.status === "number" && error.status >= 500) return "http-5xx";
   if (typeof error.status === "number" && error.status >= 400) return "http-4xx";

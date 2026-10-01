@@ -42,6 +42,10 @@ export type RunStatus = "active" | "done" | "failed" | "paused" | "budget-stoppe
 export type ItemStatus = "queued" | "dispatching" | "done" | "failed" | "flagged";
 /**
  * Classification of a failed provider attempt, recorded on the `attempts` row.
+ * `http-5xx`, `http-429`, `timeout` and `network` are retried. `http-4xx`,
+ * `invalid-request` (a handler refused the request), `local-failure` (a
+ * handler's own machine failed) and `unknown` (no hint: a bug) end the item
+ * `failed`. `content-policy` ends it `flagged`.
  */
 export type ErrorClass =
   | "http-5xx"
@@ -50,17 +54,23 @@ export type ErrorClass =
   | "network"
   | "http-4xx"
   | "content-policy"
+  | "invalid-request"
+  | "local-failure"
   | "unknown";
 /**
- * Terminal outcome of a single provider attempt.
+ * Terminal outcome of a single provider attempt: `retryable-error` for the
+ * retried classes, `flagged` for `content-policy`, `terminal-error` for
+ * `http-4xx`, `invalid-request`, `local-failure` and `unknown`, `aborted` when
+ * a pause stopped it.
  */
 export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged" | "aborted";
 
 /**
  * Lifecycle of a provider-side async job recorded on an `attempts` row:
  * `submitted` until the provider reports an end state; `expired` when the
- * runner gave up waiting or hit an unclassified poll error (the next attempt
- * polls it again before it submits; after two expiries it submits anew).
+ * runner gave up waiting or a poll threw an error of our own side (`unknown`,
+ * `invalid-request`, `local-failure`). The next attempt polls an expired job
+ * again before it submits; after two expiries it submits anew.
  */
 export type JobState = "submitted" | "done" | "failed" | "expired";
 
