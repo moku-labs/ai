@@ -6,7 +6,7 @@
  * claimant adopts any live provider job through the journal.
  */
 import type { ItemRow } from "../journal/types";
-import { itemFailureOf, reportItemFailed } from "./failure";
+import { itemFailureOf, messageDetailOf, reportItemFailed } from "./failure";
 import { openClaim } from "./state";
 import type { ClaimVerdict, DrainController, RunnerContext, UnstampedRunEvent } from "./types";
 
@@ -120,9 +120,8 @@ function shareVerdict(
   }
 
   if (verdict.kind === "flagged") {
-    const detail = verdict.message === undefined ? {} : { message: verdict.message };
     ctx.journal.markFlagged(item.id);
-    report({ type: "item:flagged", itemId: item.id, ...detail });
+    report({ type: "item:flagged", itemId: item.id, ...messageDetailOf(verdict.message) });
   } else {
     ctx.journal.markFailed(item.id, { errorClass: verdict.errorClass, terminal: true });
     reportItemFailed(ctx, item, itemFailureOf(verdict.errorClass, verdict.message), report);

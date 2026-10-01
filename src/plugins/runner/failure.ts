@@ -87,6 +87,23 @@ export function itemFailureOf(errorClass: ErrorClass, message: string | undefine
 }
 
 /**
+ * The `message` key of an `item:failed` / `item:flagged` record: present only
+ * when there is a message (`exactOptionalPropertyTypes`: an absent key, never
+ * `undefined`).
+ *
+ * @param message - The safe message, if any.
+ * @returns `{ message }`, or an empty object.
+ * @example
+ * ```ts
+ * messageDetailOf("[ai] ark flagged the request."); // => { message: "[ai] ark flagged the request." }
+ * messageDetailOf(undefined); // => {}
+ * ```
+ */
+export function messageDetailOf(message: string | undefined): { message?: string } {
+  return message === undefined ? {} : { message };
+}
+
+/**
  * Reports an item's terminal failure: logs `runner:item:failed`
  * (`{ itemId, errorClass, message }`, message only when present) and reports
  * the `item:failed` record with the item's label and the same message.
@@ -103,7 +120,7 @@ export function reportItemFailed(
   report: (event: UnstampedRunEvent) => void
 ): void {
   const { errorClass, message } = failure;
-  const detail = message === undefined ? {} : { message };
+  const detail = messageDetailOf(message);
 
   ctx.log.warn("runner:item:failed", { itemId: item.id, errorClass, ...detail });
   report({ type: "item:failed", itemId: item.id, label: item.label, errorClass, ...detail });

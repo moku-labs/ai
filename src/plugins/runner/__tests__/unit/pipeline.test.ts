@@ -1609,6 +1609,16 @@ describe("executeItem — item:flagged message", () => {
     expect(events.at(-1)).not.toHaveProperty("message");
   });
 
+  it("cuts a long flagged [ai] message at 300 characters", async () => {
+    const { events } = await runFailingItem(() =>
+      Object.assign(new Error(`[ai] ${"x".repeat(400)}`), { kind: "content-policy" })
+    );
+
+    const flagged = events.at(-1);
+    const message = flagged?.type === "item:flagged" ? flagged.message : undefined;
+    expect(message).toBe(`[ai] ${"x".repeat(295)}`);
+  });
+
   it("the leader settles its claim with the flagged message", async () => {
     const { verdict } = await leaderVerdict({
       hint: { kind: "content-policy" },
@@ -1641,5 +1651,26 @@ describe("executeItem — item:flagged message", () => {
       `journal.markFlagged(${item.id})`
     ]);
     expect(events.at(-1)).toEqual({ type: "item:flagged", itemId: item.id, message: ARK_FLAGGED });
+  });
+
+  it("a follower of a flagged leader with no message reports no message key", async () => {
+    const ctx = createFakeRunnerContext([]);
+    const settleLeader = openClaim(ctx.state, "ak-1", "leader-item");
+    const item = fakeItemRow({ artifactKey: "ak-1" });
+    const { report, events } = collectReports();
+
+    const following = executeItem(
+      ctx,
+      item,
+      fakePlan(3),
+      createDrainController(undefined),
+      report,
+      Promise.resolve()
+    );
+    await flush();
+    settleLeader({ kind: "flagged" });
+    await following;
+
+    expect(events.at(-1)).toEqual({ type: "item:flagged", itemId: item.id });
   });
 });

@@ -9,7 +9,7 @@
 import type { AttemptOutcome, ErrorClass, ItemRow } from "../journal/types";
 import { registryPlugin } from "../registry";
 import { claimArtifact, OPEN_VERDICT, tryReuse } from "./claim";
-import { failureMessageOf, itemFailureOf, reportItemFailed } from "./failure";
+import { failureMessageOf, itemFailureOf, messageDetailOf, reportItemFailed } from "./failure";
 import { canonicalJson, sha256Hex } from "./keys";
 import { normalizeResult, OCTET_STREAM, resolveReferences } from "./resolve";
 import {
@@ -325,10 +325,9 @@ function outcomeOf(errorClass: ErrorClass): AttemptOutcome {
  * (`flagged`, terminal `failed`), and reports the breaker outcome for
  * retryable failures. A provider's `kind: "resubmit"` verdict retries like
  * its status says but never feeds the lane breaker. A failed or flagged
- * outcome carries the error's safe message, its `publicMessage` or our own `[ai]` text
- * ({@link failureMessageOf}). The
- * retryable-vs-exhausted decision is left to the caller, which tracks the
- * cross-attempt count.
+ * outcome carries the error's safe message, its `publicMessage` or our own
+ * `[ai]` text ({@link failureMessageOf}). The retryable-vs-exhausted decision
+ * is left to the caller, which tracks the cross-attempt count.
  *
  * @param ctx - Runner domain context.
  * @param item - The item the failed attempt belongs to.
@@ -780,7 +779,7 @@ function applyOutcome(
     return { verdict: { kind: "done" } };
   }
   if (outcome.kind === "flagged") {
-    const detail = outcome.message === undefined ? {} : { message: outcome.message };
+    const detail = messageDetailOf(outcome.message);
     report({ type: "item:flagged", itemId: item.id, ...detail });
     return { verdict: { kind: "flagged", ...detail } };
   }
