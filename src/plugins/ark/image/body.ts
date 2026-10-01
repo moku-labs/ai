@@ -240,8 +240,9 @@ function checkGroupSize(
 
   // A whole number from 1 to the group limit.
   const limit = model.maxGroupImages;
-  const isWholeNumber = typeof value === "number" && Number.isInteger(value);
-  if (!isWholeNumber || value < 1 || value > limit) {
+  const isValidGroupSize =
+    typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= limit;
+  if (!isValidGroupSize) {
     throw new Error(
       `[ai] ark params.images must be a whole number from 1 to ${limit}.\n  Pass it like 6.`
     );
