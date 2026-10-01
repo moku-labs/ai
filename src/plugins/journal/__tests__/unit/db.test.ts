@@ -4,6 +4,36 @@ import type { ItemDatabaseRow, RunDatabaseRow, SqliteDriver } from "../../driver
 import type { State } from "../../types";
 import { closedState } from "./fixtures";
 
+/**
+ * A raw `items` row of a done single-artifact item, with overrides.
+ *
+ * @param overrides - Columns to replace.
+ * @returns The raw row.
+ */
+function itemRow(overrides: Partial<ItemDatabaseRow> = {}): ItemDatabaseRow {
+  return {
+    id: "item-1",
+    run_id: "run-1",
+    build_file: "keys.build.yaml",
+    planning_key: "pk-1",
+    task: "image",
+    provider: "ark",
+    pack_version: SQL_NULL,
+    artifact_key: "ak-1",
+    content_hash: "ch-1",
+    status: "done",
+    estimated_cost_usd: 0.105,
+    actual_cost_usd: 0.07,
+    attempt_count: 0,
+    updated_at: 1000,
+    label: "key",
+    build_name: "keys",
+    mime_type: "image/jpeg",
+    outputs: SQL_NULL,
+    ...overrides
+  };
+}
+
 describe("journal db", () => {
   describe("isOpen", () => {
     it("is true while the driver is open", () => {
@@ -79,7 +109,8 @@ describe("journal db", () => {
         updated_at: 1000,
         label: "Line 1",
         build_name: "voice",
-        mime_type: "audio/mpeg"
+        mime_type: "audio/mpeg",
+        outputs: SQL_NULL
       };
 
       expect(mapItem(row)).toEqual({
@@ -99,8 +130,33 @@ describe("journal db", () => {
         updatedAt: 1000,
         label: "Line 1",
         buildName: "voice",
-        mimeType: "audio/mpeg"
+        mimeType: "audio/mpeg",
+        outputs: SQL_NULL
       });
+    });
+
+    it("parses outputs, in order", () => {
+      const outputs = [
+        { contentHash: "ch-1", mimeType: "image/jpeg" },
+        { contentHash: "ch-2", mimeType: "image/png" }
+      ];
+
+      expect(mapItem(itemRow({ outputs: JSON.stringify(outputs) })).outputs).toEqual(outputs);
+    });
+
+    it.each<[string, string | null | undefined]>([
+      ["NULL", SQL_NULL],
+      ["missing (an un-migrated file)", undefined],
+      ["not JSON", "[{"],
+      ["not an array", '{"contentHash":"ch-1","mimeType":"image/png"}'],
+      ["an empty array", "[]"],
+      ["an entry without a string hash", '[{"contentHash":1,"mimeType":"image/png"}]'],
+      ["an entry without a mime type", '[{"contentHash":"ch-1"}]'],
+      ["an entry that is not an object", '["ch-1"]']
+    ])("maps outputs %s to null, so the row stays a single artifact", (_name, outputs) => {
+      const row = { ...itemRow(), outputs } as ItemDatabaseRow;
+
+      expect(mapItem(row).outputs).toBeNull();
     });
   });
 

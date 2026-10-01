@@ -10,8 +10,9 @@ talks to one region and one account. It registers three handlers with the regist
 - `("video", "ark")`: Seedance text-to-video and image-to-video through the Ark video task API.
   It maps asset refs to `asset://<id>` and checks every asset before any paid call. It also makes
   cheap 480p drafts and renders a draft again at 1080p ([Draft → final](#draft--final)).
-- `("image", "ark")`: Seedream 5.0 lite text-to-image, and image-to-image from local refs. The bytes
-  come back unchanged, so Seedance trusts a face in them ([Faces](#faces)).
+- `("image", "ark")`: Seedream 5.0 lite text-to-image, and image-to-image from local refs, one image
+  or a [group](#groups-paramsimages) of consistent images. The bytes come back unchanged, so
+  Seedance trusts a face in them ([Faces](#faces)).
 - `("asset", "ark")`: registers one portrait into an AIGC asset group through the signed Ark asset
   OpenAPI, and returns an `AssetRecord` (see the [asset README](../asset/README.md)).
 
@@ -338,9 +339,9 @@ one `ark:journal:closed` warning, and a final fails.
 `image` items on provider ark. `POST {dataPlane}/images/generations` with the API key, then one
 download of the image URL, without the key, with `downloadTimeoutMs`.
 
-| Model | Region | Smallest size | Refs | Price |
-| --- | --- | --- | --- | --- |
-| `seedream-5-0-lite-260128` (default) | intl | 3,686,400 px | 14 | $0.035 per image, with or without refs |
+| Model | Region | Smallest size | Refs | Group: refs + images | Price |
+| --- | --- | --- | --- | --- | --- |
+| `seedream-5-0-lite-260128` (default) | intl | 3,686,400 px | 14 | 15 | $0.035 per image, with or without refs |
 
 There is no cn image model yet. `input.model` defaults to the table's model. Any other id fails:
 `[ai] Unknown ark image model "<id>".\n  Known: <list>.`
@@ -350,12 +351,13 @@ There is no cn image model yet. `input.model` defaults to the table's model. Any
 | `prompt` | `prompt`, sent as written |
 | `aspect` | `size`: `9:16` → `1440x2560` (default), `16:9` → `2560x1440`, `1:1` → `2048x2048`, `3:4` → `1728x2304`, `4:3` → `2304x1728`. Another aspect fails |
 | `refs` | `image`: one ref as a string, several as an array, in request order. Absent without refs, so the text-to-image body is unchanged |
+| `params.images` | `sequential_image_generation: "auto"` and `sequential_image_generation_options: { max_images }`. Absent without `params.images`, so the one-image body is unchanged |
 | `negative` | Dropped, with one `ark:negative:ignored` warning per process |
 | — | `response_format: "url"`, `watermark: false` |
 
 **Refs (image-to-image).** Each local ref goes out as `data:<mime>;base64,...`, the format in
-lowercase. Nothing is hosted. The prompt cites refs by position ("image 1"). Seedream makes one image:
-`sequential_image_generation` is left at its default, `disabled`. Ark limits each ref to jpeg, png,
+lowercase. Nothing is hosted. The prompt cites refs by position ("image 1"). Without `params.images`,
+Seedream makes one image: `sequential_image_generation` is left at its default, `disabled`. Ark limits each ref to jpeg, png,
 webp, bmp, tiff, gif, heic or heif, up to 30 MB and 6000×6000 px. More refs than the model takes
 fail before any call, also at estimate time:
 
@@ -372,7 +374,7 @@ fail before any call, also at estimate time:
            refs: [{ $file: refs/akari-lines.png }] }
 ```
 
-`params` allowlist: `size`, `seed`, `generation`, `watermark`. `size` is `"<width>x<height>"` and
+`params` allowlist: `size`, `seed`, `generation`, `watermark`, `images`. `size` is `"<width>x<height>"` and
 wins over the aspect. A size under the minimum fails before the call:
 
 ```
@@ -383,6 +385,46 @@ wins over the aspect. A size under the minimum fails before the call:
 The result is the downloaded bytes, **unchanged**: never decoded, resized, cropped or re-encoded.
 `mimeType` is the download's `Content-Type`, else it is read from the first bytes. `costUsd` is the
 price per image times `usage.generated_images`. `meta` is `{ model, size }`. Estimate needs no key.
+
+### Groups (`params.images`)
+
+`params.images: N` asks Seedream for a group: up to N consistent images from one call (a storyboard,
+the same character in several shots). The body gains `sequential_image_generation: "auto"` and
+`sequential_image_generation_options: { max_images: N }`. Without `params.images` the body, the
+artifact key and the result are exactly the one-image ones.
+
+```yaml
+- id: akari.panels
+  task: image
+  provider: ark
+  input: { prompt: "Four panels of Akari baking, same apron, same kitchen", aspect: "9:16" }
+  params: { images: 4 }
+```
+
+**Limits.** N is a whole number from 1 to 15, and refs plus N is at most 15 (`maxGroupImages`). Both
+fail before any call, also at estimate time:
+
+```
+[ai] ark params.images must be a whole number from 1 to 15.
+  Pass it like 6.
+
+[ai] ark image model "seedream-5-0-lite-260128" makes at most 15 images including refs, got 14 refs + 2 images.
+  Set params.images to 1 or less, or remove refs.
+```
+
+**Result.** Every `data[]` entry with a `url` is downloaded once, in order, unchanged. An entry
+without a `url` (an `error` entry) is skipped; it does not fail the call. No `url` at all is an
+unreadable response (retryable 502). `image` / `mimeType` are the first image, `images` lists every
+image in order, and `meta` is `{ model, size, imagesRequested: N, imagesReturned: M }`. The runner
+stores every image and exports `<label>.jpg`, `<label>-2.jpg` … `<label>-M.jpg`. A `$ref` to the item
+is the first image.
+
+**Short groups.** N is a cap: the model may return fewer. M < N is a result, not an error: it logs
+`ark:image:group-short` (`{ model, requested: N, returned: M }`).
+
+**Cost.** BytePlus bills each image it made; failed images are not charged. `costUsd` is the price
+per image times `usage.generated_images`, else times M. The estimate prices N images: an upper
+bound for the budget gate. `ark:image:done` carries `images: M` and the total bytes.
 
 ## Asset handler
 
@@ -473,14 +515,14 @@ to register the portraits in the new account.
 | A key not set, unknown model or param, bad seconds, resolution, ratio or ref count, bad `url` or image | Plain two-line error before any call: terminal after one attempt, nothing billed |
 | A draft on a model without drafts, or not at 480p; `params.draft` other than `true` | Plain two-line error before any call (see [Draft → final](#draft--final)) |
 | A final that breaks a rule: not a video, extra inputs, not 1080p, journal closed, no draft, other model, expired | Plain two-line error before any call (see [Draft → final](#draft--final)) |
-| Seedream: unknown image model, refs, unknown param, unknown aspect, size under the minimum | Plain two-line error before any call |
+| Seedream: unknown image model, refs, bad `params.images` or refs plus images over 15, unknown param, unknown aspect, size under the minimum | Plain two-line error before any call |
 | Seedream error body without an `error` wrapper (`{ code, message }`) | Read like a wrapped one: terminal with ark's code and message |
 
 Messages start with `[ai]` and never contain a key or a signed URL. Logs carry
 ids, codes, sizes and statuses only: `ark:video:submitted`, `ark:video:done`, `ark:video:failed`,
 `ark:draft:recorded`, `ark:journal:closed`, `ark:ratio:ignored`, `ark:cost:estimated`,
-`ark:image:done`, `ark:asset:group-created`, `ark:asset:registered`, `ark:asset:refused`,
-`ark:negative:ignored`.
+`ark:image:done`, `ark:image:group-short`, `ark:asset:group-created`, `ark:asset:registered`,
+`ark:asset:refused`, `ark:negative:ignored`.
 
 ## API
 

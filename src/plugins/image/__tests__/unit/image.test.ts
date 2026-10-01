@@ -1,10 +1,12 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
+import type { HandlerResult } from "../../../runner/types";
 import { createImageApi } from "../../api";
 import type {
   Config,
   ImageApi,
   ImageContext,
   ImageHandler,
+  ImageOutput,
   ImageRequest,
   ImageResult,
   RegistryApi
@@ -256,6 +258,20 @@ describe("standard tier: image plugin", () => {
 
     it("estimate returns { usd: number }", () => {
       expectTypeOf<ImageApi["estimate"]>().returns.toEqualTypeOf<{ usd: number }>();
+    });
+
+    it("takes a group in images, and a group result is a runner HandlerResult", () => {
+      const first: ImageOutput = { image: new Uint8Array([1]), mimeType: "image/jpeg" };
+      const group: ImageResult = {
+        image: first.image,
+        mimeType: first.mimeType,
+        images: [first, { image: new Uint8Array([2]), mimeType: "image/jpeg" }],
+        costUsd: 0.07
+      };
+
+      expectTypeOf<ImageResult["images"]>().toEqualTypeOf<ImageOutput[] | undefined>();
+      expectTypeOf(group).toMatchTypeOf<HandlerResult>();
+      expect(group.images?.[0]).toBe(first);
     });
 
     it("rejects a request literal missing the required prompt field", () => {

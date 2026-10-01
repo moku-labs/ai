@@ -9,9 +9,9 @@ import {
 } from "../../attempts";
 import type { SqliteDriver } from "../../driver/types";
 import { gateToDispatching } from "../../gate";
-import { insertItems, listItemsOf } from "../../items";
+import { getItem, insertItems, listItemsOf } from "../../items";
 import { openRun } from "../../runs";
-import type { State } from "../../types";
+import type { DoneOutput, State } from "../../types";
 import {
   closeTestJournal,
   intent,
@@ -189,6 +189,79 @@ describe("journal attempts", () => {
       reuseDone(state, itemId, { contentHash: "ch-1", mimeType: "audio/mpeg" });
 
       expect(listItemsOf(state, runId, { status: "dispatching" })).toHaveLength(1);
+    });
+  });
+
+  describe("multi-output items", () => {
+    const OUTPUTS: DoneOutput[] = [
+      { contentHash: "ch-1", mimeType: "image/jpeg" },
+      { contentHash: "ch-2", mimeType: "image/jpeg" },
+      { contentHash: "ch-3", mimeType: "image/png" }
+    ];
+
+    /**
+     * Commits a dispatching `pk-1` item as done, with or without outputs.
+     *
+     * @param outputs - The item's outputs, or undefined for a single artifact.
+     * @returns The run id.
+     */
+    function commitGroup(outputs: DoneOutput[] | undefined): string {
+      const { runId, itemId } = queuedItem(state, { artifactKey: "ak-1" });
+      gateToDispatching(state, itemId);
+      commitDone(state, itemId, {
+        actualCostUsd: 0.105,
+        artifactKey: "ak-1",
+        contentHash: "ch-1",
+        mimeType: "image/jpeg",
+        ...(outputs ? { outputs } : {})
+      });
+      return runId;
+    }
+
+    it("commitDone with outputs: getItem returns them in order", () => {
+      const runId = commitGroup(OUTPUTS);
+
+      const item = mustExist(getItem(state, runId, "pk-1"));
+
+      expect(item.outputs).toEqual(OUTPUTS);
+      expect(item.contentHash).toBe("ch-1");
+      expect(item.mimeType).toBe("image/jpeg");
+    });
+
+    it("commitDone without outputs: outputs is null", () => {
+      const runId = commitGroup(undefined);
+
+      expect(mustExist(getItem(state, runId, "pk-1")).outputs).toBeNull();
+    });
+
+    it("commitDone with an empty outputs list: outputs is null", () => {
+      const runId = commitGroup([]);
+
+      expect(mustExist(getItem(state, runId, "pk-1")).outputs).toBeNull();
+    });
+
+    it("findDoneArtifact and reuseDone carry outputs to the reusing item", () => {
+      const runId = commitGroup(OUTPUTS);
+      const [second] = insertItems(state, runId, [intent("pk-2", { artifactKey: "ak-1" })]);
+
+      const artifact = mustExist(findDoneArtifact(state, "ak-1"));
+      reuseDone(state, mustExist(second).id, artifact);
+
+      expect(artifact).toEqual({ contentHash: "ch-1", mimeType: "image/jpeg", outputs: OUTPUTS });
+      const reused = mustExist(getItem(state, runId, "pk-2"));
+      expect(reused).toMatchObject({ status: "done", actualCostUsd: 0, contentHash: "ch-1" });
+      expect(reused.outputs).toEqual(OUTPUTS);
+    });
+
+    it("findDoneArtifact has no outputs key for a single artifact, and reuseDone writes none", () => {
+      const runId = commitGroup(undefined);
+      const [second] = insertItems(state, runId, [intent("pk-2", { artifactKey: "ak-1" })]);
+
+      const artifact = mustExist(findDoneArtifact(state, "ak-1"));
+      reuseDone(state, mustExist(second).id, artifact);
+
+      expect(artifact).not.toHaveProperty("outputs");
+      expect(mustExist(getItem(state, runId, "pk-2")).outputs).toBeNull();
     });
   });
 });
