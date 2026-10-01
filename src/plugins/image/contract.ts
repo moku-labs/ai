@@ -51,8 +51,25 @@ export type ImageRequest = {
 };
 
 /**
+ * One image of a group: its bytes and MIME type.
+ *
+ * @example
+ * ```ts
+ * const output: ImageOutput = { image: new Uint8Array(), mimeType: "image/jpeg" };
+ * ```
+ */
+export type ImageOutput = {
+  /** The image bytes. */
+  image: Uint8Array;
+  /** MIME type of `image` (e.g. "image/jpeg"). */
+  mimeType: string;
+};
+
+/**
  * The result of one image generation: raw image bytes plus enough metadata
- * to journal cost and identity without ever re-deriving them.
+ * to journal cost and identity without ever re-deriving them. A group
+ * (several consistent images from one call) also lists every image in
+ * `images`; `image` stays the first.
  *
  * @example
  * ```ts
@@ -64,6 +81,8 @@ export type ImageResult = {
   image: Uint8Array;
   /** MIME type of `image` (e.g. "image/png", "image/webp"). */
   mimeType: string;
+  /** Every image of a group, in order. `images[0]` is `image`. Absent for a single image. */
+  images?: ImageOutput[];
   /** Actual cost of this generation, in US dollars. */
   costUsd: number;
   /** Metadata only, never a payload echo (e.g. model, seed, width, height). */

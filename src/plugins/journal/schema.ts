@@ -1,5 +1,6 @@
 /**
- * @file journal schema — DDL for runs/items/attempts/provider_records (metadata only, no payload columns).
+ * @file journal schema — DDL for runs/items/attempts/provider_records (metadata only, no payload
+ * columns: `items.outputs` holds hashes and mime types, never bytes).
  */
 import type { SqliteDriver } from "./driver/types";
 
@@ -30,6 +31,7 @@ const SCHEMA_SQL = `
     label TEXT,
     build_name TEXT,
     mime_type TEXT,
+    outputs TEXT,
     UNIQUE (run_id, planning_key)
   );
   CREATE INDEX IF NOT EXISTS idx_items_run_status ON items(run_id, status);
@@ -68,7 +70,8 @@ const ADDED_COLUMNS: Readonly<Record<string, ReadonlyArray<readonly [string, str
   items: [
     ["label", "TEXT"],
     ["build_name", "TEXT"],
-    ["mime_type", "TEXT"]
+    ["mime_type", "TEXT"],
+    ["outputs", "TEXT"]
   ],
   attempts: [
     ["external_id", "TEXT"],

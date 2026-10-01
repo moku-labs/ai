@@ -6,7 +6,13 @@ import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
 import type { ImageRequest, ImageResult } from "./contract";
 
-export type { ImageFile, ImageHandler, ImageRequest, ImageResult } from "./contract";
+export type {
+  ImageFile,
+  ImageHandler,
+  ImageOutput,
+  ImageRequest,
+  ImageResult
+} from "./contract";
 
 /**
  * image plugin configuration: the provider used when a request doesn't name one.

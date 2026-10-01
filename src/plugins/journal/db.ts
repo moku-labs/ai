@@ -1,9 +1,10 @@
 /**
  * @file journal core plugin — database access shared by every domain file: the open-driver
- * guard, the `null` bind sentinel, and the raw-row to public-row mappers.
+ * guard, the `null` bind sentinel, the raw-row to public-row mappers, and the `outputs` column
+ * codec.
  */
 import type { ItemDatabaseRow, RunDatabaseRow, SqliteDriver } from "./driver/types";
-import type { ItemRow, RunRow, State } from "./types";
+import type { DoneOutput, ItemRow, RunRow, State } from "./types";
 
 /** Error text thrown when a journal call runs before `app.start()` opened the driver. */
 export const NOT_OPEN_ERROR =
@@ -18,6 +19,83 @@ export const NOT_OPEN_ERROR =
  */
 // eslint-disable-next-line unicorn/no-null -- see comment above; the single source of the null literal for this file
 export const SQL_NULL = null;
+
+/**
+ * Whether one entry of a parsed `outputs` array is well formed.
+ *
+ * @param value - One parsed entry.
+ * @returns True for `{ contentHash: string, mimeType: string }`.
+ * @example
+ * ```ts
+ * isDoneOutput({ contentHash: "ch-1", mimeType: "image/png" }); // => true
+ * ```
+ */
+function isDoneOutput(value: unknown): value is DoneOutput {
+  if (typeof value !== "object" || value === null) return false;
+
+  const entry = value as { contentHash?: unknown; mimeType?: unknown };
+  return typeof entry.contentHash === "string" && typeof entry.mimeType === "string";
+}
+
+/**
+ * Parses JSON column text, or gives undefined when it is not JSON.
+ *
+ * @param text - The raw column text.
+ * @returns The parsed value, still untrusted, or undefined.
+ * @example
+ * ```ts
+ * parseJsonColumn("[{"); // => undefined
+ * ```
+ */
+function parseJsonColumn(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reads the `outputs` column: a non-empty JSON array of `{ contentHash, mimeType }`.
+ * Anything else maps to null: NULL, missing (a reader on an un-migrated file),
+ * unparsable, not an array, empty, or with a malformed entry. An older or damaged
+ * row so stays a single-artifact item.
+ *
+ * @param text - The raw column value.
+ * @returns The outputs in order, or null.
+ * @example
+ * ```ts
+ * parseOutputs('[{"contentHash":"ch-1","mimeType":"image/png"}]'); // => [{ contentHash: "ch-1", mimeType: "image/png" }]
+ * parseOutputs("[{"); // => null
+ * ```
+ */
+export function parseOutputs(text: string | null | undefined): DoneOutput[] | null {
+  if (typeof text !== "string") return SQL_NULL;
+
+  const parsed = parseJsonColumn(text);
+  if (!Array.isArray(parsed) || parsed.length === 0) return SQL_NULL;
+
+  return parsed.every(entry => isDoneOutput(entry)) ? parsed : SQL_NULL;
+}
+
+/**
+ * The `outputs` column value to write: JSON of hashes and mime types only,
+ * or NULL when there are no outputs.
+ *
+ * @param outputs - Every output of a multi-output item, or undefined.
+ * @returns JSON text, or null.
+ * @example
+ * ```ts
+ * outputsColumn(undefined); // => null
+ * outputsColumn([{ contentHash: "ch-1", mimeType: "image/png" }]); // => '[{"contentHash":"ch-1","mimeType":"image/png"}]'
+ * ```
+ */
+export function outputsColumn(outputs: readonly DoneOutput[] | undefined): string | null {
+  if (outputs === undefined || outputs.length === 0) return SQL_NULL;
+
+  // Only the two metadata fields: never a payload, whatever else the caller's objects carry.
+  return JSON.stringify(outputs.map(({ contentHash, mimeType }) => ({ contentHash, mimeType })));
+}
 
 /**
  * Maps a raw `items` row to the public, camelCase `ItemRow` shape.
@@ -43,7 +121,8 @@ export function mapItem(row: ItemDatabaseRow): ItemRow {
     updatedAt: row.updated_at,
     label: row.label,
     buildName: row.build_name,
-    mimeType: row.mime_type
+    mimeType: row.mime_type,
+    outputs: parseOutputs(row.outputs)
   };
 }
 

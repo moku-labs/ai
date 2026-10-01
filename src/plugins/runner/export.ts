@@ -1,6 +1,7 @@
 /**
  * @file runner export — copies a run's `done` artifacts out of the
- * content-addressed store to named files: `<outDir>/<build>/<label>.<ext>` (D9).
+ * content-addressed store to named files: `<outDir>/<build>/<label>.<ext>` (D9),
+ * and `<label>-<k>.<ext>` for output k ≥ 2 of a multi-output item.
  */
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -55,40 +56,94 @@ function pickRun(ctx: RunnerContext, runId: string | undefined): RunRow {
   return run;
 }
 
+/** One file to write for a done item: its label, stored bytes, mime type and the cost it carries. */
+type ExportEntry = {
+  label: string;
+  contentHash: string;
+  mimeType: string | null;
+  costUsd: number;
+};
+
 /**
- * Copies one done item's artifact to its named file.
+ * The files a done item exports to: one for a single artifact; one per
+ * output for a multi-output item, `<label>` then `<label>-2` … `<label>-N`.
+ * The item cost is on the first file and 0 on the others, so the sum stays right.
+ *
+ * @param item - A `done` item with a content hash.
+ * @param label - The item's export label.
+ * @returns The entries, in output order.
+ * @example
+ * ```ts
+ * exportEntriesOf({ ...item, outputs: [first, second] }, "x").map(entry => entry.label); // => ["x", "x-2"]
+ * ```
+ */
+function exportEntriesOf(item: ItemRow & { contentHash: string }, label: string): ExportEntry[] {
+  const costUsd = item.actualCostUsd ?? 0;
+  if (item.outputs === null) {
+    return [{ label, contentHash: item.contentHash, mimeType: item.mimeType, costUsd }];
+  }
+
+  return item.outputs.map((output, index) => ({
+    label: index === 0 ? label : `${label}-${index + 1}`,
+    contentHash: output.contentHash,
+    mimeType: output.mimeType,
+    costUsd: index === 0 ? costUsd : 0
+  }));
+}
+
+/**
+ * Copies one stored artifact to `<buildDirectory>/<label>.<ext>`, the extension from its mime type.
+ *
+ * @param ctx - Runner domain context.
+ * @param entry - What to write.
+ * @param buildDirectory - Absolute folder of the item's build.
+ * @returns The written file.
+ */
+async function exportEntry(
+  ctx: RunnerContext,
+  entry: ExportEntry,
+  buildDirectory: string
+): Promise<ExportedFile> {
+  const target = path.join(buildDirectory, `${entry.label}.${extensionOfMimeType(entry.mimeType)}`);
+  await mkdir(path.dirname(target), { recursive: true });
+  await copyFile(ctx.store.pathOf(entry.contentHash), target);
+
+  const { size } = await stat(target);
+  const mimeType = entry.mimeType ?? "application/octet-stream";
+  return { label: entry.label, path: target, bytes: size, costUsd: entry.costUsd, mimeType };
+}
+
+/**
+ * Copies one done item's artifacts to their named files: one file, or one
+ * per output of a multi-output item.
  *
  * @param ctx - Runner domain context.
  * @param item - A `done` item with a content hash.
  * @param outputDirectory - Absolute export directory.
- * @returns The written file, or undefined when its name is unsafe.
- * @example
- * ```ts
- * const file = await exportItem(ctx, item, "/repo/out");
- * ```
+ * @returns The written files, or undefined when the item's names are unsafe.
  */
 async function exportItem(
   ctx: RunnerContext,
   item: ItemRow & { contentHash: string },
   outputDirectory: string
-): Promise<ExportedFile | undefined> {
+): Promise<ExportedFile[] | undefined> {
   const label = item.label ?? item.id;
   const buildName = item.buildName ?? UNNAMED_BUILD;
   if (!isSafeRelativeName(label) || !isSafeRelativeName(buildName)) return undefined;
 
-  const mimeType = item.mimeType ?? "application/octet-stream";
-  const fileName = `${label}.${extensionOfMimeType(item.mimeType)}`;
-  const target = path.join(outputDirectory, buildName, fileName);
-  await mkdir(path.dirname(target), { recursive: true });
-  await copyFile(ctx.store.pathOf(item.contentHash), target);
-
-  const { size } = await stat(target);
-  return { label, path: target, bytes: size, costUsd: item.actualCostUsd ?? 0, mimeType };
+  // One file per output, in order, so `<label>-2` never lands before `<label>`.
+  const buildDirectory = path.join(outputDirectory, buildName);
+  const files: ExportedFile[] = [];
+  for (const entry of exportEntriesOf(item, label)) {
+    files.push(await exportEntry(ctx, entry, buildDirectory));
+  }
+  return files;
 }
 
 /**
  * Copies every `done` artifact of a run to `<outDir>/<build>/<label>.<ext>`,
- * the extension coming from the stored mime type. Existing files are
+ * the extension coming from the stored mime type. A multi-output item adds
+ * `<label>-2.<ext>` … `<label>-N.<ext>`. Existing files are
  * overwritten. Labels that would escape `outDir` are skipped and listed.
  *
  * @param ctx - Runner domain context.
@@ -114,8 +169,8 @@ export async function exportRun(
   for (const item of ctx.journal.listItems(run.id, { status: "done" })) {
     if (item.contentHash === null) continue;
     const doneItem = { ...item, contentHash: item.contentHash };
-    const file = await exportItem(ctx, doneItem, outputDirectory);
-    if (file) files.push(file);
+    const written = await exportItem(ctx, doneItem, outputDirectory);
+    if (written) files.push(...written);
     else skipped.push(item.label ?? item.id);
   }
 

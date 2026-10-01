@@ -2,8 +2,16 @@
  * @file journal core plugin — `attempts` rows and artifact reuse: attempt start/end, the done
  * transition, done-artifact dedup and live provider jobs.
  */
-import { requireDriver, SQL_NULL } from "./db";
-import type { AttemptEnd, AttemptStart, DoneArtifact, JobState, LiveJob, State } from "./types";
+import { outputsColumn, parseOutputs, requireDriver, SQL_NULL } from "./db";
+import type {
+  AttemptEnd,
+  AttemptStart,
+  DoneArtifact,
+  DoneResult,
+  JobState,
+  LiveJob,
+  State
+} from "./types";
 
 /** A provider job that expired this many times is stuck: `findLiveJob` stops returning it. */
 export const MAX_JOB_EXPIRIES = 2;
@@ -46,31 +54,29 @@ export function finishAttempt(state: State, attemptId: number, end: AttemptEnd):
 }
 
 /**
- * Transitions an item `dispatching → done`, recording its actual cost and
- * artifact identity.
+ * Transitions an item `dispatching → done`, recording its actual cost,
+ * artifact identity and, for a multi-output item, every output in order.
  *
  * @param state - Journal plugin state.
  * @param itemId - Item id to complete.
- * @param result - Actual cost, artifact key, and content hash.
+ * @param result - Actual cost, artifact key, content hash, mime type and outputs.
  * @param result.actualCostUsd - The item's actual, realized cost.
  * @param result.artifactKey - Artifact identity key (planning key + provider + pack version).
- * @param result.contentHash - CAS content hash of the produced artifact.
- * @param result.mimeType - MIME type of the produced artifact, when known.
+ * @param result.contentHash - CAS content hash of the (first) produced artifact.
+ * @param result.mimeType - MIME type of the (first) produced artifact, when known.
+ * @param result.outputs - Every output of a multi-output item, in order; NULL in the row when absent.
  */
-export function commitDone(
-  state: State,
-  itemId: string,
-  result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
-): void {
+export function commitDone(state: State, itemId: string, result: DoneResult): void {
   const driver = requireDriver(state);
   driver.transactionImmediate<void>(() => {
     driver.run(
-      "UPDATE items SET status = 'done', actual_cost_usd = ?, artifact_key = ?, content_hash = ?, mime_type = ?, updated_at = ? WHERE id = ? AND status = 'dispatching'",
+      "UPDATE items SET status = 'done', actual_cost_usd = ?, artifact_key = ?, content_hash = ?, mime_type = ?, outputs = ?, updated_at = ? WHERE id = ? AND status = 'dispatching'",
       [
         result.actualCostUsd,
         result.artifactKey,
         result.contentHash,
         result.mimeType ?? SQL_NULL,
+        outputsColumn(result.outputs),
         Date.now(),
         itemId
       ]
@@ -84,32 +90,43 @@ export function commitDone(
  *
  * @param state - Journal plugin state.
  * @param artifactKey - Artifact identity key.
- * @returns The artifact's content hash and mime type, or undefined.
+ * @returns The artifact's content hash, mime type and, when the row has them, outputs; or undefined.
  */
 export function findDoneArtifact(state: State, artifactKey: string): DoneArtifact | undefined {
   const driver = requireDriver(state);
-  const row = driver.get<{ content_hash: string | null; mime_type: string | null }>(
-    "SELECT content_hash, mime_type FROM items WHERE artifact_key = ? AND status = 'done' AND content_hash IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+  const row = driver.get<{
+    content_hash: string | null;
+    mime_type: string | null;
+    outputs: string | null;
+  }>(
+    "SELECT content_hash, mime_type, outputs FROM items WHERE artifact_key = ? AND status = 'done' AND content_hash IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
     [artifactKey]
   );
   if (!row || row.content_hash === null) return undefined;
-  return { contentHash: row.content_hash, mimeType: row.mime_type };
+
+  // `outputs` only when the row has them: never an `outputs: undefined` key.
+  const outputs = parseOutputs(row.outputs);
+  return {
+    contentHash: row.content_hash,
+    mimeType: row.mime_type,
+    ...(outputs ? { outputs } : {})
+  };
 }
 
 /**
  * Transitions a `queued` item straight to `done` with an artifact produced
- * by an earlier item (cost 0). A no-op when the item is not `queued`.
+ * by an earlier item (cost 0), outputs included. A no-op when the item is not `queued`.
  *
  * @param state - Journal plugin state.
  * @param itemId - Item id to complete.
- * @param artifact - The reused artifact's content hash and mime type.
+ * @param artifact - The reused artifact's content hash, mime type and outputs.
  */
 export function reuseDone(state: State, itemId: string, artifact: DoneArtifact): void {
   const driver = requireDriver(state);
   driver.transactionImmediate<void>(() => {
     driver.run(
-      "UPDATE items SET status = 'done', actual_cost_usd = 0, content_hash = ?, mime_type = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
-      [artifact.contentHash, artifact.mimeType, Date.now(), itemId]
+      "UPDATE items SET status = 'done', actual_cost_usd = 0, content_hash = ?, mime_type = ?, outputs = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
+      [artifact.contentHash, artifact.mimeType, outputsColumn(artifact.outputs), Date.now(), itemId]
     );
   });
 }

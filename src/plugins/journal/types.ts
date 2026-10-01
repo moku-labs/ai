@@ -92,9 +92,64 @@ export type LiveJob = {
 };
 
 /**
- * A reusable `done` artifact found by artifact key, from any run.
+ * One stored output of a multi-output item: its CAS hash and mime type.
+ * Metadata only, never the bytes.
+ *
+ * @example
+ * ```ts
+ * const output: DoneOutput = { contentHash: "2cf24dba…", mimeType: "image/jpeg" };
+ * ```
  */
-export type DoneArtifact = { contentHash: string; mimeType: string | null };
+export type DoneOutput = {
+  /** CAS content hash of the output. */
+  contentHash: string;
+  /** MIME type of the output. */
+  mimeType: string;
+};
+
+/**
+ * What a finished attempt produced, passed to `commitDone`. `contentHash` and
+ * `mimeType` are the first output; `outputs` lists every output of a
+ * multi-output item, in order, and is absent for a single artifact.
+ *
+ * @example
+ * ```ts
+ * const result: DoneResult = {
+ *   actualCostUsd: 0.07, artifactKey: "ak-1", contentHash: "ch-1", mimeType: "image/jpeg",
+ *   outputs: [{ contentHash: "ch-1", mimeType: "image/jpeg" }, { contentHash: "ch-2", mimeType: "image/jpeg" }]
+ * };
+ * ```
+ */
+export type DoneResult = {
+  /** The item's actual, realized cost, USD. */
+  actualCostUsd: number;
+  /** Artifact identity key. */
+  artifactKey: string;
+  /** CAS content hash of the (first) artifact. */
+  contentHash: string;
+  /** MIME type of the (first) artifact, when known. */
+  mimeType?: string;
+  /** Every output of a multi-output item, in order; `outputs[0]` is `contentHash`. */
+  outputs?: DoneOutput[];
+};
+
+/**
+ * A reusable `done` artifact found by artifact key, from any run. `outputs`
+ * is present only when the row has them.
+ *
+ * @example
+ * ```ts
+ * const artifact: DoneArtifact = { contentHash: "ch-1", mimeType: "audio/mpeg" };
+ * ```
+ */
+export type DoneArtifact = {
+  /** CAS content hash of the (first) artifact. */
+  contentHash: string;
+  /** MIME type of the (first) artifact, when known. */
+  mimeType: string | null;
+  /** Every output of a multi-output item, in order; absent for a single artifact. */
+  outputs?: DoneOutput[];
+};
 
 /**
  * One `runs` row — the single durable record for an invocation.
@@ -139,6 +194,8 @@ export type ItemRow = Omit<ItemIntent, "artifactKey" | "label" | "buildName"> & 
   buildName: string | null;
   /** MIME type of the committed artifact, when known. */
   mimeType: string | null;
+  /** Every output of a multi-output item, in order; `outputs[0]` is `contentHash`. Null for a single artifact. */
+  outputs: DoneOutput[] | null;
   artifactKey: string | null;
   contentHash: string | null;
   actualCostUsd: number | null;
@@ -360,27 +417,28 @@ export type JournalApi = {
   finishAttempt(attemptId: number, end: AttemptEnd): void;
   /**
    * `dispatching → done` with cost, artifact key, content hash and mime type.
+   * `result.outputs` is written to the `outputs` column; NULL when absent.
    *
    * @param itemId - Item id.
    * @param result - What the attempt produced.
    * @param result.actualCostUsd - Realized cost, USD.
    * @param result.artifactKey - Artifact identity key.
-   * @param result.contentHash - CAS content hash.
+   * @param result.contentHash - CAS content hash of the (first) artifact.
    * @param result.mimeType - Artifact mime type, when known.
+   * @param result.outputs - Every output of a multi-output item, in order.
    * @example
    * ```ts
    * // runner, after store.put(): the bytes are durable, so the item can be done
    * const { hash } = await ctx.store.put(bytes);
    * ctx.journal.commitDone(item.id, { actualCostUsd: 0.2, artifactKey: "ak-1", contentHash: hash, mimeType: "audio/mpeg" });
    * // ctx.journal.totals(run.id).spendUsd grows by 0.2; a no-op when the item is not dispatching
+   * // a group of 3 images also passes outputs: [{ contentHash: hash, mimeType: "image/jpeg" }, …]; getItem(…).outputs has 3 entries
    * ```
    */
-  commitDone(
-    itemId: string,
-    result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }
-  ): void;
+  commitDone(itemId: string, result: DoneResult): void;
   /**
    * Newest `done` artifact with this artifact key, in any run (cross-run reuse).
+   * Carries `outputs` when the row has them.
    *
    * @param artifactKey - Artifact identity key.
    * @returns The artifact, or undefined.
@@ -388,12 +446,14 @@ export type JournalApi = {
    * ```ts
    * // runner, before the gate: an artifact any earlier run made is reused, not paid again
    * ctx.journal.findDoneArtifact("ak-1"); // { contentHash: "2cf24dba…", mimeType: "audio/mpeg" }
+   * ctx.journal.findDoneArtifact("ak-group"); // { contentHash: "ch-1", mimeType: "image/jpeg", outputs: [3 entries] }
    * ctx.journal.findDoneArtifact("ak-never-built"); // undefined
    * ```
    */
   findDoneArtifact(artifactKey: string): DoneArtifact | undefined;
   /**
-   * `queued → done` with a reused artifact at cost 0.
+   * `queued → done` with a reused artifact at cost 0. Writes `artifact.outputs`
+   * too, NULL when absent.
    *
    * @param itemId - Item id.
    * @param artifact - The reused artifact.

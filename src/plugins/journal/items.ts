@@ -115,6 +115,7 @@ export function insertOneItem(
     label: item.label,
     buildName: item.buildName,
     mimeType: SQL_NULL,
+    outputs: SQL_NULL,
     contentHash: SQL_NULL,
     actualCostUsd: SQL_NULL,
     attemptCount: 0,
