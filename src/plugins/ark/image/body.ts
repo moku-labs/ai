@@ -265,21 +265,22 @@ function isImageFile(value: unknown): value is ImageFile {
  * @throws {Error} A plain two-line error when the file cannot be read.
  */
 async function readReferenceImage(file: ImageFile): Promise<string> {
-  let bytes: Uint8Array;
+  let bytes: Buffer;
   try {
-    bytes = new Uint8Array(await readFile(file.path));
-  } catch {
+    bytes = await readFile(file.path);
+  } catch (error) {
     throw new Error(
-      `[ai] Cannot read ark image ref "${file.path}".\n  Check that the $ref or $file it came from still exists.`
+      `[ai] Cannot read ark image ref "${file.path}".\n  Check that the $ref or $file it came from still exists.`,
+      { cause: error }
     );
   }
-  return `data:${file.mimeType.toLowerCase()};base64,${Buffer.from(bytes).toString("base64")}`;
+  return `data:${file.mimeType.toLowerCase()};base64,${bytes.toString("base64")}`;
 }
 
 /**
  * Reads the refs as data URIs, in request order. No public hosting needed.
  *
- * @param references - `request.refs`; every one must be resolved.
+ * @param references - `request.refs`, typed unknown: a ref the runner did not resolve may still be a `$ref` object here.
  * @returns The data URIs; empty without refs.
  * @throws {Error} A plain two-line error for an unresolved or unreadable ref.
  * @example

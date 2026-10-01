@@ -62,6 +62,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** A ref whose file does not exist. */
+function missingRef(): ImageFile {
+  return { path: `${temp.dir}/gone.png`, mimeType: "image/png", hash: "h" };
+}
+
 /** `count` copies of one unread ref (the check reads only the count). */
 function refsOf(count: number): ImageFile[] {
   return Array.from({ length: count }, () => ({ path: "a.png", mimeType: "image/png", hash: "h" }));
@@ -203,7 +208,7 @@ describe("image body", () => {
   });
 
   it("refuses a ref it cannot read, and an unresolved ref", async () => {
-    const missing = { path: `${temp.dir}/gone.png`, mimeType: "image/png", hash: "h" };
+    const missing = missingRef();
     await expect(readReferenceImages([missing])).rejects.toThrow(
       `[ai] Cannot read ark image ref "${missing.path}".\n  Check that the $ref or $file it came from still exists.`
     );
@@ -253,6 +258,12 @@ describe("image handler: estimate", () => {
   it("prices image-to-image like text-to-image: one image", () => {
     const handler = createImageHandler(createTestCtx());
     expect(handler.estimate(request({ refs: refsOf(2) }))).toEqual({ usd: 0.035 });
+  });
+
+  it("reads only the ref count, so an unresolved $ref still estimates", () => {
+    const handler = createImageHandler(createTestCtx());
+    const unresolved = { $ref: "e01.face" } as unknown as ImageFile;
+    expect(handler.estimate(request({ refs: [unresolved] }))).toEqual({ usd: 0.035 });
   });
 });
 
@@ -312,6 +323,20 @@ describe("image handler: execute", () => {
     expect(result.costUsd).toBe(0.035);
   });
 
+  it("POSTs several refs as an image array, in request order", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, LIVE_SEEDREAM_RESPONSE),
+      bytesResponse(JPEG, "image/jpeg")
+    );
+
+    await createImageHandler(createTestCtx()).execute(request({ refs: [face, sketch] }), {});
+
+    const [generate] = callsOf(fetchMock);
+    expect(jsonBodyOf(generate)).toMatchObject({
+      image: [LOCAL_IMAGE_DATA_URI, "data:image/jpeg;base64,BAUG"]
+    });
+  });
+
   it("returns the downloaded bytes unchanged, byte for byte", async () => {
     const original = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7, 0, 255, 128, 3, 0xff, 0xd9]);
     stubFetch(jsonResponse(200, LIVE_SEEDREAM_RESPONSE), bytesResponse(original, "image/jpeg"));
@@ -356,6 +381,12 @@ describe("image handler: execute", () => {
         createTestCtx(),
         request({ refs: refsOf(15) }),
         "takes at most 14 reference images, got 15."
+      ],
+      [createTestCtx(), request({ refs: [missingRef()] }), "Cannot read ark image ref"],
+      [
+        createTestCtx(),
+        request({ refs: [{ $ref: "e01.face" } as unknown as ImageFile] }),
+        "ark image got an unresolved reference."
       ],
       [createTestCtx({ env: createFakeEnv({}) }), request(), 'required variable "ARK_API_KEY"']
     ];

@@ -63,7 +63,7 @@ async function executeImage(
   request: ImageRequest,
   signal: AbortSignal | undefined
 ): Promise<ImageResult> {
-  // Refuse what Seedream here cannot take, before any call.
+  // Refuse what Seedream here cannot take and read the refs, before any call.
   const model = resolveArkImageModel(request.model, ctx.config.region);
   const checked = checkImageRequest(model, request);
   const apiKey = ctx.env.require(ctx.config.apiKeyEnv);
