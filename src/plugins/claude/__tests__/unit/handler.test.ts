@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PromptGenRequest } from "../../../promptGen/contract";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import { TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt/handler";
@@ -28,6 +29,37 @@ const SCORE_SCHEMA = {
   properties: { score: { type: "number" } },
   required: ["score"]
 };
+
+const UNSUPPORTED =
+  "[ai] Claude prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
+
+/** One request per field claude cannot express. */
+const TOOL_REQUESTS: Array<[string, PromptGenRequest]> = [
+  ["messages", { prompt: "", messages: [{ role: "user", content: "Check shot 3." }] }],
+  [
+    "tools",
+    {
+      prompt: "p",
+      tools: [{ name: "read_frame", description: "Return one frame.", inputSchema: {} }]
+    }
+  ],
+  ["toolChoice", { prompt: "p", toolChoice: "required" }]
+];
+
+/**
+ * The error a synchronous call throws.
+ *
+ * @param call - The call expected to throw.
+ * @returns The thrown value.
+ */
+function thrownBy(call: () => unknown): unknown {
+  try {
+    call();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to throw");
+}
 
 describe("createPromptGenHandler", () => {
   let root: string;
@@ -67,6 +99,25 @@ describe("createPromptGenHandler", () => {
         "params.reasoning must be off, low, medium or high"
       );
     });
+
+    it.each(TOOL_REQUESTS)("throws unavailable 'unsupported' for %s", (_label, request) => {
+      const handler = createPromptGenHandler(createTestCtx());
+
+      const error = thrownBy(() => handler.estimate(request));
+
+      expect(error).toBeInstanceOf(PromptGenUnavailableError);
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+      expect((error as Error).message).toBe(UNSUPPORTED);
+    });
+
+    it("rejects tools before it reads params", () => {
+      const handler = createPromptGenHandler(createTestCtx());
+      const request = { prompt: "p", toolChoice: "auto", params: { reasoning: "max" } } as const;
+
+      const error = thrownBy(() => handler.estimate(request));
+
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+    });
   });
 
   describe("execute", () => {
@@ -85,6 +136,9 @@ describe("createPromptGenHandler", () => {
       expect(result).toEqual({
         text: "ok",
         costUsd: 0,
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 12, completionTokens: 3, cachedTokens: 0, cacheWriteTokens: 0 },
         meta: {
           provider: "claude",
           model: "claude-opus-5-5",
@@ -280,6 +334,58 @@ describe("createPromptGenHandler", () => {
       expect(path.dirname(callDir)).toBe(realpathSync(tmpdir()));
       expect(path.basename(callDir)).toMatch(/^moku-claude-/);
       expect(existsSync(callDir)).toBe(false);
+    });
+
+    it("puts cache tokens in the typed usage and keeps meta.usage as it was", async () => {
+      const usage = {
+        input_tokens: 100,
+        output_tokens: 7,
+        cache_read_input_tokens: 1800,
+        cache_creation_input_tokens: 400
+      };
+      const bin = writeFakeClaude(root, printStdout(claudeJson({ usage })));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+
+      const result = await handler.execute({ prompt: "p" }, {});
+
+      expect(result.usage).toEqual({
+        promptTokens: 2300,
+        completionTokens: 7,
+        cachedTokens: 1800,
+        cacheWriteTokens: 400
+      });
+      expect(result.meta).toMatchObject({ usage: { inputTokens: 100, outputTokens: 7 } });
+    });
+
+    it("ignores cacheSystem alone: same argv and stdin as without it", async () => {
+      const bin = writeFakeClaude(root, printStdout(SUCCESS_STDOUT));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+
+      await handler.execute({ prompt: "Say ok.", system: "Be brief." }, {});
+      const plainArgs = recordedArgs();
+      const result = await handler.execute(
+        { prompt: "Say ok.", system: "Be brief.", cacheSystem: true },
+        {}
+      );
+
+      expect(result.text).toBe("ok");
+      expect(recordedArgs()).toEqual(plainArgs);
+      expect(readFileSync(path.join(root, "stdin.txt"), "utf8")).toBe("Say ok.");
+    });
+
+    it.each(
+      TOOL_REQUESTS
+    )("throws unavailable 'unsupported' for %s before any temp dir or spawn", async (_label, request) => {
+      const bin = writeFakeClaude(root, printStdout(SUCCESS_STDOUT));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+
+      const error = await handler.execute(request, {}).catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(PromptGenUnavailableError);
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+      expect((error as Error).message).toBe(UNSUPPORTED);
+      expect(existsSync(path.join(root, "args.txt"))).toBe(false);
+      expect(existsSync(work)).toBe(false);
     });
   });
 });

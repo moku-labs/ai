@@ -102,6 +102,9 @@ describe("codex prompt-gen integration", () => {
     expect(result).toEqual({
       text: "ok",
       costUsd: 0,
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
       meta: { provider: "codex", model: "gpt-6-sol", effort: "low" }
     });
     const args = readFileSync(path.join(root, "args.txt"), "utf8");

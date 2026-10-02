@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import { TerminalProviderError } from "../../errors";
-import { parseClaudeResult, parseSchemaAnswer, schemaAnswerOf } from "../../prompt/result";
+import { parseClaudeResult, parseSchemaAnswer, schemaAnswerOf, usageOf } from "../../prompt/result";
 import { claudeJson, NOT_LOGGED_IN_STDOUT, SUCCESS_STDOUT } from "./fixtures";
 
 const NOT_LOGGED_IN =
@@ -44,7 +44,9 @@ describe("parseClaudeResult", () => {
       text: "ok",
       listCostUsd: 0.114_22,
       inputTokens: 12,
-      outputTokens: 3
+      outputTokens: 3,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0
     });
   });
 
@@ -153,7 +155,46 @@ describe("parseClaudeResult", () => {
       text: "ok",
       listCostUsd: 0,
       inputTokens: 0,
-      outputTokens: 0
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0
+    });
+  });
+
+  it("reads the cache read and cache creation tokens", () => {
+    const usage = {
+      input_tokens: 5,
+      output_tokens: 2,
+      cache_read_input_tokens: 900,
+      cache_creation_input_tokens: 120
+    };
+
+    expect(parseClaudeResult(run(claudeJson({ usage })))).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 2,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 120
+    });
+  });
+});
+
+describe("usageOf", () => {
+  it("counts cache reads and writes into promptTokens", () => {
+    const answer = {
+      text: "ok",
+      structured: undefined,
+      listCostUsd: 0,
+      inputTokens: 5,
+      outputTokens: 2,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 120
+    };
+
+    expect(usageOf(answer)).toEqual({
+      promptTokens: 1025,
+      completionTokens: 2,
+      cachedTokens: 900,
+      cacheWriteTokens: 120
     });
   });
 });
@@ -225,7 +266,14 @@ describe("schemaAnswerOf", () => {
     properties: { score: { type: "number" } },
     required: ["score"]
   });
-  const base = { text: "", listCostUsd: 0, inputTokens: 0, outputTokens: 0 };
+  const base = {
+    text: "",
+    listCostUsd: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0
+  };
 
   it("checks structured_output first and stringifies it compactly", () => {
     const answer = { ...base, text: "ignored", structured: { score: 7 } };

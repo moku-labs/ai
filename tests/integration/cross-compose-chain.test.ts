@@ -71,7 +71,13 @@ function createScriptedPromptGenHandler(
     execute: async () => {
       const index = Math.min(calls, outputs.length - 1);
       calls += 1;
-      return { text: outputs[index] ?? "", costUsd: CANNED_COST_USD };
+      return {
+        text: outputs[index] ?? "",
+        costUsd: CANNED_COST_USD,
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+      };
     },
     calls: () => calls
   };

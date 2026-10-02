@@ -44,7 +44,13 @@ const FAKE_VOICEOVER_ITEM = {
 function createCannedPromptGenPlugin(text: string) {
   const handler: PromptGenHandler = {
     estimate: () => ({ usd: 0.001 }),
-    execute: async () => ({ text, costUsd: 0.001 })
+    execute: async () => ({
+      text,
+      costUsd: 0.001,
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+    })
   };
 
   return coreConfig.createPlugin("cannedPromptGen", {
