@@ -69,11 +69,12 @@ Each task directory owns its models and prices; a new model touches one director
 | `minimax-h3-ref` | `minimax/h3/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | none | rest of `reference_image_urls` (max 8) | `reference_audio_urls` (max 3) | `reference_video_urls` (max 3) | 15 s combined, 2-15 s each | integer 5-15 | always on (native stereo) |
 | `minimax-h3-max-extend` | `minimax/h3-max/extend-video` | `video_url` (the source clip, from `input.image`) | none | none | none | none | 0 | integer 5-15, new footage only | always on (native stereo) |
 | `kling-3-pro` | `fal-ai/kling-video/v3/pro/image-to-video` | `start_image_url` | `end_image_url` | none | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
-| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | none | `image_urls` (max 4) | none | none | 0 | `"3"`..`"15"` | `generate_audio` |
+| `kling-o3-ref` | `fal-ai/kling-video/o3/pro/reference-to-video` | `start_image_url` | none | `image_urls` (max 4, `@Image1`…) | none | none (one element may carry `video_url`, via `params`) | 0 | `"3"`..`"15"` | `generate_audio` |
+| `kling-o3-v2v-ref` | `fal-ai/kling-video/o3/pro/video-to-video/reference` | `image_urls[0]` (`@Image1` in the prompt) | none | rest of `image_urls` (max 3) | none | `video_url` (max 1, `@Video1`) | 3-15 s | `"3"`..`"15"` | none; `keep_audio: false` |
 | `seedance-2.0-mini` | `bytedance/seedance-2.0/mini/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | string, e.g. `"5"` | `generate_audio` |
 | `seedance-2.0-mini-ref` | `bytedance/seedance-2.0/mini/reference-to-video` | `image_urls[0]` | none | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
 | `seedance-2.0-ref` | `bytedance/seedance-2.0/reference-to-video` | `image_urls[0]` | none | rest of `image_urls` (max 8) | `audio_urls` (max 3) | `video_urls` (max 3) | 15 s combined | string, e.g. `"5"` | `generate_audio` |
-| `wan-3.0-ref` | `alibaba/wan-3.0/reference-to-video` | `reference_image_urls[0]` | none | rest of `reference_image_urls` (max 9) | `reference_audio_urls` (max 5) | none | 0 | integer | `audio` |
+| `wan-3.0-ref` | `alibaba/wan-3.0/reference-to-video` | `reference_image_urls[0]` (`Image 1` in the prompt) | none | rest of `reference_image_urls` (max 9) | `reference_audio_urls` (max 5, 15 s combined) | `reference_video_urls` (max 5, `Video 1`…) | 15 s combined, 1-15 s each, ≥ 16 fps | integer 2-30 | `audio` |
 | `veo-3.1-fast` | `fal-ai/veo3.1/fast/image-to-video` | `image_url` | none | none | none | none | 0 | `"4s"` / `"6s"` / `"8s"` | `generate_audio` |
 | `vidu-q3` | `fal-ai/vidu/q3/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer | `audio` |
 | `vidu-q3-ref` | `fal-ai/vidu/q3/reference-to-video/mix` | `reference_image_urls[0]` | none | rest of `reference_image_urls` (max 3) | none | none | 0 | integer | `audio` |
@@ -84,6 +85,23 @@ Video-ref limits are from the fal model pages of 2026-09-25; `minimax-h3-ref` an
 from the fal schemas of 2026-09-26. End frames and the `minimax-h3-max-i2v` row are from the fal schemas
 of 2026-09-29. The Seedance 2.0 and 2.0 Mini values follow
 Seedance 2.0's reference schema; check them against fal before a release.
+
+**Wan 3.0 and Kling O3 limits.** `wan-3.0-ref`, `kling-o3-ref` and `kling-o3-v2v-ref` were checked on 2026-10-02
+against three sources: the fal OpenAPI schema and llms.txt, the vendor docs (Alibaba Model Studio "Wan3.0 Video
+Generation API Reference", Kling AI API "Omni Video Generation"), and fal 422 texts (none published). Where two
+sources differ, the strictest value is used. The catalog checks only the counts; fal answers 422 for the rest.
+
+| Limit | `wan-3.0-ref` | `kling-o3-ref` | `kling-o3-v2v-ref` |
+| --- | --- | --- | --- |
+| Image refs (`maxRefs`) | 9 + first frame = 10 | 4 (Kling: 7 without a video) | 3 + first frame = 4 |
+| Audio refs | 5, 15 s combined, 1-15 s each | none | none |
+| Video refs | 5, 15 s combined, 1-15 s each, ≥ 16 fps, ≤ 100 MB, mp4/mov | none top-level; one element `video_url` 3-10.05 s, 720-2160 px, 24-60 fps | 1, 3-15 s, 720-3840 px, 24-60 fps, ≤ 200 MB, mp4/mov |
+| Input + output | input video + output ≤ 30 s | | |
+| Duration | integer 2-30 | `"3"`..`"15"` | `"3"`..`"15"` |
+| Prompt | 20,000 chars | 2,500 chars (Kling: 3,072 hard) | 2,500 chars (Kling) |
+| Negative prompt | none | none | none |
+| Resolution | `480p` / `720p` / `1080p` | none | none |
+| Aspect | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` | `16:9`, `9:16`, `1:1` | `auto`, `16:9`, `9:16`, `1:1` |
 
 Request fields map as: `prompt`, `image` (required), `endImage` (see below), `refs`, `seconds` (default 5), `aspect` (default `9:16`,
 sent where the model takes `aspect_ratio`; `vidu-q3` has none, its clip takes the image's aspect),
@@ -129,10 +147,18 @@ Any other model fails the item with a terminal error before any upload:
       endImage: { $ref: s01.end }
 ```
 
-**Video refs.** `minimax-h3-max-ref`, `minimax-h3-ref` and `gemini-omni-1.1-flash-ref` send them as `reference_video_urls`; the Seedance reference models send
-them as `video_urls`. A body gets the field only when the request has video refs. The plugin does not read
+**Video refs.** `minimax-h3-max-ref`, `minimax-h3-ref`, `wan-3.0-ref` and `gemini-omni-1.1-flash-ref` send them as `reference_video_urls`; the Seedance reference models send
+them as `video_urls`; `kling-o3-v2v-ref` sends its one video ref as `video_url`. A body gets the field only when the request has video refs.
+`kling-o3-v2v-ref` needs its video ref: without one fal answers 422 (`video_url` is required). The plugin does not read
 clip lengths: `maxVideoRefSec` is data for the caller, which keeps the clips within it. The plugin does not
 check fal's 12-file cap on H3 Max (first frame and every ref) either.
+
+**Kling O3 video-to-video reference.** `kling-o3-v2v-ref` keeps the motion and camera of the reference video.
+The first frame goes out as `image_urls[0]` (`@Image1`), the image refs after it, the video ref as `video_url`
+(`@Video1`). It sends `keep_audio: false`, so the reference's own sound stays out of the clip; set
+`params.keep_audio: true` to keep it. `elements` (`@Element1`…) go through `params`; image refs and elements
+are 4 at most together. `kling-o3-ref` builds no `elements`, `end_image_url`, `multi_prompt` or `shot_type`
+either: set them with `params`.
 
 **MiniMax H3 dialogue.** H3 and H3 Max voice lines written in the prompt, e.g. `<d>[Japanese] 行こう。</d>`.
 `minimax-h3-max-ref` and `minimax-h3-ref` send `prompt_expansion_mode: "balanced"` (H3 Max requires it; override with `params`).
@@ -158,6 +184,7 @@ Any of these can be changed with `params`. The plugin does not check the source'
 | `minimax-h3-max-extend@480P` / `@768P` / `@1080P` / `@2K` | 0.05 / 0.08 / 0.16 / 0.32 |
 | `kling-3-pro` / `kling-3-pro+audio` | 0.112 / 0.168 |
 | `kling-o3-ref` / `kling-o3-ref+audio` | 0.112 / 0.14 |
+| `kling-o3-v2v-ref` | 0.168 |
 | `seedance-2.0-mini@480p` / `@720p`, `seedance-2.0-mini-ref@480p` / `@720p` | 0.0721 / 0.1547 |
 | `seedance-2.0-ref@720p` / `@1080p` | 0.3034 / 0.682 |
 | `wan-3.0-ref@480p` / `@720p` / `@1080p` | 0.05 / 0.10 / 0.20 |
@@ -170,6 +197,8 @@ Lookup order: `<alias>@<resolution>`, then `<alias>+audio` when audio is on, the
 `veo-3.1-fast` has a resolution row only for `4k`. At `720p` it takes `veo-3.1-fast+audio` with audio on,
 `veo-3.1-fast` with audio off.
 Cost = seconds × USD/s + reference-token or reference-image surcharge. `estimate` and the recorded cost use the same function.
+fal also bills `wan-3.0-ref` for the seconds of its reference videos. The plugin does not read clip lengths, so
+the estimate counts the output seconds only.
 
 **Reference tokens (`minimax-h3-max-ref`, `minimax-h3-max-extend`).** Keys `<alias>#refTokensIncluded` (4096) and
 `<alias>#refTokenUsdPer1k` (0.02). Surcharge = max(0, tokens − 4096) × 0.02 / 1000. Tokens:

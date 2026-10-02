@@ -1138,9 +1138,10 @@ owns its models and prices.
 
 - video: submit + poll (no execute). Aliases seedance-2.5, seedance-2.5-ref,
   minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref,
-  minimax-h3-max-extend, kling-3-pro, kling-o3-ref, seedance-2.0-mini,
-  seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3,
-  vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref. USD per second.
+  minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref,
+  seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref,
+  veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash,
+  gemini-omni-1.1-flash-ref. USD per second.
 - image: estimate + execute + submit + poll over the queue. Aliases nano-banana-pro,
   seedream-4.5-edit, gpt-image-2.5 (default: imageDefaultModel). A request with refs
   goes to the edit endpoint. params.resolution 1K / 2K / 4K / 1080; params.quality (gpt).

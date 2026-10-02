@@ -18,6 +18,7 @@ describe("createFalApi().info()", () => {
         "minimax-h3-max-extend",
         "kling-3-pro",
         "kling-o3-ref",
+        "kling-o3-v2v-ref",
         "seedance-2.0-mini",
         "seedance-2.0-mini-ref",
         "seedance-2.0-ref",
