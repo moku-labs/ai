@@ -22,7 +22,7 @@ function bodyFor(model: string, overrides: Partial<VideoRequest> = {}): Record<s
 }
 
 describe("fal model catalog", () => {
-  it("lists the eighteen aliases in catalog order", () => {
+  it("lists the nineteen aliases in catalog order", () => {
     expect(falAliases()).toEqual([
       "seedance-2.5",
       "seedance-2.5-ref",
@@ -33,6 +33,7 @@ describe("fal model catalog", () => {
       "minimax-h3-max-extend",
       "kling-3-pro",
       "kling-o3-ref",
+      "kling-o3-v2v-ref",
       "seedance-2.0-mini",
       "seedance-2.0-mini-ref",
       "seedance-2.0-ref",
@@ -61,7 +62,7 @@ describe("fal model catalog", () => {
 
   it("rejects a model that is not an alias with the pinned two-line error", () => {
     expect(() => resolveFalModel("sora-9")).toThrow(
-      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref.'
+      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref.'
     );
   });
 
@@ -285,10 +286,11 @@ describe("video refs: catalog limits and body fields", () => {
     ["minimax-h3-max-extend", 0, 0],
     ["kling-3-pro", 0, 0],
     ["kling-o3-ref", 0, 0],
+    ["kling-o3-v2v-ref", 1, 15],
     ["seedance-2.0-mini", 0, 0],
     ["seedance-2.0-mini-ref", 3, 15],
     ["seedance-2.0-ref", 3, 15],
-    ["wan-3.0-ref", 0, 0],
+    ["wan-3.0-ref", 5, 15],
     ["veo-3.1-fast", 0, 0],
     ["vidu-q3", 0, 0],
     ["vidu-q3-ref", 0, 0],
@@ -331,7 +333,6 @@ describe("video refs: catalog limits and body fields", () => {
     "kling-3-pro",
     "kling-o3-ref",
     "seedance-2.0-mini",
-    "wan-3.0-ref",
     "veo-3.1-fast",
     "vidu-q3",
     "vidu-q3-ref",
