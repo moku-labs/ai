@@ -183,6 +183,26 @@ describe("kling-o3-v2v-ref", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("takes 3 image refs and 1 video ref: 4 image_urls with the first frame", () => {
+    const split = splitReferences(resolveFalModel("kling-o3-v2v-ref"), [face, face, face, motion]);
+    expect(split.images).toHaveLength(3);
+    expect(split.videos).toEqual([motion]);
+  });
+
+  it("rejects an audio ref before any fetch", async () => {
+    const voice = temp.file("voice.mp3", new Uint8Array([3]), "audio/mpeg", "3".repeat(64));
+    const { message, fetchMock } = await rejected({
+      model: "kling-o3-v2v-ref",
+      prompt: "p",
+      image,
+      refs: [voice, motion]
+    });
+    expect(message).toBe(
+      `[ai] fal model "kling-o3-v2v-ref" takes no reference audio, got 1.${SECOND_LINE}`
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("is priced at 0.168 USD per generated second", () => {
     expect(bundledPrices["kling-o3-v2v-ref"]).toBe(0.168);
     const request = { model: "kling-o3-v2v-ref", prompt: "p", seconds: 10 };
