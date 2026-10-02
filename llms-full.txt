@@ -105,6 +105,11 @@ Value exports:
   FalModelInfo, LocalFile, RetryHint, FalProviderError, FalContext, EstimateInput,
   EstimateRequest, RegistryApi); Fal.RetryableProviderError,
   Fal.TerminalProviderError, Fal.FlaggedProviderError
+- promptGen values: PromptGenUnavailableError (reason "missing" | "auth" | "limit" |
+  "unsupported"), isPromptGenUnavailable, ToolArgumentsError (toolName, raw), and
+  runToolLoop (the journaled tool loop; a library function, not a plugin — see §4.6)
+- PromptGen namespace types: ContentPart, ChatMessage, ToolCall, ToolDefinition,
+  PromptGenUsage, ToolSpec, ToolOutput, LoopEvent, RunToolLoopOptions, RunToolLoopResult
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
 - Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
@@ -610,26 +615,62 @@ files and register() calls is kebab-case `"prompt-gen"`. Exists at M0 primarily 
 Contract (src/plugins/promptGen/contract.ts):
 
 ```ts
+export type ContentPart =
+  | { type: "text"; text: string; cache?: true }                       // cache: a cache breakpoint after this part
+  | { type: "image"; path: string; mimeType: string; hash: string };   // same shape as params.images
+export type ChatMessage =
+  | { role: "user"; content: string | ContentPart[] }
+  | { role: "assistant"; content: string | null; toolCalls?: ToolCall[] }
+  | { role: "tool"; toolCallId: string; content: string | ContentPart[] };
+export type ToolCall = { id: string; name: string; input: unknown };  // input: parsed JSON arguments
+export type ToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type PromptGenRequest = {
-  prompt: string;
+  prompt: string;                    // ignored when messages is set (may be "")
   system?: string;
   model?: string;
   temperature?: number;              // provider maps/clamps as needed
   params?: Record<string, unknown>;
+  messages?: ChatMessage[];          // the turns after system; replaces prompt
+  tools?: ToolDefinition[];
+  toolChoice?: "auto" | "none" | "required" | { name: string };   // default "auto"
+  cacheSystem?: boolean;             // a cache breakpoint after the system text
+};
+export type PromptGenUsage = {
+  promptTokens: number; completionTokens: number;
+  cachedTokens: number;              // 0 when unknown
+  cacheWriteTokens: number;          // 0 when unknown
 };
 export type PromptGenResult = {
-  text: string;
+  text: string;                      // "" when the turn is only tool calls
   costUsd: number;
-  meta?: Record<string, unknown>;
+  toolCalls: ToolCall[];             // [] when none
+  finishReason: "stop" | "tool_calls" | "length" | "other";
+  usage: PromptGenUsage;
+  meta?: Record<string, unknown>;    // keeps its keys for compatibility
 };
 export type PromptGenHandler = {
   estimate(request: PromptGenRequest): { usd: number };
   execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<PromptGenResult>;
 };
+export class PromptGenUnavailableError extends Error {
+  readonly unavailable = true;
+  readonly reason: "missing" | "auth" | "limit" | "unsupported";
+}
+export class ToolArgumentsError extends Error { readonly toolName: string; readonly raw: string }
+export function isPromptGenUnavailable(error: unknown): boolean; // unavailable === true, or status 401/402/403/429
 ```
 
+toolCalls, finishReason and usage are REQUIRED: a PromptGenHandler outside this repo must
+return them (a one-turn handler: toolCalls [], finishReason "stop", its token counts or 0).
+A request without messages, tools, toolChoice and cacheSystem is sent exactly as before.
+claude, codex and openai throw PromptGenUnavailableError reason "unsupported" for
+messages/tools/toolChoice in estimate() and execute(); cacheSystem alone is ignored there.
+generate then falls back to the next provider; fal serves them (see §4 fal). estimate has
+no fallback: estimate a tool request with { provider: "fal" }. ToolArgumentsError is not
+"unavailable": generate rethrows it at once.
+
 ```ts
-export type Config = { defaultProvider: string }; // default "openai"
+export type Config = { defaultProvider: string; fallback: string[] }; // defaults "openai", []
 export type PromptGenApi = {
   generate(request: PromptGenRequest,
     opts?: { signal?: AbortSignal; provider?: string }): Promise<PromptGenResult>; // NOT journaled
@@ -637,6 +678,65 @@ export type PromptGenApi = {
   providers(): string[];
 };
 ```
+
+runToolLoop (src/plugins/promptGen/loop/; exported from the package root; a library
+function, not a plugin; calls only options.generate):
+
+```ts
+export type ToolOutput<O = unknown> = { value: O; content: ContentPart[]; costUsd: number; rows?: string[] };
+export type ToolSpec<I = unknown, O = unknown> = {
+  name: string; description: string;
+  schema: z.ZodType<I>;                       // checks input; z.toJSONSchema(io "input") without $schema in the request
+  estimateUsd?(input: I): number;             // for the breaker; absent = 0, no check
+  run(input: I, signal: AbortSignal): Promise<ToolOutput<O>>;
+  start?(input: I, signal: AbortSignal): Promise<{ started: unknown; rows?: string[] }>;  // JSON-safe
+  wait?(started: unknown, signal: AbortSignal): Promise<ToolOutput<O>>;                  // both set → used instead of run
+};
+export type LoopEvent =
+  | { kind: "model"; step: number; text: string | null; toolCalls: ToolCall[]; costUsd: number; usage: PromptGenUsage }
+  | { kind: "tool"; step: number; name: string; callId: string; costUsd: number; summary: string; rows: string[] }
+  | { kind: "budget"; spentUsd: number; limitUsd: number; mode: "finish" | "stop" };
+export type RunToolLoopOptions = {
+  generate: (request: PromptGenRequest, signal: AbortSignal) => Promise<PromptGenResult>;
+  model: string; reasoning?: "off" | "low" | "medium" | "high";
+  system: string; messages: ChatMessage[]; tools: readonly ToolSpec[];
+  budget: { usd: number; spentUsd?: number; finishAt: number; spent?: () => Promise<number> };
+  maxSteps: number;
+  step: <T>(key: string, work: (signal: AbortSignal) => Promise<{ value: T; costUsd: number }>) => Promise<T>;
+  onStep?: (event: LoopEvent) => void;
+  finishNote?: string; keepImages?: number;  // keepImages default 2
+  signal: AbortSignal;
+};
+export type RunToolLoopResult = {
+  stoppedBy: "done" | "budget" | "steps" | "cancel" | "asked";
+  spentUsd: number; steps: number; messages: ChatMessage[]; finalText: string | null;
+  asked?: { input: unknown };
+};
+export function runToolLoop(options: RunToolLoopOptions): Promise<RunToolLoopResult>;
+```
+
+- Request per model call: { prompt: "", system, model, messages, tools, cacheSystem: true }
+  plus params: { reasoning } when set.
+- Journal steps: model:<n> (value: PromptGenResult), tool:<callId> (value: ToolOutput), or
+  tool:<callId>:start ({ started, rows }, cost 0) then tool:<callId>:wait (ToolOutput). A
+  replayed key calls nothing; values carry their cost, so a replay rebuilds spentUsd.
+- spent = budget.spentUsd + every step's cost + await budget.spent(). Before a model call:
+  abort, then steps >= maxSteps → "steps", then spent >= usd → "budget". Before a tool with
+  estimateUsd: spent + estimate > usd → "budget", tool not run. Both emit budget "stop".
+- Finish mode: the first time spent >= finishAt × usd → budget "finish" once; finishNote joins
+  as a user message before the next model call unless a user message already equals it.
+- A "budget", "steps" or "cancel" stop answers every open call of the last assistant turn
+  with "Not run: <reason>.". "asked" leaves the ask call open; the caller appends
+  { role: "tool", toolCallId, content } with the person's answer.
+- Unknown tool → 'Unknown tool "<name>".'; zod failure → "Invalid input for <name>:
+  <z.prettifyError>"; content [] → "(no output)". Each one step, cost 0.
+- A tool named "ask" (defined by the caller) is never run: the other calls of the turn run,
+  then stoppedBy "asked" with asked.input. keepImages: tool-result images older than the last
+  N assistant turns become "[image dropped: <file name>]" in the request only.
+- A tool or generate error propagates; when the signal is aborted it is "cancel" instead.
+- Caveats: a continued conversation needs a new journal key space (keys restart at model:1);
+  result.spentUsd already includes budget.spent(); call ids must be unique across turns.
+- Full guide: src/plugins/promptGen/README.md "Tool loop — runToolLoop".
 
 --------------------------------------------------------------------------------
 4.7 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
@@ -1151,7 +1251,12 @@ owns its models and prices.
   anthropic/claude-sonnet-5, openai/gpt-6-sol, openai/gpt-6-astra,
   google/gemini-3.8-flash, x-ai/grok-4.7. Params: reasoning, responseSchema,
   strictSchema, images, max_tokens. 401/403 → PromptGenUnavailableError reason auth,
-  402/429 → reason limit (promptGen moves to its next fallback provider).
+  402/429 → reason limit (promptGen moves to its next fallback provider). Tool calling:
+  messages → chat messages after system (image parts uploaded like params.images), tools →
+  tools[{ type: "function", function }], toolChoice → tool_choice, cacheSystem and text parts
+  with cache: true → cache_control { type: "ephemeral" }; tool_calls → toolCalls (arguments
+  not JSON → ToolArgumentsError, never retried); typed usage incl. cached and cache-write
+  tokens. See src/plugins/fal/README.md "Tool calling and cache".
 - music: estimate + execute + submit + poll. elevenlabs-music-v2.5
   (fal-ai/elevenlabs/music/v2.5, 3 000–600 000 ms, per started minute; chunks →
   composition_plan) and stable-audio-2.5 (fal-ai/stable-audio-25/text-to-audio,
@@ -1666,6 +1771,8 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] ark refused asset "<name>": <reason>.\n  Items that use it will not run.
 - [ai] ark asset "<assetId>" is <Status>.\n  Bump params.generation on its asset item to register again.
 - [ai] ark CreateAsset needs a public https url.\n  Pass input.url with the same bytes as input.image.
+- [ai] Tool call "<name>" has arguments that are not JSON.\n  The model sent: <first 200 chars>.  (ToolArgumentsError)
+- [ai] <Claude|Codex|OpenAI> prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.  (PromptGenUnavailableError "unsupported")
 
 ================================================================================
 9. DEPENDENCY GRAPH + INITIALIZATION ORDER

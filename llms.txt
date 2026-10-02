@@ -92,7 +92,7 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 ## Quick Reference
 
 ```ts
-import { createApp, createPlugin, defineBuild, registryPlugin } from "@moku-labs/ai";
+import { createApp, createPlugin, defineBuild, registryPlugin, runToolLoop } from "@moku-labs/ai";
 import type { Voiceover, Translate, PromptGen, Music, Fal, Buildfile, Cli } from "@moku-labs/ai";
 
 const app = createApp({
@@ -112,6 +112,12 @@ await app.voiceover.generate({ text: "Hi", voice: "en-US-1" }, { provider: "elev
 app.voiceover.estimate({ text: "Hi", voice: "en-US-1" });                   // { usd }
 await app.translate.generate({ text: "Hi", targetLang: "es" });
 await app.promptGen.generate({ prompt: "Write a tagline." });
+// Tool turn (fal only): { toolCalls, finishReason, usage } on every result
+await app.promptGen.generate({ prompt: "", messages, tools, toolChoice: "auto", cacheSystem: true }, { provider: "fal" });
+// Journaled tool loop (library function, not a plugin): the caller's step(key, work) is the journal
+await runToolLoop({ generate: (r, signal) => app.promptGen.generate(r, { signal, provider: "fal" }),
+  model: "anthropic/claude-opus-5.5", system, messages, tools: [readFrame], budget: { usd: 2, finishAt: 0.8 },
+  maxSteps: 30, step, signal });                                            // { stoppedBy, spentUsd, steps, messages, finalText, asked? }
 await app.asset.register({ image, url: "https://cdn.example/mira.png" }, { provider: "ark" }); // AssetRecord
 await app.music.generate({ prompt: "tense synth", model: "elevenlabs-music-v2.5", lengthMs: 60_000 }); // { audio, mimeType, costUsd }
 app.fal.models("music");   // [{ id, price: { usd, per } }] — per task: "video" | "image" | "prompt-gen" | "music"
@@ -191,7 +197,7 @@ src/
     runner/               # index.ts, types.ts, api.ts, pipeline/plan/retry/stream modules
     voiceover/            # index.ts, types.ts, api.ts, contract.ts, packs/
     translate/            # index.ts, types.ts, api.ts, contract.ts
-    promptGen/            # index.ts, types.ts, api.ts, contract.ts
+    promptGen/            # index.ts, types.ts, api.ts, contract.ts, resolve.ts, fallback.ts, loop/ (runToolLoop: run, tools, history, types)
     elevenlabs/           # index.ts, types.ts, api.ts, client.ts, prices.ts, state.ts, voiceover/handler.ts
     openai/               # index.ts, types.ts, api.ts, client.ts, prices.ts, state.ts, tts/ translate/ prompt-gen/ handlers
     compose/              # index.ts, types.ts, api.ts, emit.ts
@@ -220,7 +226,7 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - runner (deps: registry, buildfile): the durable orchestrator — plan → admit → gate → execute → persist → report; owns resume, budget stop, clean pause, retry taxonomy | Complex | run, resume, estimate, status, events, export | events: run:progress, run:done, run:failed, run:budget-stop, run:paused
 - voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params | Standard | generate, estimate, providers | events: none
 - translate (deps: registry): owns "translate" contract + one-off facade | Standard | generate, estimate, providers | events: none
-- promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose; generate walks [provider, ...fallback] and switches only on PromptGenUnavailableError (missing/auth/limit) or HTTP 401/402/403/429 or a breaker-open lane, one limits lane "prompt-gen/<provider>/default" per attempt | Standard | generate, estimate, providers | events: none
+- promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose; generate walks [provider, ...fallback] and switches only on PromptGenUnavailableError (missing/auth/limit) or HTTP 401/402/403/429 or a breaker-open lane, one limits lane "prompt-gen/<provider>/default" per attempt. Tool calling: request messages (ChatMessage[] of ContentPart text/image), tools (ToolDefinition: name, description, JSON-schema inputSchema), toolChoice, cacheSystem; result toolCalls, finishReason, usage (PromptGenUsage: promptTokens, completionTokens, cachedTokens, cacheWriteTokens) are REQUIRED, so external handlers must return them. claude/codex/openai throw PromptGenUnavailableError reason "unsupported" for messages/tools/toolChoice (generate falls back; fal serves them). Package root also exports ToolArgumentsError (tool arguments not JSON; toolName, raw) and runToolLoop (library function, not a plugin: model:<n> / tool:<callId> / tool:<callId>:start|:wait steps of the caller's journal; budget breaker before model calls and costed tools; finishAt + finishNote once; "Not run: <reason>." answers; ask, keepImages, maxSteps, cancel; stoppedBy done | budget | steps | cancel | asked) | Standard | generate, estimate, providers | events: none
 - elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs"); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
 - openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
@@ -232,7 +238,7 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - fal (deps: registry): every fal-hosted task over one client, one FAL_KEY, one upload cache (state.uploads, keyed storage:<mime>:<sha256>) and one merged price table — registers four handlers in onInit:
   ("video","fal") submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref; per-second prices (keys <alias>, <alias>@<resolution>, <alias>+audio).
   ("image","fal") estimate + execute + submit + poll over the queue; models nano-banana-pro, seedream-4.5-edit, gpt-image-2.5 (default imageDefaultModel); refs → edit endpoint; price keys image:<alias>[@<resolution>].
-  ("prompt-gen","fal") estimate + execute, one sync POST to <runUrl>/openrouter/router/openai/v1/chat/completions; model = OpenRouter id, undefined or "default" → llmDefaultModel; price keys llm:<id>#in / llm:<id>#out (USD per M tokens); 401/403/402/429 → PromptGenUnavailableError.
+  ("prompt-gen","fal") estimate + execute, one sync POST to <runUrl>/openrouter/router/openai/v1/chat/completions; model = OpenRouter id, undefined or "default" → llmDefaultModel; price keys llm:<id>#in / llm:<id>#out (USD per M tokens); 401/403/402/429 → PromptGenUnavailableError. messages/tools/toolChoice → OpenAI chat messages, tools, tool_choice; cacheSystem and text parts with cache: true → cache_control ephemeral; tool_calls → toolCalls (arguments not JSON → ToolArgumentsError); typed usage incl. cached and cache-write tokens.
   ("music","fal") estimate + execute + submit + poll; models elevenlabs-music-v2.5 (0.80 USD per started minute, chunks → composition_plan) and stable-audio-2.5 (0.20 USD per generation); price keys music:<alias>; params never reach the body.
   execute (image, music) waits in process every pollIntervalMs, at most jobTimeoutMs (then retryable timeout; the job stays adoptable through poll). A request is validated and priced before the key is read or anything is uploaded; a missing price throws. requestLog (off by default) writes one JSONL line per billable request, never the key or the prompt. Errors: RetryableProviderError, TerminalProviderError, FlaggedProviderError | Complex | info, models(task) | events: none
 - ark (deps: registry): Seedance straight from ByteDance — region "intl" (BytePlus ModelArk) or "cn" (Volcengine Ark), one account per instance; registers ("video","ark") (submit + poll, asset refs sent as asset://<id>, asset preflight: provider + account fingerprint + GetAsset Active before any paid POST) and ("asset","ark") (signed OpenAPI: CreateAssetGroup once per process unless groupId set, CreateAsset from a public https input.url, GetAsset poll; estimate $0); registered after fal so fal stays the default video provider; models dreamina-seedance-2-0-260128, dreamina-seedance-2-5-260628 (intl), doubao-seedance-2-0-260128, doubao-seedance-2-5-260628 (cn); price per 1M output tokens; params allowlist refUrls (video/audio refs by public https URL), watermark, seed, return_last_frame, execution_expires_after, priority; a face refusal on a plain image says "Make it an asset item and $ref it." — no raw-photo fallback | Complex | info | events: none

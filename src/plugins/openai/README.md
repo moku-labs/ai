@@ -149,9 +149,15 @@ execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<Prom
   (output), priced at chat rates.
 - **execute** — calls `chat.completions.create` with the caller's `system` (when given),
   `prompt`, and `temperature` (forwarded only when given — the SDK default applies otherwise).
-  Returns `{ text, costUsd, meta: { model, promptTokens, completionTokens } }`; usage-based cost
-  with the same heuristic fallback.
-- **throws** — same taxonomy as translate (missing key, classified errors, no-choices terminal,
+  Returns `{ text, costUsd, toolCalls: [], finishReason, usage, meta: { model, promptTokens,
+  completionTokens } }`; usage-based cost with the same heuristic fallback. `finishReason` is
+  `"length"` when `finish_reason` is `"length"`, else `"stop"`. `usage` is `{ promptTokens,
+  completionTokens, cachedTokens, cacheWriteTokens }` from `prompt_tokens`, `completion_tokens`
+  and `prompt_tokens_details.cached_tokens`; a missing count is 0 and `cacheWriteTokens` is
+  always 0. `cacheSystem` is ignored.
+- **throws** — `PromptGenUnavailableError` with reason `"unsupported"` when `messages`, `tools`
+  or `toolChoice` is set, from `estimate` and `execute`, before any SDK call; promptGen falls back.
+  Otherwise the same taxonomy as translate (missing key, classified errors, no-choices terminal,
   refusal → flagged).
 
 ```ts
@@ -277,6 +283,7 @@ reads:
 | HTTP 5xx | `RetryableProviderError` | `status` | retried with backoff |
 | Other HTTP 4xx | `TerminalProviderError` | `status` | terminal `failed`, never retried |
 | Content policy / refusal | `FlaggedProviderError` | `kind: "content-policy"` | terminal `flagged`, never re-queued |
+| prompt-gen `messages`, `tools` or `toolChoice` | `PromptGenUnavailableError` | `reason: "unsupported"` | promptGen falls back to the next provider |
 
 Content policy is detected two ways: an SDK error whose body carries a
 `content_policy` / `content_filter` / `moderation` marker, or (chat handlers) a successful

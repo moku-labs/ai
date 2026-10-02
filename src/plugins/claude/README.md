@@ -77,6 +77,9 @@ A bad `images`, `responseSchema` or `reasoning` throws a plain `Error` before an
 {
   text: "ok",
   costUsd: 0,
+  toolCalls: [],
+  finishReason: "stop",
+  usage: { promptTokens: 12, completionTokens: 3, cachedTokens: 0, cacheWriteTokens: 0 },
   meta: {
     provider: "claude",
     model: "claude-opus-5-5",
@@ -88,6 +91,12 @@ A bad `images`, `responseSchema` or `reasoning` throws a plain `Error` before an
   }
 }
 ```
+
+`usage` is typed. `promptTokens` is `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
+`completionTokens` is `output_tokens`. `cachedTokens` is `cache_read_input_tokens`. `cacheWriteTokens` is
+`cache_creation_input_tokens`. A count the CLI does not report is 0. `meta.usage` keeps its old keys.
+
+`toolCalls` is always `[]` and `finishReason` always `"stop"`. `cacheSystem` is ignored.
 
 ## API
 
@@ -104,6 +113,7 @@ stdout JSON is parsed first, even on a non-zero exit: the not-logged-in result e
 
 | Case | Error | promptGen |
 | --- | --- | --- |
+| `messages`, `tools` or `toolChoice` set (`estimate()` and `execute()`, before any spawn) | `PromptGenUnavailableError` `"unsupported"`, `[ai] Claude prompt-gen does not support messages or tools.` | falls back |
 | `bin` not found | `PromptGenUnavailableError` `"missing"`, `[ai] Claude CLI not found: <bin>.` | falls back |
 | Not logged in (`not logged in`, `/login`, `invalid api key`, status 401/403) | `PromptGenUnavailableError` `"auth"` | falls back |
 | Plan or rate limit (`usage limit`, `limit reached`, `hit your limit`, `rate limit`, status 429) | `PromptGenUnavailableError` `"limit"` | falls back |
