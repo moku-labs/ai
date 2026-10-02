@@ -3,9 +3,10 @@
  * OpenRouter router) with a private retry, and answer reading. Only a 5xx or
  * a request timeout is retried, three attempts at most; 401/403 and 402/429
  * throw `PromptGenUnavailableError` at once, so `promptGen` can fall back
- * without a paid wait.
+ * without a paid wait. The wire form of messages, tools and cache markers,
+ * and the reading of tool calls and usage, live in `conversation.ts`.
  */
-import type { PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import type { PromptGenRequest, PromptGenResult, ToolCall } from "../../promptGen/contract";
 import { PromptGenUnavailableError } from "../../promptGen/contract";
 import {
   falFetch,
@@ -23,6 +24,17 @@ import type { RequestLog } from "../log";
 import { withRequestLog } from "../log";
 import { resolvePrices } from "../prices";
 import type { FalContext, LocalFile } from "../types";
+import type { WireMessage, WirePart, WireTool, WireToolChoice } from "./conversation";
+import {
+  finishReasonOf,
+  imagePartsOf,
+  promptTextOf,
+  readToolCalls,
+  systemMessages,
+  toolFields,
+  turnMessages,
+  usageOf
+} from "./conversation";
 import { resolveModelId } from "./models";
 import type { LlmPrice } from "./prices";
 import { llmPriceOf } from "./prices";
@@ -79,33 +91,6 @@ export type ReasoningLevel = "off" | "low" | "medium" | "high";
 export type JsonSchema = Record<string, unknown>;
 
 /**
- * One part of a user message with images.
- *
- * @example
- * ```ts
- * const part: ChatPart = { type: "image_url", image_url: { url: "https://v3.fal.media/files/a.png" } };
- * ```
- */
-export type ChatPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
-
-/**
- * One chat message.
- *
- * @example
- * ```ts
- * const message: ChatMessage = { role: "system", content: "Answer in five words." };
- * ```
- */
-export type ChatMessage = {
-  /** Who speaks. */
-  role: "system" | "user";
-  /** Text, or text and image parts. */
-  content: string | ChatPart[];
-};
-
-/**
  * The structured-answer request.
  *
  * @example
@@ -121,7 +106,7 @@ export type ResponseFormat = {
 };
 
 /**
- * The posted chat completions body.
+ * The posted chat completions body, fields in wire order.
  *
  * @example
  * ```ts
@@ -131,8 +116,8 @@ export type ResponseFormat = {
 export type ChatBody = {
   /** OpenRouter model id. */
   model: string;
-  /** System message (when set), then the user message. */
-  messages: ChatMessage[];
+  /** System message (when set), then the user message or the turns. */
+  messages: WireMessage[];
   /** Output token cap. */
   max_tokens: number;
   /** Sampling temperature, 0..2; omitted when unset. */
@@ -141,6 +126,10 @@ export type ChatBody = {
   reasoning?: { effort: Exclude<ReasoningLevel, "off"> };
   /** Structured-answer request; omitted without a schema. */
   response_format?: ResponseFormat;
+  /** Tools the model may call; omitted without tools. */
+  tools?: WireTool[];
+  /** Whether and which tool the model must call; omitted when unset. */
+  tool_choice?: WireToolChoice;
 };
 
 /**
@@ -172,8 +161,10 @@ export type ChatPlan = {
 type ChatAnswer = {
   /** fal's generation id, when present. */
   id: string | undefined;
-  /** The answer text (`""` when cut by length before any content). */
+  /** The answer text (`""` when only tool calls, or cut by length before any content). */
   text: string;
+  /** The tool calls of the answer's message; `[]` when none. */
+  toolCalls: ToolCall[];
   /** `choices[0].finish_reason`. */
   finishReason: string | undefined;
   /** The upstream provider OpenRouter picked. */
@@ -199,6 +190,9 @@ const SCHEMA_NAME = "answer";
 
 /** `finish_reason` of an answer cut by `max_tokens`. */
 const CUT_BY_LENGTH = "length";
+
+/** `finish_reason`s whose answer may have no content: a tool-call turn, or cut by length. */
+const EMPTY_CONTENT_REASONS: ReadonlySet<string> = new Set(["tool_calls", CUT_BY_LENGTH]);
 
 /** Marker of a content-policy error in fal's text. */
 const CONTENT_POLICY = "content_policy";
@@ -335,6 +329,31 @@ function imagesOf(value: unknown): LocalFile[] {
 }
 
 /**
+ * The images to upload: `params.images` without messages; with messages,
+ * every image part in message order (one upload per part), and
+ * `params.images` is refused.
+ *
+ * @param request - The prompt-gen request.
+ * @returns Local files, in the order their URLs go into the body.
+ * @throws {TerminalProviderError} A 400 for `params.images` with messages, or an image that is not `{ path, mimeType, hash }`.
+ * @example
+ * ```ts
+ * requestImages({ prompt: "", messages: [{ role: "user", content: [{ type: "image", path: "a.png", mimeType: "image/png", hash: "h" }] }] }).length; // => 1
+ * ```
+ */
+function requestImages(request: PromptGenRequest): LocalFile[] {
+  const images = request.params?.images;
+  if (request.messages === undefined) return imagesOf(images);
+
+  if (images !== undefined) {
+    throw badRequest(
+      "[ai] fal prompt-gen takes no params.images with messages.\n  Put images in message content parts."
+    );
+  }
+  return imagesOf(imagePartsOf(request.messages));
+}
+
+/**
  * The output token cap: `params.max_tokens` when a positive integer.
  *
  * @param value - `params.max_tokens`, untrusted.
@@ -365,8 +384,10 @@ function temperatureField(temperature: number | undefined): { temperature?: numb
 }
 
 /**
- * The chat messages: the system message when set, then the prompt; with
- * images the user content is the text part followed by one part per image.
+ * The chat messages: the system message when set (one cached part with
+ * `cacheSystem`), then the turns when `messages` is set, else the prompt;
+ * with images the prompt's user content is the text part followed by one
+ * part per image.
  *
  * @param request - The prompt-gen request.
  * @param imageUrls - Uploaded image URLs, in order.
@@ -377,34 +398,58 @@ function temperatureField(temperature: number | undefined): { temperature?: numb
  * ```
  */
 export function chatMessages(
-  request: Pick<PromptGenRequest, "prompt" | "system">,
+  request: Pick<PromptGenRequest, "prompt" | "system" | "messages" | "cacheSystem">,
   imageUrls: readonly string[]
-): ChatMessage[] {
-  const system: ChatMessage[] =
-    request.system === undefined ? [] : [{ role: "system", content: request.system }];
+): WireMessage[] {
+  const system = systemMessages(request.system, request.cacheSystem === true);
+  if (request.messages !== undefined) {
+    return [...system, ...turnMessages(request.messages, imageUrls)];
+  }
   if (imageUrls.length === 0) return [...system, { role: "user", content: request.prompt }];
 
-  const images: ChatPart[] = imageUrls.map(url => ({ type: "image_url", image_url: { url } }));
-  const text: ChatPart = { type: "text", text: request.prompt };
+  const images: WirePart[] = imageUrls.map(url => ({ type: "image_url", image_url: { url } }));
+  const text: WirePart = { type: "text", text: request.prompt };
   return [...system, { role: "user", content: [text, ...images] }];
 }
 
 /**
- * Plans a chat request without I/O: prompt, model (default
- * `config.llmDefaultModel`), price, reasoning, schema, images, max tokens and
- * temperature. No other param is copied.
+ * Refuses a request with nothing to send: empty `messages`, or an empty
+ * prompt without messages (with messages the prompt is ignored).
+ *
+ * @param request - The prompt-gen request.
+ * @throws {TerminalProviderError} A 400 for empty messages or an empty prompt.
+ * @example
+ * ```ts
+ * assertHasInput({ prompt: "", messages: [{ role: "user", content: "hi" }] }); // passes: messages replace the prompt
+ * ```
+ */
+function assertHasInput(request: PromptGenRequest): void {
+  if (request.messages !== undefined) {
+    if (request.messages.length > 0) return;
+    throw badRequest(
+      "[ai] fal prompt-gen messages must not be empty.\n  Pass at least one user message."
+    );
+  }
+
+  const hasPrompt = typeof request.prompt === "string" && request.prompt.trim() !== "";
+  if (hasPrompt) return;
+  throw badRequest(
+    "[ai] fal prompt-gen needs a non-empty prompt.\n  Pass the text to generate from in request.prompt."
+  );
+}
+
+/**
+ * Plans a chat request without I/O: prompt or messages, model (default
+ * `config.llmDefaultModel`), price, reasoning, schema, images, max tokens,
+ * temperature, tools and tool choice. No other param is copied.
  *
  * @param ctx - Plugin context (config, price table).
  * @param request - The prompt-gen request.
  * @returns The plan, with the body before any image upload.
- * @throws {TerminalProviderError} A 400 for an empty prompt, a bad param, or a model without a price.
+ * @throws {TerminalProviderError} A 400 for an empty prompt or messages, a bad param or image, or a model without a price.
  */
 export function planChat(ctx: FalContext, request: PromptGenRequest): ChatPlan {
-  if (typeof request.prompt !== "string" || request.prompt.trim() === "") {
-    throw badRequest(
-      "[ai] fal prompt-gen needs a non-empty prompt.\n  Pass the text to generate from in request.prompt."
-    );
-  }
+  assertHasInput(request);
 
   // Model and price first: a model without a price never runs.
   const modelId = resolveModelId(request.model, ctx.config.llmDefaultModel);
@@ -414,14 +459,15 @@ export function planChat(ctx: FalContext, request: PromptGenRequest): ChatPlan {
   const { params } = request;
   const reasoning = reasoningOf(params?.reasoning);
   const maxTokens = maxTokensOf(params?.max_tokens);
-  const images = imagesOf(params?.images);
+  const images = requestImages(request);
   const body: ChatBody = {
     model: modelId,
     messages: chatMessages(request, []),
     max_tokens: maxTokens,
     ...temperatureField(request.temperature),
     ...(reasoning === "off" ? {} : { reasoning: { effort: reasoning } }),
-    ...responseFormatField(params)
+    ...responseFormatField(params),
+    ...toolFields(request)
   };
   return { modelId, price, maxTokens, reasoning, images, body };
 }
@@ -462,12 +508,13 @@ function answerFailure(text: string): Error {
 }
 
 /**
- * Reads a chat answer: the text of `choices[0].message.content`, `""` for a
- * null content cut by length.
+ * Reads a chat answer: the text of `choices[0].message.content` and its tool
+ * calls. A null or missing content is `""` when the answer has tool calls or
+ * ended by `tool_calls` or `length`.
  *
  * @param body - The parsed 2xx answer.
  * @returns The answer.
- * @throws {Error} Flagged or terminal for an error answer; a plain error for an incomplete one.
+ * @throws {Error} Flagged or terminal for an error answer; `ToolArgumentsError` for tool arguments that are not JSON; a plain error for an incomplete one.
  * @example
  * ```ts
  * readAnswer({ choices: [{ message: { content: "hi" }, finish_reason: "stop" }] }).text; // => "hi"
@@ -478,22 +525,27 @@ export function readAnswer(body: unknown): ChatAnswer {
   const error = errorTextOf(body);
   if (error !== undefined) throw answerFailure(error);
 
-  // The first choice carries the text; id, provider and usage come along for the result.
+  // The first choice carries the text and the tool calls; id, provider and usage come along.
   const choices = readField(body, "choices");
   const choice: unknown = Array.isArray(choices) ? choices[0] : undefined;
-  const content = readField(readField(choice, "message"), "content");
+  const message = readField(choice, "message");
+  const content = readField(message, "content");
   const finishReason = readString(choice, "finish_reason");
   const answer = {
     id: readString(body, "id"),
     finishReason,
     provider: readString(body, "provider"),
-    usage: readField(body, "usage")
+    usage: readField(body, "usage"),
+    toolCalls: readToolCalls(readField(message, "tool_calls"))
   };
 
-  // Text wins; an answer cut by length before any content is empty; anything else is incomplete.
+  // Text wins; no content is empty for a tool-call turn or a length cut; anything else is incomplete.
   if (typeof content === "string") return { ...answer, text: content };
-  const isCutEmpty = finishReason === CUT_BY_LENGTH && (content === null || content === undefined);
-  if (isCutEmpty) return { ...answer, text: "" };
+  const hasNoContent = content === null || content === undefined;
+  const mayBeEmpty =
+    answer.toolCalls.length > 0 ||
+    (finishReason !== undefined && EMPTY_CONTENT_REASONS.has(finishReason));
+  if (hasNoContent && mayBeEmpty) return { ...answer, text: "" };
   throw new Error(
     "[ai] fal returned an incomplete LLM result.\n  Expected choices[0].message.content in the response."
   );
@@ -599,8 +651,9 @@ async function postWithRetry(ctx: FalContext, send: ChatSend, attempt = 1): Prom
 }
 
 /**
- * The prompt-gen result: text, actual cost and metadata. A length-cut answer
- * is `partial` and logged `fal:llm:partial`; every answer logs `fal:llm:done`.
+ * The prompt-gen result: text, tool calls, finish reason, actual cost, typed
+ * usage and metadata. A length-cut answer is `partial` and logged
+ * `fal:llm:partial`; every answer logs `fal:llm:done`.
  *
  * @param ctx - Plugin context (log).
  * @param request - The prompt-gen request.
@@ -636,7 +689,14 @@ function chatResult(
     costSource: cost.source,
     partial
   };
-  return { text: answer.text, costUsd: cost.usd, meta };
+  return {
+    text: answer.text,
+    costUsd: cost.usd,
+    toolCalls: answer.toolCalls,
+    finishReason: finishReasonOf(answer.finishReason),
+    usage: usageOf(answer.usage),
+    meta
+  };
 }
 
 /**
@@ -661,14 +721,14 @@ export async function runChat(
   const apiKey = resolveApiKey(ctx);
   const call: FalCall = { apiKey, timeoutMs: ctx.config.timeoutMs, signal };
 
-  // Images go through the shared upload, then into the user message.
+  // Images go through the shared upload, then into the user message or their message parts.
   const imageUrls = await uploadFiles(ctx, plan.images, { apiKey, signal });
   const body: ChatBody = { ...plan.body, messages: chatMessages(request, imageUrls) };
   const entry = {
     task: "prompt-gen" as const,
     model: plan.modelId,
     endpoint: CHAT_PATH,
-    prompt: request.prompt,
+    prompt: promptTextOf(request),
     body,
     files: plan.images
   };

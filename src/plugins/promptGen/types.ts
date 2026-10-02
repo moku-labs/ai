@@ -17,6 +17,13 @@ export type {
   ToolCall,
   ToolDefinition
 } from "./contract";
+export type {
+  LoopEvent,
+  RunToolLoopOptions,
+  RunToolLoopResult,
+  ToolOutput,
+  ToolSpec
+} from "./loop/types";
 
 /**
  * promptGen plugin configuration.

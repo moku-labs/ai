@@ -1,11 +1,83 @@
 /**
  * @file openai prompt-gen handler — implements the prompt-gen task-owned contract.
  */
-import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import type {
+  PromptGenHandler,
+  PromptGenRequest,
+  PromptGenResult,
+  PromptGenUsage
+} from "../../promptGen/contract";
+import { PromptGenUnavailableError } from "../../promptGen/contract";
 import { redactedFailureOf, requestChatCompletion } from "../client";
 import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import { estimateChatCostUsd, estimateTokenCount, getPrices } from "../prices";
-import type { OpenaiChatMessage, OpenaiChatRequestBody, OpenaiContext } from "../types";
+import type {
+  OpenaiChatMessage,
+  OpenaiChatRequestBody,
+  OpenaiChatUsage,
+  OpenaiContext
+} from "../types";
+
+/** Message of the unsupported error; two lines, never the prompt. */
+const UNSUPPORTED_MESSAGE =
+  "[ai] OpenAI prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
+
+/**
+ * Whether a request asks for a conversation or tool calling, which this
+ * handler does not map. `cacheSystem` alone does not count: it is ignored.
+ *
+ * @param request - The prompt-gen request.
+ * @returns True when `messages`, `tools` or `toolChoice` is set.
+ * @example
+ * ```ts
+ * asksForTools({ prompt: "", messages: [] }); // => true
+ * asksForTools({ prompt: "p", cacheSystem: true }); // => false
+ * ```
+ */
+function asksForTools(request: PromptGenRequest): boolean {
+  return (
+    request.messages !== undefined ||
+    request.tools !== undefined ||
+    request.toolChoice !== undefined
+  );
+}
+
+/**
+ * Throws when the request asks for messages or tools, so promptGen falls
+ * back to the next provider. Runs before any other work.
+ *
+ * @param request - The prompt-gen request.
+ * @throws {PromptGenUnavailableError} With reason "unsupported".
+ * @example
+ * ```ts
+ * rejectToolRequest({ prompt: "p" }); // returns, nothing to reject
+ * ```
+ */
+function rejectToolRequest(request: PromptGenRequest): void {
+  if (asksForTools(request))
+    throw new PromptGenUnavailableError(UNSUPPORTED_MESSAGE, "unsupported");
+}
+
+/**
+ * The typed usage of a completion; counts the API did not send are 0.
+ * OpenAI caches prompts on its own, so cache writes are always 0.
+ *
+ * @param usage - The completion's `usage`, if reported.
+ * @returns The usage for `PromptGenResult.usage`.
+ * @example
+ * ```ts
+ * usageOf({ prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 1800 } });
+ * // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0 }
+ * ```
+ */
+function usageOf(usage: OpenaiChatUsage | undefined): PromptGenUsage {
+  return {
+    promptTokens: usage?.prompt_tokens ?? 0,
+    completionTokens: usage?.completion_tokens ?? 0,
+    cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0
+  };
+}
 
 /**
  * Resolves the chat model to use: the request's override, else the
@@ -68,7 +140,11 @@ function buildChatRequestBody(
  * heuristic (fast, dependency-free approximation for both the prompt and
  * the expected output) × chat prices; `execute` calls
  * `chat.completions.create` with the caller's system/prompt/temperature and
- * returns usage-based actual cost.
+ * returns usage-based actual cost, typed `usage`, no tool calls, and
+ * `finishReason` "length" for a cut answer, else "stop". Both throw
+ * `PromptGenUnavailableError` with reason "unsupported" for `messages`,
+ * `tools` or `toolChoice`, before any other work; `cacheSystem` alone is
+ * ignored.
  *
  * @param ctx - Plugin context (config + state + env + log).
  * @returns The prompt-gen handler for the "openai" provider.
@@ -84,12 +160,14 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
      *
      * @param request - The prompt-gen request to estimate.
      * @returns The estimated cost in US dollars.
+     * @throws {PromptGenUnavailableError} With reason "unsupported" for messages or tools.
      * @example
      * ```ts
      * handler.estimate({ prompt: "Describe a sunset over the ocean." });
      * ```
      */
     estimate(request: PromptGenRequest): { usd: number } {
+      rejectToolRequest(request);
       const model = resolveChatModel(ctx, request.model);
       const inputTokens =
         estimateTokenCount(request.prompt) + estimateTokenCount(request.system ?? "");
@@ -105,6 +183,7 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
      * @param opts - Execution options.
      * @param opts.signal - Optional abort signal to cancel the request.
      * @returns The generated result.
+     * @throws {PromptGenUnavailableError} With reason "unsupported" for messages or tools.
      * @throws {Error} When the API key is unset, the request fails, or the model declines.
      * @example
      * ```ts
@@ -115,6 +194,7 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> {
+      rejectToolRequest(request);
       const model = resolveChatModel(ctx, request.model);
       try {
         const completion = await requestChatCompletion(
@@ -122,7 +202,8 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
           buildChatRequestBody(model, buildMessages(request), request.temperature),
           opts.signal
         );
-        const message = completion.choices[0]?.message;
+        const choice = completion.choices[0];
+        const message = choice?.message;
         if (message === undefined) {
           throw new TerminalProviderError("[ai] OpenAI returned no completion choices.");
         }
@@ -144,6 +225,9 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
         return {
           text,
           costUsd,
+          toolCalls: [],
+          finishReason: choice?.finish_reason === "length" ? "length" : "stop",
+          usage: usageOf(usage),
           meta: {
             model,
             promptTokens: usage?.prompt_tokens,

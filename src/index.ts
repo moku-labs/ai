@@ -179,6 +179,7 @@ export {
   PromptGenUnavailableError,
   ToolArgumentsError
 } from "./plugins/promptGen/contract";
+export { runToolLoop } from "./plugins/promptGen/loop/run";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {

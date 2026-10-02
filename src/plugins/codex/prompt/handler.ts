@@ -10,6 +10,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import { PromptGenUnavailableError } from "../../promptGen/contract";
 import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
@@ -20,6 +21,46 @@ import { parseSchemaAnswer, schemaBlock } from "./answer";
 import { mapModel } from "./model";
 import type { PromptParameters } from "./params";
 import { readPromptParameters } from "./params";
+
+/** Message of the unsupported error; two lines, never the prompt. */
+const UNSUPPORTED_MESSAGE =
+  "[ai] Codex prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
+
+/**
+ * Whether a request asks for a conversation or tool calling, which
+ * `codex exec` cannot express. `cacheSystem` alone does not count: it is ignored.
+ *
+ * @param request - The prompt-gen request.
+ * @returns True when `messages`, `tools` or `toolChoice` is set.
+ * @example
+ * ```ts
+ * asksForTools({ prompt: "p", tools: [] }); // => true
+ * asksForTools({ prompt: "p", cacheSystem: true }); // => false
+ * ```
+ */
+function asksForTools(request: PromptGenRequest): boolean {
+  return (
+    request.messages !== undefined ||
+    request.tools !== undefined ||
+    request.toolChoice !== undefined
+  );
+}
+
+/**
+ * Throws when the request asks for messages or tools, so promptGen falls
+ * back to the next provider. Runs before any other work.
+ *
+ * @param request - The prompt-gen request.
+ * @throws {PromptGenUnavailableError} With reason "unsupported".
+ * @example
+ * ```ts
+ * rejectToolRequest({ prompt: "p" }); // returns, nothing to reject
+ * ```
+ */
+function rejectToolRequest(request: PromptGenRequest): void {
+  if (asksForTools(request))
+    throw new PromptGenUnavailableError(UNSUPPORTED_MESSAGE, "unsupported");
+}
 
 /** What one call runs: the full prompt, the codex model and the read params. */
 type PromptPlan = {
@@ -155,9 +196,12 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 /**
  * Creates the codex prompt-gen handler: `estimate()` validates the params
  * and returns $0; `execute()` runs `codex exec` read-only in a fresh temp
- * dir and returns the answer at $0 with meta. Never logs the prompt or the
- * answer. Both throw `Error` when `images`, `responseSchema` or `reasoning`
- * has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
+ * dir and returns the answer at $0 with meta, no tool calls,
+ * `finishReason: "stop"` and zero `usage` (the CLI reports none). Never logs
+ * the prompt or the answer. Both throw `PromptGenUnavailableError` with reason
+ * "unsupported" for `messages`, `tools` or `toolChoice`, before any other
+ * work; `cacheSystem` alone is ignored. Both throw `Error` when `images`,
+ * `responseSchema` or `reasoning` has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
  * the CLI is missing, not logged in, or out of plan or rate limit;
  * `TerminalProviderError` on a non-zero exit, no answer, or an answer that
  * does not match the schema; `RetryableProviderError` with kind "timeout" after
@@ -169,6 +213,7 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
   return {
     estimate: (request: PromptGenRequest): { usd: number } => {
+      rejectToolRequest(request);
       readPromptParameters(request, ctx.config.reasoningEffort);
       return { usd: 0 };
     },
@@ -177,7 +222,8 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
-      // Validate params and map the model
+      // Reject tool requests, validate params and map the model
+      rejectToolRequest(request);
       const params = readPromptParameters(request, ctx.config.reasoningEffort);
       const plan: PromptPlan = {
         prompt: promptTextOf(request, params.schema?.text),
@@ -193,7 +239,14 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
           model: plan.model ?? "default",
           chars: text.length
         });
-        return { text, costUsd: 0, meta: metaOf(request, plan) };
+        return {
+          text,
+          costUsd: 0,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
+          meta: metaOf(request, plan)
+        };
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
