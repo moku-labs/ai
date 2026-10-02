@@ -10,7 +10,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
-import { PromptGenUnavailableError } from "../../promptGen/contract";
+import { assertOneTurnRequest } from "../../promptGen/contract";
 import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
@@ -21,46 +21,6 @@ import { parseSchemaAnswer, schemaBlock } from "./answer";
 import { mapModel } from "./model";
 import type { PromptParameters } from "./params";
 import { readPromptParameters } from "./params";
-
-/** Message of the unsupported error; two lines, never the prompt. */
-const UNSUPPORTED_MESSAGE =
-  "[ai] Codex prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
-
-/**
- * Whether a request asks for a conversation or tool calling, which
- * `codex exec` cannot express. `cacheSystem` alone does not count: it is ignored.
- *
- * @param request - The prompt-gen request.
- * @returns True when `messages`, `tools` or `toolChoice` is set.
- * @example
- * ```ts
- * asksForTools({ prompt: "p", tools: [] }); // => true
- * asksForTools({ prompt: "p", cacheSystem: true }); // => false
- * ```
- */
-function asksForTools(request: PromptGenRequest): boolean {
-  return (
-    request.messages !== undefined ||
-    request.tools !== undefined ||
-    request.toolChoice !== undefined
-  );
-}
-
-/**
- * Throws when the request asks for messages or tools, so promptGen falls
- * back to the next provider. Runs before any other work.
- *
- * @param request - The prompt-gen request.
- * @throws {PromptGenUnavailableError} With reason "unsupported".
- * @example
- * ```ts
- * rejectToolRequest({ prompt: "p" }); // returns, nothing to reject
- * ```
- */
-function rejectToolRequest(request: PromptGenRequest): void {
-  if (asksForTools(request))
-    throw new PromptGenUnavailableError(UNSUPPORTED_MESSAGE, "unsupported");
-}
 
 /** What one call runs: the full prompt, the codex model and the read params. */
 type PromptPlan = {
@@ -213,7 +173,7 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
   return {
     estimate: (request: PromptGenRequest): { usd: number } => {
-      rejectToolRequest(request);
+      assertOneTurnRequest(request, "Codex");
       readPromptParameters(request, ctx.config.reasoningEffort);
       return { usd: 0 };
     },
@@ -223,7 +183,7 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
       // Reject tool requests, validate params and map the model
-      rejectToolRequest(request);
+      assertOneTurnRequest(request, "Codex");
       const params = readPromptParameters(request, ctx.config.reasoningEffort);
       const plan: PromptPlan = {
         prompt: promptTextOf(request, params.schema?.text),

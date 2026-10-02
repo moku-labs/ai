@@ -7,7 +7,7 @@ import type {
   PromptGenResult,
   PromptGenUsage
 } from "../../promptGen/contract";
-import { PromptGenUnavailableError } from "../../promptGen/contract";
+import { assertOneTurnRequest } from "../../promptGen/contract";
 import { redactedFailureOf, requestChatCompletion } from "../client";
 import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import { estimateChatCostUsd, estimateTokenCount, getPrices } from "../prices";
@@ -17,46 +17,6 @@ import type {
   OpenaiChatUsage,
   OpenaiContext
 } from "../types";
-
-/** Message of the unsupported error; two lines, never the prompt. */
-const UNSUPPORTED_MESSAGE =
-  "[ai] OpenAI prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
-
-/**
- * Whether a request asks for a conversation or tool calling, which this
- * handler does not map. `cacheSystem` alone does not count: it is ignored.
- *
- * @param request - The prompt-gen request.
- * @returns True when `messages`, `tools` or `toolChoice` is set.
- * @example
- * ```ts
- * asksForTools({ prompt: "", messages: [] }); // => true
- * asksForTools({ prompt: "p", cacheSystem: true }); // => false
- * ```
- */
-function asksForTools(request: PromptGenRequest): boolean {
-  return (
-    request.messages !== undefined ||
-    request.tools !== undefined ||
-    request.toolChoice !== undefined
-  );
-}
-
-/**
- * Throws when the request asks for messages or tools, so promptGen falls
- * back to the next provider. Runs before any other work.
- *
- * @param request - The prompt-gen request.
- * @throws {PromptGenUnavailableError} With reason "unsupported".
- * @example
- * ```ts
- * rejectToolRequest({ prompt: "p" }); // returns, nothing to reject
- * ```
- */
-function rejectToolRequest(request: PromptGenRequest): void {
-  if (asksForTools(request))
-    throw new PromptGenUnavailableError(UNSUPPORTED_MESSAGE, "unsupported");
-}
 
 /**
  * The typed usage of a completion; counts the API did not send are 0.
@@ -167,7 +127,7 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
      * ```
      */
     estimate(request: PromptGenRequest): { usd: number } {
-      rejectToolRequest(request);
+      assertOneTurnRequest(request, "OpenAI");
       const model = resolveChatModel(ctx, request.model);
       const inputTokens =
         estimateTokenCount(request.prompt) + estimateTokenCount(request.system ?? "");
@@ -194,7 +154,7 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> {
-      rejectToolRequest(request);
+      assertOneTurnRequest(request, "OpenAI");
       const model = resolveChatModel(ctx, request.model);
       try {
         const completion = await requestChatCompletion(

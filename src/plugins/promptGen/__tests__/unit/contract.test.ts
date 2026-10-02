@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertOneTurnRequest,
   isPromptGenUnavailable,
   PromptGenUnavailableError,
   ToolArgumentsError
@@ -99,5 +100,31 @@ describe("ToolArgumentsError", () => {
 
   it("is not a provider-unavailable error, so promptGen rethrows it at once", () => {
     expect(isPromptGenUnavailable(new ToolArgumentsError("search", "{"))).toBe(false);
+  });
+});
+
+describe("assertOneTurnRequest", () => {
+  it.each([
+    ["messages", { prompt: "", messages: [] }],
+    ["tools", { prompt: "p", tools: [] }],
+    ["toolChoice", { prompt: "p", toolChoice: "auto" as const }]
+  ])("throws unsupported for %s", (_field, request) => {
+    let caught: unknown;
+    try {
+      assertOneTurnRequest(request, "Claude");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PromptGenUnavailableError);
+    expect(caught).toMatchObject({
+      reason: "unsupported",
+      message:
+        "[ai] Claude prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling."
+    });
+  });
+
+  it("lets a one-turn request through, cacheSystem included", () => {
+    expect(() => assertOneTurnRequest({ prompt: "p", cacheSystem: true }, "Codex")).not.toThrow();
   });
 });

@@ -348,19 +348,19 @@ export function turnMessages(
  */
 export function toolFields(request: Pick<PromptGenRequest, "tools" | "toolChoice">): ToolFields {
   const { tools, toolChoice } = request;
-  const toolsField: ToolFields =
-    tools === undefined || tools.length === 0
-      ? {}
-      : {
-          tools: tools.map(tool => ({
-            type: "function",
-            function: {
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.inputSchema
-            }
-          }))
-        };
+  const hasTools = tools !== undefined && tools.length > 0;
+  const toolsField: ToolFields = hasTools
+    ? {
+        tools: tools.map(tool => ({
+          type: "function",
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema
+          }
+        }))
+      }
+    : {};
   if (toolChoice === undefined) return toolsField;
 
   const choice: WireToolChoice =

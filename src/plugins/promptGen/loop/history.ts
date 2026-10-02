@@ -14,7 +14,14 @@ const SUMMARY_LENGTH = 200;
 /** A tool message: the answer to one tool call. */
 type ToolMessage = Extract<ChatMessage, { role: "tool" }>;
 
-/** A model turn without text: the contract's `content: null` and `finalText: null`. */
+/**
+ * A model turn without text: the contract's `content: null` and `finalText: null`.
+ *
+ * @example
+ * ```ts
+ * textOrNull("") === NO_TEXT; // => true
+ * ```
+ */
 // eslint-disable-next-line unicorn/no-null -- ChatMessage.content and RunToolLoopResult.finalText are `string | null` in the contract
 export const NO_TEXT = null;
 

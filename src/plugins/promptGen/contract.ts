@@ -343,3 +343,32 @@ export function isPromptGenUnavailable(error: unknown): boolean {
     "status" in error && typeof error.status === "number" && UNAVAILABLE_STATUSES.has(error.status)
   );
 }
+
+/**
+ * Throws when a request asks for a conversation or tool calling
+ * (`messages`, `tools` or `toolChoice`), for a provider that maps only one
+ * turn. The error is "unsupported", so `promptGen` falls back to the next
+ * provider. `cacheSystem` alone does not count: such a provider ignores it.
+ *
+ * @param request - The prompt-gen request.
+ * @param providerLabel - The provider name for the message, e.g. `"Claude"`.
+ * @throws {PromptGenUnavailableError} With reason "unsupported".
+ * @example
+ * ```ts
+ * assertOneTurnRequest({ prompt: "p", cacheSystem: true }, "Codex"); // returns
+ * assertOneTurnRequest({ prompt: "", messages: [] }, "Claude");
+ * // throws "[ai] Claude prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling."
+ * ```
+ */
+export function assertOneTurnRequest(request: PromptGenRequest, providerLabel: string): void {
+  const asksForTools =
+    request.messages !== undefined ||
+    request.tools !== undefined ||
+    request.toolChoice !== undefined;
+  if (!asksForTools) return;
+
+  throw new PromptGenUnavailableError(
+    `[ai] ${providerLabel} prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.`,
+    "unsupported"
+  );
+}

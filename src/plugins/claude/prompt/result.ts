@@ -11,7 +11,14 @@ import { PromptGenUnavailableError } from "../../promptGen/contract";
 import type { ClaudeRun } from "../cli";
 import { TerminalProviderError } from "../errors";
 
-/** The answer of a successful run, with the CLI's own accounting. */
+/**
+ * The answer of a successful run, with the CLI's own accounting.
+ *
+ * @example
+ * ```ts
+ * const answer: ClaudeAnswer = { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120 };
+ * ```
+ */
 export type ClaudeAnswer = {
   /** The answer text (`result`). */
   text: string;

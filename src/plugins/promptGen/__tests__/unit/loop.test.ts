@@ -3,7 +3,7 @@
  * journal that records step keys and replays stored values.
  */
 /* eslint-disable unicorn/no-null -- ChatMessage.content, LoopEvent.text and finalText are `string | null` in the contract */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import type { ChatMessage, PromptGenRequest, PromptGenResult, ToolCall } from "../../contract";
 import { runToolLoop } from "../../loop/run";
@@ -1224,5 +1224,20 @@ describe("runToolLoop — events", () => {
     const tools: RunToolLoopOptions["tools"] = [readFrame(), askTool];
 
     expect(tools.map(tool => tool.name)).toEqual(["read_frame", "ask"]);
+  });
+
+  it("types a tool's run input from its schema", () => {
+    const shot = z.object({ shot: z.number() });
+    const tool: ToolSpec<z.infer<typeof shot>, string> = {
+      name: "read_frame",
+      description: "Reads one frame.",
+      schema: shot,
+      run: async input => ({ value: `frame ${input.shot}`, content: [], costUsd: 0 })
+    };
+
+    expectTypeOf(tool.run).parameter(0).toEqualTypeOf<{ shot: number }>();
+    // @ts-expect-error a schema of another input type does not fit
+    const wrong: ToolSpec<{ shot: string }> = { ...tool, schema: shot };
+    expect(wrong.name).toBe("read_frame");
   });
 });
