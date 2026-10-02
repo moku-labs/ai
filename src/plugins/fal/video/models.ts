@@ -25,6 +25,7 @@ export type FalAlias =
   | "minimax-h3-max-extend"
   | "kling-3-pro"
   | "kling-o3-ref"
+  | "kling-o3-v2v-ref"
   | "seedance-2.0-mini"
   | "seedance-2.0-mini-ref"
   | "seedance-2.0-ref"
@@ -226,6 +227,28 @@ export type KlingReferenceBody = {
 };
 
 /**
+ * Request body of `fal-ai/kling-video/o3/pro/video-to-video/reference`: the
+ * motion reference video as `video_url` (`@Video1` in the prompt), the first
+ * frame leading `image_urls` (`@Image1`). No `video_url` without a video ref
+ * (fal then answers 422: the field is required).
+ *
+ * @example
+ * ```ts
+ * const body: KlingVideoReferenceBody = {
+ *   prompt: "@Image1 moves like @Video1", video_url: "v", image_urls: ["u"], duration: "5", aspect_ratio: "9:16", keep_audio: false
+ * };
+ * ```
+ */
+export type KlingVideoReferenceBody = {
+  prompt: string;
+  video_url?: string;
+  image_urls: string[];
+  duration: string;
+  aspect_ratio: string;
+  keep_audio: boolean;
+};
+
+/**
  * Request body of `bytedance/seedance-2.0/image-to-video` and its Mini variant:
  * like Seedance 2.5 plus `aspect_ratio`.
  *
@@ -248,7 +271,8 @@ export type Seedance20ImageBody = {
 
 /**
  * Request body of `alibaba/wan-3.0/reference-to-video`: no first-frame field,
- * so the first frame leads `reference_image_urls`.
+ * so the first frame leads `reference_image_urls` (`Image 1` in the prompt);
+ * video refs are `Video 1`, `Video 2`… in `reference_video_urls`.
  *
  * @example
  * ```ts
@@ -261,6 +285,7 @@ export type WanReferenceBody = {
   prompt: string;
   reference_image_urls: string[];
   reference_audio_urls?: string[];
+  reference_video_urls?: string[];
   duration: number;
   resolution: string;
   aspect_ratio: string;
@@ -381,6 +406,7 @@ export type FalBody =
   | MinimaxMaxExtendBody
   | KlingImageBody
   | KlingReferenceBody
+  | KlingVideoReferenceBody
   | Seedance20ImageBody
   | WanReferenceBody
   | VeoImageBody
@@ -509,6 +535,13 @@ const VIDU_RESOLUTION = "720p";
 
 /** Gemini Omni Flash default resolution (fal's own default). */
 const GEMINI_OMNI_RESOLUTION = "720p";
+
+/**
+ * Kling O3 video-to-video reference: the reference video's own sound stays
+ * out of the clip (fal's default `true` would keep it). Kling's API docs say a
+ * feature reference video gives no native audio. `params.keep_audio` overrides.
+ */
+const KLING_V2V_KEEP_AUDIO = false;
 
 /** Aspect ratio used when the request names none. */
 const DEFAULT_ASPECT = "9:16";
@@ -654,7 +687,9 @@ function klingImageBody(input: BodyInput): KlingImageBody {
 }
 
 /**
- * Kling O3 pro reference-to-video body: refs go to `image_urls`.
+ * Kling O3 pro reference-to-video body: refs go to `image_urls`. `elements`
+ * (one may carry a `video_url`), `end_image_url`, `multi_prompt` and
+ * `shot_type` are not built here: set them with `request.params`.
  *
  * @param input - Resolved body input.
  * @returns The request body.
@@ -668,6 +703,27 @@ function klingReferenceBody(input: BodyInput): KlingReferenceBody {
     aspect_ratio: input.aspect,
     generate_audio: input.audio
   };
+}
+
+/**
+ * Kling O3 pro video-to-video reference body: the one video ref goes out as
+ * `video_url`, the first frame leads `image_urls`, string duration,
+ * `keep_audio` off.
+ *
+ * @param input - Resolved body input.
+ * @returns The request body.
+ */
+function klingVideoReferenceBody(input: BodyInput): KlingVideoReferenceBody {
+  const body: KlingVideoReferenceBody = {
+    prompt: input.prompt,
+    image_urls: [input.imageUrl, ...input.refUrls],
+    duration: String(input.seconds),
+    aspect_ratio: input.aspect,
+    keep_audio: KLING_V2V_KEEP_AUDIO
+  };
+  const [videoUrl] = input.videoRefUrls;
+  if (videoUrl !== undefined) body.video_url = videoUrl;
+  return body;
 }
 
 /**
@@ -692,7 +748,8 @@ function seedance20ImageBody(input: BodyInput): Seedance20ImageBody {
 
 /**
  * Wan 3.0 reference-to-video body: the first frame leads `reference_image_urls`,
- * integer duration, `reference_audio_urls` only when there are audio refs.
+ * integer duration, `reference_audio_urls` and `reference_video_urls` only
+ * when there are audio refs and video refs.
  *
  * @param input - Resolved body input.
  * @returns The request body.
@@ -707,6 +764,7 @@ function wanReferenceBody(input: BodyInput): WanReferenceBody {
     audio: input.audio
   };
   if (input.audioRefUrls.length > 0) body.reference_audio_urls = input.audioRefUrls;
+  if (input.videoRefUrls.length > 0) body.reference_video_urls = input.videoRefUrls;
   return body;
 }
 
@@ -812,6 +870,12 @@ function geminiOmniReferenceBody(input: BodyInput): GeminiOmniReferenceBody {
  * 2026-09-26: H3 as H3 Max; Gemini takes 3 clips of at most 3 s each. End
  * frames follow the fal schemas of 2026-09-29: `end_image_url` on the seven
  * image-to-video rows with `endFrame: true`; Veo 3.1 Fast has none.
+ * Wan 3.0 ref and both Kling O3 rows follow three sources of 2026-10-02, the
+ * strictest value winning: the fal OpenAPI schema and llms.txt, the vendor
+ * docs (Alibaba Model Studio "Wan3.0 Video Generation API Reference", Kling
+ * AI API "Omni Video Generation"), and fal 422 texts (none published for
+ * these limits). Limits without a catalog field (seconds, fps, prompt length)
+ * are in the fal README; fal enforces them with a 422.
  *
  * @example
  * ```ts
@@ -910,11 +974,27 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     endpoint: "fal-ai/kling-video/o3/pro/reference-to-video",
     audio: true,
     endFrame: false,
+    // fal: image_urls + elements ≤ 4 "when using video"; Kling: ≤ 7 without a video. Strictest: 4.
     maxRefs: 4,
     maxAudioRefs: 0,
+    // No top-level video field; one element may carry video_url (via params).
     maxVideoRefs: 0,
     maxVideoRefSec: 0,
     body: klingReferenceBody
+  },
+  "kling-o3-v2v-ref": {
+    endpoint: "fal-ai/kling-video/o3/pro/video-to-video/reference",
+    // No native audio: a feature reference video takes audio "off" (Kling docs); keep_audio is off.
+    audio: false,
+    endFrame: false,
+    // image_urls + elements ≤ 4 with a video (fal and Kling); the first frame takes @Image1.
+    maxRefs: 3,
+    maxAudioRefs: 0,
+    // One video_url (fal); "Maximum 1 reference video" (Kling).
+    maxVideoRefs: 1,
+    // fal 3-15 s, Kling 3-15.5 s. Strictest: 15.
+    maxVideoRefSec: 15,
+    body: klingVideoReferenceBody
   },
   "seedance-2.0-mini": {
     endpoint: "bytedance/seedance-2.0/mini/image-to-video",
@@ -954,10 +1034,14 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     resolution: WAN_RESOLUTION,
     audio: true,
     endFrame: false,
+    // 10 reference images (fal maxItems, Alibaba); the first frame takes Image 1.
     maxRefs: 9,
+    // 5 clips, 15 s combined, 1-15 s each (fal, Alibaba).
     maxAudioRefs: 5,
-    maxVideoRefs: 0,
-    maxVideoRefSec: 0,
+    // 5 clips (fal maxItems, Alibaba).
+    maxVideoRefs: 5,
+    // 15 s combined, 1-15 s each, ≥ 16 fps (fal, Alibaba); input video + output ≤ 30 s (Alibaba).
+    maxVideoRefSec: 15,
     body: wanReferenceBody
   },
   "veo-3.1-fast": {
@@ -1024,7 +1108,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @example
  * ```ts
  * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-max-i2v", "minimax-h3-ref", "minimax-h3-max-extend", "kling-3-pro", "kling-o3-ref",
- * //   "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
+ * //   "kling-o3-v2v-ref", "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
  * ```
  */
 export function falAliases(): string[] {
