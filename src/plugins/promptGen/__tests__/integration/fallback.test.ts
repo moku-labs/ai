@@ -7,6 +7,7 @@ import { registryPlugin } from "../../../registry";
 import { PromptGenUnavailableError } from "../../contract";
 import { promptGenPlugin } from "../../index";
 import type { Config, PromptGenHandler, PromptGenRequest } from "../../types";
+import { stopTurn } from "../unit/fixtures";
 
 // ---------------------------------------------------------------------------
 // Integration test (0.7.0): the fallback chain and the lane gate through the
@@ -33,7 +34,7 @@ function createSlowHandler(name: string, gauge: Gauge, delayMs = 30): PromptGenH
       gauge.peak = Math.max(gauge.peak, gauge.active);
       await new Promise(resolve => setTimeout(resolve, delayMs));
       gauge.active -= 1;
-      return { text: `${name}:${request.prompt}`, costUsd: 0 };
+      return { text: `${name}:${request.prompt}`, costUsd: 0, ...stopTurn() };
     }
   };
 }
@@ -130,7 +131,12 @@ describe("promptGen integration: fallback and lanes", () => {
 
     const result = await app.promptGen.generate({ prompt: "ok?" });
 
-    expect(result).toEqual({ text: "codex:ok?", costUsd: 0, meta: { provider: "codex" } });
+    expect(result).toEqual({
+      text: "codex:ok?",
+      costUsd: 0,
+      ...stopTurn(),
+      meta: { provider: "codex" }
+    });
     expect(claudeGauge.calls).toBe(1);
     const switches = app.log.trace().filter(entry => entry.event === "prompt-gen:fallback");
     expect(switches).toHaveLength(1);

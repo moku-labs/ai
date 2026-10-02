@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isPromptGenUnavailable, PromptGenUnavailableError } from "../../contract";
+import {
+  isPromptGenUnavailable,
+  PromptGenUnavailableError,
+  ToolArgumentsError
+} from "../../contract";
 
 // ---------------------------------------------------------------------------
 // Unit test: the "provider unavailable" contract (0.7.0)
@@ -26,7 +30,8 @@ describe("isPromptGenUnavailable", () => {
   it.each([
     "missing",
     "auth",
-    "limit"
+    "limit",
+    "unsupported"
   ] as const)("is true for a PromptGenUnavailableError (%s)", reason => {
     expect(isPromptGenUnavailable(new PromptGenUnavailableError("[ai] x.\n  y.", reason))).toBe(
       true
@@ -54,5 +59,45 @@ describe("isPromptGenUnavailable", () => {
     ["a number", 429]
   ])("is false for %s", (_label, error) => {
     expect(isPromptGenUnavailable(error)).toBe(false);
+  });
+});
+
+describe("PromptGenUnavailableError: unsupported", () => {
+  it("carries the unsupported reason for a request the provider cannot express", () => {
+    const error = new PromptGenUnavailableError(
+      "[ai] Claude CLI cannot take messages or tools.\n  Use the fal provider for tool calling.",
+      "unsupported"
+    );
+
+    expect(error.reason).toBe("unsupported");
+    expect(isPromptGenUnavailable(error)).toBe(true);
+  });
+});
+
+describe("ToolArgumentsError", () => {
+  it("is an Error named ToolArgumentsError that carries the tool name and the raw arguments", () => {
+    const error = new ToolArgumentsError("read_frame", "{not json");
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("ToolArgumentsError");
+    expect(error.toolName).toBe("read_frame");
+    expect(error.raw).toBe("{not json");
+    expect(error.message).toBe(
+      '[ai] Tool call "read_frame" has arguments that are not JSON.\n  The model sent: {not json.'
+    );
+  });
+
+  it("quotes only the first 200 characters of the raw arguments in the message", () => {
+    const raw = `${"a".repeat(200)}TAIL`;
+    const error = new ToolArgumentsError("search", raw);
+
+    expect(error.raw).toBe(raw);
+    expect(error.message).toBe(
+      `[ai] Tool call "search" has arguments that are not JSON.\n  The model sent: ${"a".repeat(200)}.`
+    );
+  });
+
+  it("is not a provider-unavailable error, so promptGen rethrows it at once", () => {
+    expect(isPromptGenUnavailable(new ToolArgumentsError("search", "{"))).toBe(false);
   });
 });

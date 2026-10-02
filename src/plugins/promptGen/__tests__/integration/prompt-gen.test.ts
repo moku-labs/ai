@@ -6,6 +6,7 @@ import { coreConfig, createCore } from "../../../../config";
 import { registryPlugin } from "../../../registry";
 import { promptGenPlugin } from "../../index";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../types";
+import { stopTurn } from "../unit/fixtures";
 
 // ---------------------------------------------------------------------------
 // Integration test: promptGen plugin through the real createApp lifecycle —
@@ -20,6 +21,7 @@ function createFakeHandler(name: string): PromptGenHandler {
     execute: async (request: PromptGenRequest): Promise<PromptGenResult> => ({
       text: `${name}:${request.prompt}`,
       costUsd: request.prompt.length / 1000,
+      ...stopTurn(),
       meta: { provider: name }
     })
   };
@@ -68,6 +70,7 @@ describe("promptGen integration", () => {
     expect(result).toEqual({
       text: "openai:hello",
       costUsd: "hello".length / 1000,
+      ...stopTurn(),
       meta: { provider: "openai" }
     });
 

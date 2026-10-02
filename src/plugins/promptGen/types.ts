@@ -7,7 +7,16 @@ import type { LimitsApi } from "../limits/types";
 import type { RegistryApi, registryPlugin } from "../registry";
 import type { PromptGenRequest, PromptGenResult } from "./contract";
 
-export type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "./contract";
+export type {
+  ChatMessage,
+  ContentPart,
+  PromptGenHandler,
+  PromptGenRequest,
+  PromptGenResult,
+  PromptGenUsage,
+  ToolCall,
+  ToolDefinition
+} from "./contract";
 
 /**
  * promptGen plugin configuration.

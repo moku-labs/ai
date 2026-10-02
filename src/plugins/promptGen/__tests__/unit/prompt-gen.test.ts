@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { createPromptGenApi } from "../../api";
 import type { PromptGenApi, PromptGenRequest, PromptGenResult } from "../../types";
-import { createEchoHandler, createFakeRegistry, createMockCtx } from "./fixtures";
+import { createEchoHandler, createFakeRegistry, createMockCtx, stopTurn } from "./fixtures";
 
 // ---------------------------------------------------------------------------
 // Unit test: createPromptGenApi (mock context, no kernel)
@@ -127,7 +127,7 @@ describe("createPromptGenApi", () => {
         estimate: () => ({ usd: 0.01 }),
         execute: async () => {
           executed = true;
-          return { text: "should not run", costUsd: 0 };
+          return { text: "should not run", costUsd: 0, ...stopTurn() };
         }
       });
       const api = createPromptGenApi(createMockCtx(registry));
@@ -144,7 +144,8 @@ describe("createPromptGenApi", () => {
         estimate: () => ({ usd: 0.02 }),
         execute: async (request: PromptGenRequest) => ({
           text: `anthropic:${request.prompt}`,
-          costUsd: 0.02
+          costUsd: 0.02,
+          ...stopTurn()
         })
       });
       const api = createPromptGenApi(createMockCtx(registry));
