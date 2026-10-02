@@ -59,6 +59,8 @@ export const videoPrices: Readonly<Record<string, number>> = {
   "kling-3-pro+audio": 0.168,
   "kling-o3-ref": 0.112,
   "kling-o3-ref+audio": 0.14,
+  // fal llms.txt (2026-10-02): $0.168 per generated second, one rate (no audio flag)
+  "kling-o3-v2v-ref": 0.168,
   "seedance-2.0-mini@480p": 0.0721,
   "seedance-2.0-mini@720p": 0.1547,
   "seedance-2.0-mini-ref@480p": 0.0721,
