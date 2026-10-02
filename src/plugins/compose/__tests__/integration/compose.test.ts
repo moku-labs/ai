@@ -25,7 +25,13 @@ const CANNED_YAML =
 function createCannedHandler(): PromptGenHandler {
   return {
     estimate: (request: PromptGenRequest) => ({ usd: request.prompt.length / 10_000 }),
-    execute: async (): Promise<PromptGenResult> => ({ text: CANNED_YAML, costUsd: 0.001 })
+    execute: async (): Promise<PromptGenResult> => ({
+      text: CANNED_YAML,
+      costUsd: 0.001,
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+    })
   };
 }
 

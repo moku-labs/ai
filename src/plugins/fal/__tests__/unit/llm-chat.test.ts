@@ -172,6 +172,52 @@ describe("planChat", () => {
   });
 });
 
+describe("old one-turn body (byte identity with 0.11.0)", () => {
+  it("posts system + prompt + temperature + responseSchema byte for byte as before", async () => {
+    const fetchMock = stubFetch(answer("ok"));
+
+    await createPromptGenHandler(createTestCtx()).execute(
+      {
+        prompt: "Describe the shot.",
+        system: "You are a director.",
+        temperature: 0.7,
+        params: {
+          responseSchema: {
+            type: "object",
+            properties: { line: { type: "string" } },
+            required: ["line"]
+          },
+          strictSchema: true
+        }
+      },
+      {}
+    );
+
+    const [post] = callsOf(fetchMock);
+    expect(String(post?.body)).toBe(
+      '{"model":"anthropic/claude-opus-5.5","messages":[{"role":"system","content":"You are a director."},{"role":"user","content":"Describe the shot."}],"max_tokens":32000,"temperature":0.7,"reasoning":{"effort":"medium"},"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"line":{"type":"string"}},"required":["line"]},"strict":true}}}'
+    );
+  });
+
+  it("posts a prompt with params.images byte for byte as before", async () => {
+    const fetchMock = stubStorageFetch(answer("a still"));
+
+    await createPromptGenHandler(createTestCtx()).execute(
+      {
+        prompt: "describe",
+        system: "s",
+        params: { images: [still], reasoning: "high", max_tokens: 500 }
+      },
+      {}
+    );
+
+    const post = callsOf(fetchMock).find(call => call.url === CHAT_URL);
+    expect(String(post?.body)).toBe(
+      '{"model":"anthropic/claude-opus-5.5","messages":[{"role":"system","content":"s"},{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://cdn.fal.test/file/dddddddddddddddd.png"}}]}],"max_tokens":500,"reasoning":{"effort":"high"}}'
+    );
+  });
+});
+
 describe("execute", () => {
   it("POSTs to <runUrl>/<chat path> with the key and returns text, cost and meta", async () => {
     const fetchMock = stubFetch(answer("hello"));
@@ -187,6 +233,9 @@ describe("execute", () => {
     expect(result).toEqual({
       text: "hello",
       costUsd: 0.0002,
+      toolCalls: [],
+      finishReason: "stop",
+      usage: { promptTokens: 10, completionTokens: 5, cachedTokens: 0, cacheWriteTokens: 0 },
       meta: {
         modelId: OPUS,
         reasoning: "medium",

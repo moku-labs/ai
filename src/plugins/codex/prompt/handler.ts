@@ -10,6 +10,7 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import { assertOneTurnRequest } from "../../promptGen/contract";
 import { buildCodexPromptArguments, LAST_MESSAGE_FILE, runCodex } from "../cli";
 import { TerminalProviderError } from "../errors";
 import { copyReferences } from "../image/files";
@@ -155,9 +156,12 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 /**
  * Creates the codex prompt-gen handler: `estimate()` validates the params
  * and returns $0; `execute()` runs `codex exec` read-only in a fresh temp
- * dir and returns the answer at $0 with meta. Never logs the prompt or the
- * answer. Both throw `Error` when `images`, `responseSchema` or `reasoning`
- * has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
+ * dir and returns the answer at $0 with meta, no tool calls,
+ * `finishReason: "stop"` and zero `usage` (the CLI reports none). Never logs
+ * the prompt or the answer. Both throw `PromptGenUnavailableError` with reason
+ * "unsupported" for `messages`, `tools` or `toolChoice`, before any other
+ * work; `cacheSystem` alone is ignored. Both throw `Error` when `images`,
+ * `responseSchema` or `reasoning` has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
  * the CLI is missing, not logged in, or out of plan or rate limit;
  * `TerminalProviderError` on a non-zero exit, no answer, or an answer that
  * does not match the schema; `RetryableProviderError` with kind "timeout" after
@@ -169,6 +173,7 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
 export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
   return {
     estimate: (request: PromptGenRequest): { usd: number } => {
+      assertOneTurnRequest(request, "Codex");
       readPromptParameters(request, ctx.config.reasoningEffort);
       return { usd: 0 };
     },
@@ -177,7 +182,8 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
-      // Validate params and map the model
+      // Reject tool requests, validate params and map the model
+      assertOneTurnRequest(request, "Codex");
       const params = readPromptParameters(request, ctx.config.reasoningEffort);
       const plan: PromptPlan = {
         prompt: promptTextOf(request, params.schema?.text),
@@ -193,7 +199,14 @@ export function createPromptGenHandler(ctx: CodexContext): PromptGenHandler {
           model: plan.model ?? "default",
           chars: text.length
         });
-        return { text, costUsd: 0, meta: metaOf(request, plan) };
+        return {
+          text,
+          costUsd: 0,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
+          meta: metaOf(request, plan)
+        };
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

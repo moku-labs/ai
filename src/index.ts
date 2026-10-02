@@ -174,7 +174,12 @@ export {
 // ─── Helpers ──────────────────────────────────────────────────
 export { defineBuild } from "./plugins/buildfile";
 export { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "./plugins/asset/contract";
-export { isPromptGenUnavailable, PromptGenUnavailableError } from "./plugins/promptGen/contract";
+export {
+  isPromptGenUnavailable,
+  PromptGenUnavailableError,
+  ToolArgumentsError
+} from "./plugins/promptGen/contract";
+export { runToolLoop } from "./plugins/promptGen/loop/run";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {

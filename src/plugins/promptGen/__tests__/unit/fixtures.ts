@@ -5,7 +5,27 @@
 import type { LogApi } from "@moku-labs/common";
 import { vi } from "vitest";
 import type { LimitsApi } from "../../../limits/types";
-import type { Config, PromptGenContext, PromptGenHandler, PromptGenRequest } from "../../types";
+import type {
+  Config,
+  PromptGenContext,
+  PromptGenHandler,
+  PromptGenRequest,
+  PromptGenResult
+} from "../../types";
+
+/**
+ * The result fields of a plain text turn: no tool calls, stopped, zero usage.
+ * Fresh objects per call, so a test can never mutate another test's fields.
+ *
+ * @returns `toolCalls: []`, `finishReason: "stop"` and an all-zero `usage`.
+ */
+export function stopTurn(): Pick<PromptGenResult, "toolCalls" | "finishReason" | "usage"> {
+  return {
+    toolCalls: [],
+    finishReason: "stop",
+    usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+  };
+}
 
 /**
  * In-memory registry double matching the real registry plugin's shape.
@@ -46,7 +66,8 @@ export function createEchoHandler(name: string): PromptGenHandler {
     estimate: (request: PromptGenRequest) => ({ usd: request.prompt.length / 1000 }),
     execute: async (request: PromptGenRequest) => ({
       text: `${name}:${request.prompt}`,
-      costUsd: request.prompt.length / 1000
+      costUsd: request.prompt.length / 1000,
+      ...stopTurn()
     })
   };
 }

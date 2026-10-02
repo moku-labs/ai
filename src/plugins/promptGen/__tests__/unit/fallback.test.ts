@@ -6,7 +6,8 @@ import {
   createFailingHandler,
   createFakeLog,
   createFakeRegistry,
-  createMockCtx
+  createMockCtx,
+  stopTurn
 } from "./fixtures";
 
 // ---------------------------------------------------------------------------
@@ -269,6 +270,7 @@ describe("generate: fallback chain", () => {
       execute: async () => ({
         text: "ok",
         costUsd: 0.001,
+        ...stopTurn(),
         meta: { model: "gpt-4o-mini", provider: "stale" }
       })
     });
@@ -279,6 +281,7 @@ describe("generate: fallback chain", () => {
     expect(result).toEqual({
       text: "ok",
       costUsd: 0.001,
+      ...stopTurn(),
       meta: { model: "gpt-4o-mini", provider: "openai" }
     });
   });
@@ -299,11 +302,11 @@ describe("estimate: resolves like generate, never falls back", () => {
     const registry = createFakeRegistry();
     registry.register("prompt-gen", "claude", {
       estimate: () => ({ usd: 0 }),
-      execute: async () => ({ text: "", costUsd: 0 })
+      execute: async () => ({ text: "", costUsd: 0, ...stopTurn() })
     });
     registry.register("prompt-gen", "codex", {
       estimate: () => ({ usd: 9 }),
-      execute: async () => ({ text: "", costUsd: 0 })
+      execute: async () => ({ text: "", costUsd: 0, ...stopTurn() })
     });
     const api = createPromptGenApi(
       createMockCtx(registry, {
@@ -320,7 +323,7 @@ describe("estimate: resolves like generate, never falls back", () => {
       estimate: () => {
         throw unavailable("missing");
       },
-      execute: async () => ({ text: "", costUsd: 0 })
+      execute: async () => ({ text: "", costUsd: 0, ...stopTurn() })
     });
     registry.register("prompt-gen", "codex", createEchoHandler("codex"));
     const api = createPromptGenApi(

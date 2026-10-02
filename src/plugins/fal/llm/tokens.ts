@@ -5,6 +5,7 @@
  */
 import type { PromptGenRequest } from "../../promptGen/contract";
 import { readNumber } from "../client/http";
+import { imagePartsOf, inputTextOf } from "./conversation";
 import type { LlmPrice } from "./prices";
 
 /**
@@ -39,6 +40,9 @@ export type CostedAnswer = {
 
 /** ASCII characters per token in the estimate. */
 const ASCII_CHARS_PER_TOKEN = 4;
+
+/** Estimated input tokens of one image part of a message. */
+const IMAGE_PART_TOKENS = 1000;
 
 /** First code point that counts as one token on its own. */
 const FIRST_NON_ASCII = 0x80;
@@ -104,13 +108,35 @@ export function estimateUsd(price: LlmPrice, inputTokens: number, outputTokens: 
 }
 
 /**
+ * Estimated input tokens of a request. Without messages: the system and the
+ * prompt tokens, as before. With messages: the tokens of all the text sent
+ * (system, text parts, assistant texts, tool-call argument JSON) plus
+ * {@link IMAGE_PART_TOKENS} per image part.
+ *
+ * @param request - The prompt-gen request.
+ * @returns Token estimate.
+ * @example
+ * ```ts
+ * estimateInputTokens({ prompt: "abcd", system: "abcdefgh" }); // => 3
+ * estimateInputTokens({ prompt: "", messages: [{ role: "user", content: [{ type: "text", text: "abcd" }, { type: "image", path: "a.png", mimeType: "image/png", hash: "h" }] }] }); // => 1001
+ * ```
+ */
+export function estimateInputTokens(request: PromptGenRequest): number {
+  if (request.messages === undefined) {
+    return estimateTokens(request.system ?? "") + estimateTokens(request.prompt);
+  }
+  const images = imagePartsOf(request.messages).length;
+  return estimateTokens(inputTextOf(request)) + IMAGE_PART_TOKENS * images;
+}
+
+/**
  * Actual cost of an answer: `usage.cost` when finite and ≥ 0, else the
- * reported token counts × price, else the character rule on system + prompt
- * and the answer text.
+ * reported token counts × price, else the character rule on what was sent
+ * (system + prompt, or the text of all messages) and the answer text.
  *
  * @param answer - The answer's usage and text.
  * @param price - The model's price.
- * @param request - The request (system and prompt).
+ * @param request - The request (system, prompt and messages).
  * @returns USD and its source.
  * @example
  * ```ts
@@ -120,7 +146,7 @@ export function estimateUsd(price: LlmPrice, inputTokens: number, outputTokens: 
 export function actualUsd(
   answer: CostedAnswer,
   price: LlmPrice,
-  request: Pick<PromptGenRequest, "system" | "prompt">
+  request: Pick<PromptGenRequest, "system" | "prompt" | "messages">
 ): LlmCost {
   // fal's own cost wins when it reports one.
   const cost = readNumber(answer.usage, "cost");
@@ -134,7 +160,7 @@ export function actualUsd(
   }
 
   // Else the character rule on what was sent and what came back.
-  const inputTokens = estimateTokens(`${request.system ?? ""}${request.prompt}`);
+  const inputTokens = estimateTokens(inputTextOf(request));
   const outputTokens = estimateTokens(answer.text);
   return { usd: estimateUsd(price, inputTokens, outputTokens), source: "chars" };
 }

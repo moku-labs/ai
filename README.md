@@ -160,7 +160,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`runner`](./src/plugins/runner/README.md) | Complex | regular (`app.runner`) | The durable orchestrator — `run`/`resume`/`estimate`/`status`/`events()`; owns all bus events. |
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
-| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. |
+| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`), and `runToolLoop`, a tool loop the caller journals. |
 | [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`; price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
@@ -546,7 +546,9 @@ the time `app.start()` resolves, every task facade sees its providers — and th
 The factory chain is the standard three-layer Moku shape: `src/config.ts` builds
 `coreConfig` (`createCoreConfig("ai", …)` with the five core plugins), `src/index.ts`
 assembles the framework (`createCore`) and exports `createApp` + `createPlugin` for
-Layer-3 consumers.
+Layer-3 consumers, plus the helpers `defineBuild`, `ASSET_MIME`, `encodeAssetRecord`,
+`parseAssetRecord`, `PromptGenUnavailableError`, `isPromptGenUnavailable`,
+`ToolArgumentsError` and `runToolLoop`.
 
 ## Development
 

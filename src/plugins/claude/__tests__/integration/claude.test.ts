@@ -110,6 +110,12 @@ describe("claude integration", () => {
 
     expect(result.text).toBe("ok");
     expect(result.costUsd).toBe(0);
+    expect(result.usage).toEqual({
+      promptTokens: 12,
+      completionTokens: 3,
+      cachedTokens: 0,
+      cacheWriteTokens: 0
+    });
     expect(result.meta).toMatchObject({
       provider: "claude",
       model: "claude-opus-5-5",
@@ -135,6 +141,27 @@ describe("claude integration", () => {
 
     expect(result.text).toBe("backup:hi");
     expect(result.meta).toMatchObject({ provider: "backup" });
+
+    await app.stop();
+  });
+
+  it("falls back to the next provider when the request has messages", async () => {
+    const bin = writeFakeClaudeBin(root);
+    const { createApp } = buildFramework(path.join(root, "journal.db"), root);
+    const app = createApp({
+      pluginConfigs: {
+        claude: { bin, workDir: path.join(root, "work") },
+        promptGen: { defaultProvider: "claude", fallback: ["backup"] }
+      }
+    });
+    await app.start();
+
+    const result = await app.promptGen.generate({
+      prompt: "hi",
+      messages: [{ role: "user", content: "Check shot 3." }]
+    });
+
+    expect(result.text).toBe("backup:hi");
 
     await app.stop();
   });

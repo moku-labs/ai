@@ -36,7 +36,13 @@ function createFakePromptGen(responses: ReadonlyArray<{ text: string; costUsd: n
       if (response === undefined) {
         throw new Error("createFakePromptGen: ran out of canned responses");
       }
-      return { text: response.text, costUsd: response.costUsd };
+      return {
+        text: response.text,
+        costUsd: response.costUsd,
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+      };
     },
     estimate: () => ({ usd: 0 }),
     providers: () => ["fake"]
@@ -270,7 +276,13 @@ describe("createComposeApi", () => {
       const promptGen: PromptGenApi = {
         generate: async (_request, opts) => {
           calls.push({ provider: opts?.provider, signal: opts?.signal });
-          return { text: VALID_YAML, costUsd: 0 };
+          return {
+            text: VALID_YAML,
+            costUsd: 0,
+            toolCalls: [],
+            finishReason: "stop",
+            usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 }
+          };
         },
         estimate: () => ({ usd: 0 }),
         providers: () => ["fake"]

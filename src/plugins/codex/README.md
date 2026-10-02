@@ -86,11 +86,15 @@ codex exec [-m <model>] -c model_reasoning_effort="<effort>" --sandbox read-only
   `z.toJSONSchema` makes: `propertyNames`, record maps, optional keys, `$schema`.
 - The answer is `last-message.txt`, trimmed.
 - `estimate()` validates the params and returns `{ usd: 0 }`.
+- `toolCalls` is `[]`, `finishReason` is `"stop"`, and every `usage` count is 0: the CLI reports no tokens.
+  `cacheSystem` is ignored.
 - `meta` is `Codex.CodexPromptMeta`: `{ provider: "codex", model?, modelRequested?, effort, ignored? }`. `effort` is the key claude uses too.
 
 ```ts
 await app.promptGen.generate({ prompt: "Say ok", system: "Be terse." }, { provider: "codex" });
-// => { text: "ok", costUsd: 0, meta: { provider: "codex", effort: "low" } }
+// => { text: "ok", costUsd: 0, toolCalls: [], finishReason: "stop",
+//      usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
+//      meta: { provider: "codex", effort: "low" } }
 ```
 
 ### Params
@@ -125,6 +129,7 @@ These throw `PromptGenUnavailableError`, so `promptGen` moves on to its next `fa
 
 | Case | `reason` | Signal | Message |
 | --- | --- | --- | --- |
+| Messages or tools | `unsupported` | `messages`, `tools` or `toolChoice` set, in `estimate()` and `execute()`, before any spawn | `[ai] Codex prompt-gen does not support messages or tools.` / `Use the fal provider for tool calling.` |
 | Binary missing | `missing` | spawn `ENOENT` | `[ai] Codex CLI not found: <bin>.` |
 | Not logged in | `auth` | API error status 401 or 403, or stderr matches `/401 Unauthorized\|not logged in\|codex login/i` | `[ai] Codex CLI is not logged in.` / `Run codex login, or use another provider.` |
 | Plan or rate limit | `limit` | API error status 429, or stderr matches `/usage limit\|rate limit\|429\|too many requests/i` | `[ai] Codex CLI hit its plan or rate limit.` / `Wait for the reset, or use another provider.` |

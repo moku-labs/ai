@@ -72,12 +72,22 @@ export type OpenaiChatUsage = {
   prompt_tokens: number;
   /** Tokens consumed by the generated completion. */
   completion_tokens: number;
+  /** Breakdown of the prompt tokens, when reported. */
+  prompt_tokens_details?: {
+    /** Prompt tokens served from the provider's prompt cache. */
+    cached_tokens?: number;
+  };
 };
 
 /** Response body returned by {@link OpenaiClient}'s `chat.completions.create`. */
 export type OpenaiChatCompletion = {
   /** Generated choices; OpenAI returns at least one by default. */
-  choices: Array<{ message: OpenaiChatMessageResult }>;
+  choices: Array<{
+    /** The generated message. */
+    message: OpenaiChatMessageResult;
+    /** Why generation stopped, e.g. `"stop"` or `"length"`; absent in some fakes and proxies. */
+    finish_reason?: string;
+  }>;
   /** Token usage, when reported by the provider. */
   usage?: OpenaiChatUsage;
 };

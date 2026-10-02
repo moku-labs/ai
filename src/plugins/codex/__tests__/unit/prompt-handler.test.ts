@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PromptGenRequest } from "../../../promptGen/contract";
 import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import { TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt/handler";
@@ -14,6 +15,37 @@ import {
   writeAnswer,
   writeFakeCodex
 } from "./fixtures";
+
+const UNSUPPORTED =
+  "[ai] Codex prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
+
+/** One request per field codex cannot express. */
+const TOOL_REQUESTS: Array<[string, PromptGenRequest]> = [
+  ["messages", { prompt: "", messages: [{ role: "user", content: "Check shot 3." }] }],
+  [
+    "tools",
+    {
+      prompt: "p",
+      tools: [{ name: "read_frame", description: "Return one frame.", inputSchema: {} }]
+    }
+  ],
+  ["toolChoice", { prompt: "p", toolChoice: { name: "read_frame" } }]
+];
+
+/**
+ * The error a synchronous call throws.
+ *
+ * @param call - The call expected to throw.
+ * @returns The thrown value.
+ */
+function thrownBy(call: () => unknown): unknown {
+  try {
+    call();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to throw");
+}
 
 describe("createPromptGenHandler", () => {
   let root: string;
@@ -49,6 +81,25 @@ describe("createPromptGenHandler", () => {
         "[ai] Codex params.reasoning must be off, low, medium or high."
       );
     });
+
+    it.each(TOOL_REQUESTS)("throws unavailable 'unsupported' for %s", (_label, request) => {
+      const handler = createPromptGenHandler(createTestCtx());
+
+      const error = thrownBy(() => handler.estimate(request));
+
+      expect(error).toBeInstanceOf(PromptGenUnavailableError);
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+      expect((error as Error).message).toBe(UNSUPPORTED);
+    });
+
+    it("rejects tools before it reads params", () => {
+      const handler = createPromptGenHandler(createTestCtx());
+      const request = { prompt: "p", toolChoice: "none", params: { reasoning: "max" } } as const;
+
+      const error = thrownBy(() => handler.estimate(request));
+
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+    });
   });
 
   describe("execute() — success", () => {
@@ -62,6 +113,9 @@ describe("createPromptGenHandler", () => {
       expect(result).toEqual({
         text: "ok",
         costUsd: 0,
+        toolCalls: [],
+        finishReason: "stop",
+        usage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 },
         meta: { provider: "codex", effort: "low" }
       });
       expect(log.info).toHaveBeenCalledWith("codex:prompt-gen:done", {
@@ -257,6 +311,41 @@ describe("createPromptGenHandler", () => {
       await createPromptGenHandler(ctx).execute({ prompt: "p" }, {});
 
       expect(readdirSync(workDir)).toEqual([]);
+    });
+  });
+
+  describe("execute() — messages and tools", () => {
+    it("ignores cacheSystem alone: same argv as without it", async () => {
+      const bin = writeFakeCodex(root, writeAnswer("ok"));
+      const ctx = createTestCtx({ config: { bin, workDir } });
+      const handler = createPromptGenHandler(ctx);
+
+      await handler.execute({ prompt: "Say ok", system: "Be terse." }, {});
+      const plainArgs = recordedArgs().filter(line => !line.includes(workDir));
+      const result = await handler.execute(
+        { prompt: "Say ok", system: "Be terse.", cacheSystem: true },
+        {}
+      );
+
+      expect(result.text).toBe("ok");
+      expect(recordedArgs().filter(line => !line.includes(workDir))).toEqual(plainArgs);
+    });
+
+    it.each(
+      TOOL_REQUESTS
+    )("throws unavailable 'unsupported' for %s before any temp dir or spawn", async (_label, request) => {
+      const bin = writeFakeCodex(root, writeAnswer("ok"));
+      const ctx = createTestCtx({ config: { bin, workDir } });
+
+      const error = await createPromptGenHandler(ctx)
+        .execute(request, {})
+        .catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(PromptGenUnavailableError);
+      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
+      expect((error as Error).message).toBe(UNSUPPORTED);
+      expect(existsSync(path.join(root, "args.txt"))).toBe(false);
+      expect(existsSync(workDir)).toBe(false);
     });
   });
 

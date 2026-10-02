@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import { assertOneTurnRequest } from "../../promptGen/contract";
 import { buildClaudeArguments, runClaude } from "../cli";
 import type { ClaudeContext, ClaudePromptMeta, Effort } from "../types";
 import { copyImages } from "./files";
@@ -19,7 +20,7 @@ import type { PromptParameters } from "./params";
 import { readParameters } from "./params";
 import { buildClaudePrompt } from "./prompt";
 import type { ClaudeAnswer } from "./result";
-import { parseClaudeResult, schemaAnswerOf } from "./result";
+import { parseClaudeResult, schemaAnswerOf, usageOf } from "./result";
 
 /** Prefix of every per-call temp dir. */
 const CALL_DIR_PREFIX = "moku-claude-";
@@ -108,7 +109,7 @@ async function answerIn(
  * @returns The `meta` record.
  * @example
  * ```ts
- * buildMeta({ prompt: "p" }, { model: undefined, effort: "low" }, { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 1, outputTokens: 1 });
+ * buildMeta({ prompt: "p" }, { model: undefined, effort: "low" }, { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 });
  * // => { provider: "claude", effort: "low", listCostUsd: 0.1, usage: { inputTokens: 1, outputTokens: 1 } }
  * ```
  */
@@ -130,9 +131,13 @@ function buildMeta(
 
 /**
  * Creates the claude prompt-gen handler: `estimate()` validates params and
- * returns $0 (plan-billed); `execute()` runs `claude -p` in a fresh temp dir.
- * `temperature` is ignored and listed in `meta.ignored`. Logs
- * `claude:prompt-gen:done` with the model and the answer length only.
+ * returns $0 (plan-billed); `execute()` runs `claude -p` in a fresh temp dir
+ * and returns the answer with typed `usage` (cache tokens included), no tool
+ * calls and `finishReason: "stop"`. Both throw `PromptGenUnavailableError`
+ * with reason "unsupported" for `messages`, `tools` or `toolChoice`, before
+ * any other work. `temperature` and `cacheSystem` are ignored; `temperature`
+ * is listed in `meta.ignored`. Logs `claude:prompt-gen:done` with the model
+ * and the answer length only.
  *
  * @param ctx - Plugin context (config, log).
  * @returns The `PromptGenHandler` registered under the "prompt-gen" task.
@@ -140,6 +145,7 @@ function buildMeta(
 export function createPromptGenHandler(ctx: ClaudeContext): PromptGenHandler {
   return {
     estimate: (request: PromptGenRequest): { usd: number } => {
+      assertOneTurnRequest(request, "Claude");
       readParameters(request.params);
       return { usd: 0 };
     },
@@ -148,7 +154,8 @@ export function createPromptGenHandler(ctx: ClaudeContext): PromptGenHandler {
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> => {
-      // Validate params and map the model
+      // Reject tool requests, validate params and map the model
+      assertOneTurnRequest(request, "Claude");
       const params = readParameters(request.params);
       const model = mapModel(ctx.config, request.model);
       const effort = effortFor(params.reasoning);
@@ -164,7 +171,14 @@ export function createPromptGenHandler(ctx: ClaudeContext): PromptGenHandler {
             : schemaAnswerOf(answer, params.schema.validator);
 
         ctx.log.info("claude:prompt-gen:done", { model: model ?? "default", chars: text.length });
-        return { text, costUsd: 0, meta: buildMeta(request, { model, effort }, answer) };
+        return {
+          text,
+          costUsd: 0,
+          toolCalls: [],
+          finishReason: "stop",
+          usage: usageOf(answer),
+          meta: buildMeta(request, { model, effort }, answer)
+        };
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

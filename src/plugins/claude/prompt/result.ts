@@ -6,11 +6,19 @@
  */
 import type { ZodType } from "zod";
 import { z } from "zod";
+import type { PromptGenUsage } from "../../promptGen/contract";
 import { PromptGenUnavailableError } from "../../promptGen/contract";
 import type { ClaudeRun } from "../cli";
 import { TerminalProviderError } from "../errors";
 
-/** The answer of a successful run, with the CLI's own accounting. */
+/**
+ * The answer of a successful run, with the CLI's own accounting.
+ *
+ * @example
+ * ```ts
+ * const answer: ClaudeAnswer = { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120 };
+ * ```
+ */
 export type ClaudeAnswer = {
   /** The answer text (`result`). */
   text: string;
@@ -22,6 +30,10 @@ export type ClaudeAnswer = {
   inputTokens: number;
   /** Output tokens (`usage.output_tokens`). */
   outputTokens: number;
+  /** Input tokens served from the prompt cache (`usage.cache_read_input_tokens`). */
+  cacheReadTokens: number;
+  /** Input tokens written to the prompt cache (`usage.cache_creation_input_tokens`). */
+  cacheWriteTokens: number;
 };
 
 /** The fields of claude's JSON result this plugin reads; the rest is ignored. */
@@ -32,7 +44,12 @@ const claudeOutputSchema = z.object({
   api_error_status: z.number().nullable().optional(),
   total_cost_usd: z.number().optional(),
   usage: z
-    .object({ input_tokens: z.number().optional(), output_tokens: z.number().optional() })
+    .object({
+      input_tokens: z.number().optional(),
+      output_tokens: z.number().optional(),
+      cache_read_input_tokens: z.number().optional(),
+      cache_creation_input_tokens: z.number().optional()
+    })
     .optional()
 });
 
@@ -185,7 +202,7 @@ function exitError(run: ClaudeRun): Error {
  * exit: the not-logged-in result exits 1 with valid JSON.
  *
  * @param run - The finished run.
- * @returns The answer text, the structured output if any, list price and token usage.
+ * @returns The answer text, the structured output if any, list price and token usage (cache tokens included).
  * @throws {PromptGenUnavailableError} With reason "auth" or "limit" when claude cannot serve.
  * @throws {TerminalProviderError} For a reported error, a failed exit, or a blank answer without structured output.
  * @example
@@ -208,7 +225,31 @@ export function parseClaudeResult(run: ClaudeRun): ClaudeAnswer {
     structured,
     listCostUsd: output.total_cost_usd ?? 0,
     inputTokens: output.usage?.input_tokens ?? 0,
-    outputTokens: output.usage?.output_tokens ?? 0
+    outputTokens: output.usage?.output_tokens ?? 0,
+    cacheReadTokens: output.usage?.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: output.usage?.cache_creation_input_tokens ?? 0
+  };
+}
+
+/**
+ * The typed token usage of an answer. claude's `input_tokens` leaves out the
+ * cached part, so the prompt tokens are input plus cache reads plus cache
+ * writes.
+ *
+ * @param answer - The parsed run answer.
+ * @returns The usage for `PromptGenResult.usage`.
+ * @example
+ * ```ts
+ * usageOf({ text: "ok", structured: undefined, listCostUsd: 0, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120 });
+ * // => { promptTokens: 1025, completionTokens: 2, cachedTokens: 900, cacheWriteTokens: 120 }
+ * ```
+ */
+export function usageOf(answer: ClaudeAnswer): PromptGenUsage {
+  return {
+    promptTokens: answer.inputTokens + answer.cacheReadTokens + answer.cacheWriteTokens,
+    completionTokens: answer.outputTokens,
+    cachedTokens: answer.cacheReadTokens,
+    cacheWriteTokens: answer.cacheWriteTokens
   };
 }
 
@@ -272,7 +313,7 @@ export function parseSchemaAnswer(text: string, validator: ZodType): string {
  * @throws {TerminalProviderError} When the answer is not JSON or does not match; never unavailable.
  * @example
  * ```ts
- * schemaAnswerOf({ text: "", structured: { score: 7 }, listCostUsd: 0, inputTokens: 0, outputTokens: 0 }, z.fromJSONSchema({ type: "object" })); // => '{"score":7}'
+ * schemaAnswerOf({ text: "", structured: { score: 7 }, listCostUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, z.fromJSONSchema({ type: "object" })); // => '{"score":7}'
  * ```
  */
 export function schemaAnswerOf(answer: ClaudeAnswer, validator: ZodType): string {

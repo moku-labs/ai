@@ -47,7 +47,7 @@ index.ts types.ts errors.ts state.ts api.ts log.ts prices.ts   prices.ts = merge
 client/  http.ts queue.ts upload.ts                  shared: fetch + errors, queue + wait, generic upload
 video/   handler.ts job.ts models.ts prices.ts image-size.ts upload.ts
 image/   handler.ts models.ts prices.ts
-llm/     handler.ts chat.ts models.ts prices.ts tokens.ts
+llm/     handler.ts chat.ts conversation.ts models.ts prices.ts tokens.ts
 music/   handler.ts models.ts prices.ts
 ```
 
@@ -301,14 +301,48 @@ Also priced, not listed: `anthropic/claude-haiku-4.5` (1 / 5) and `google/gemini
 | `params.max_tokens` | a positive integer | `32000` |
 | `temperature` | clamped to 0..2 | not sent |
 
-No other param is copied. The body is `{ model, messages, max_tokens, temperature?, reasoning?, response_format? }`,
-with a system message only when `system` is set.
+No other param is copied. The body is
+`{ model, messages, max_tokens, temperature?, reasoning?, response_format?, tools?, tool_choice? }`, with a system
+message only when `system` is set. A request without `messages`, `tools`, `toolChoice` and `cacheSystem` posts the
+same bytes as 0.11.0.
 
 `estimate` needs no key and no network: `tokens(system) + tokens(prompt)` in, `max_tokens` out, at the model's
-price (a token is 4 ASCII characters or 1 other character). The actual cost is fal's `usage.cost`, else
-`usage.prompt_tokens` / `completion_tokens` at the table price, else the character rule; `meta.costSource` says
-which. An answer cut by `max_tokens` is `meta.partial: true` (logged `fal:llm:partial`); a null content cut by
-length is `""`. `meta` is `{ modelId, reasoning, provider, finishReason, promptTokens, completionTokens, costSource, partial }`.
+price (a token is 4 ASCII characters or 1 other character). With `messages` the input is the tokens of all the
+text sent (system, text parts, assistant texts, tool-call argument JSON) plus 1 000 per image part. The actual
+cost is fal's `usage.cost`, else `usage.prompt_tokens` / `completion_tokens` at the table price, else the character
+rule on the text sent; `meta.costSource` says which. An answer cut by `max_tokens` is `meta.partial: true` (logged
+`fal:llm:partial`); a null content cut by length is `""`. The result carries `toolCalls`, `finishReason` and `usage`;
+`meta` is `{ modelId, reasoning, provider, finishReason, promptTokens, completionTokens, costSource, partial }`, as before.
+
+### Tool calling and cache
+
+With `messages` the request is a multi-turn chat and `prompt` is ignored (it may be `""`).
+
+| Request | Body |
+| --- | --- |
+| `cacheSystem: true` | the system content becomes `[{ type: "text", text, cache_control: { type: "ephemeral" } }]` |
+| user message | `{ role: "user", content }`, a string or parts |
+| assistant message | `{ role: "assistant", content, tool_calls? }`, each call `{ id, type: "function", function: { name, arguments: JSON.stringify(input) } }` |
+| tool message | `{ role: "tool", tool_call_id, content }`, a string or parts |
+| text part | `{ type: "text", text }`, plus `cache_control: { type: "ephemeral" }` with `cache: true` |
+| image part | uploaded like `params.images`, in message order, sent as `{ type: "image_url", image_url: { url } }` |
+| `tools` | `[{ type: "function", function: { name, description, parameters: inputSchema } }]`; an empty list sends none |
+| `toolChoice` | `tool_choice`: `"auto"` / `"none"` / `"required"` as is, `{ name }` as `{ type: "function", function: { name } }`; not sent when unset |
+
+`cache_control` reaches Anthropic models through OpenRouter; other model families ignore it. `messages: []` and
+`params.images` together with `messages` are a terminal 400 before any upload.
+
+The answer's `choices[0].message.tool_calls` become `toolCalls`: `arguments` is parsed, `""` or missing is `{}`, text
+that is not JSON throws `ToolArgumentsError` with the raw text (never retried). A null content is `""` when the
+answer has tool calls or ended by `tool_calls` or `length`. `finishReason` is `stop`, `tool_calls` or `length` as
+sent, else `other`.
+
+| `usage` | From fal's `usage`, 0 when absent |
+| --- | --- |
+| `promptTokens` | `prompt_tokens` |
+| `completionTokens` | `completion_tokens` |
+| `cachedTokens` | `prompt_tokens_details.cached_tokens` |
+| `cacheWriteTokens` | `cache_creation_input_tokens`, else `prompt_tokens_details.cache_write_tokens` |
 
 ## Music
 
@@ -353,7 +387,8 @@ submit of video, image and music, and each prompt-gen POST attempt.
 ```
 
 `requestId` is fal's request id (prompt-gen: the answer's `id`); a failed request has `error: { errorType, status?, kind? }`
-instead, never the error text. `body` is the posted body without its prompt field (`prompt`, or the chat `messages`),
+instead, never the error text. prompt-gen's `prompt` is `request.prompt`, or with `messages` the text of the last
+user or tool message. `body` is the posted body without its prompt field (`prompt`, or the chat `messages`),
 every string cut: http(s) URLs to `<host>/…/<last segment>`, data URIs to `data:<mime>;<length>`. Ref URLs
 (`image_urls`, the chat `image_url` parts) become the file names when there is one per uploaded file, else
 `{ count }`. Video matches `image_urls` to the first frame and the image refs, or to the image refs alone on
@@ -412,6 +447,7 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | prompt-gen: 402 / 429 | `PromptGenUnavailableError`, reason `limit`, never retried |
 | prompt-gen: 5xx or request timeout | Retried in the handler, 3 attempts at most, backoff 1 s then 2 s (logged `fal:llm:retry`) |
 | prompt-gen: a 2xx answer with `error.message` | Flagged when it names `content_policy`, else terminal 400 `[ai] fal LLM returned an error: <text>` |
+| prompt-gen: tool-call `arguments` that are not JSON | `ToolArgumentsError` (`toolName`, `raw`), never retried |
 | Incomplete result body (no `images[0].url`, `audio.url`, `choices[0].message.content`) | Plain two-line error |
 
 Messages start with `[ai]` and never contain the key or the prompt. Logs carry ids, statuses, counts and error

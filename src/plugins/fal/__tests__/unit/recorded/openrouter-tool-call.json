@@ -1,0 +1,51 @@
+{
+  "id": "gen-1791000000-Kp4LmT9wRXq7vB2n",
+  "provider": "Anthropic",
+  "model": "anthropic/claude-opus-5.5",
+  "object": "chat.completion",
+  "created": 1791000000,
+  "choices": [
+    {
+      "logprobs": null,
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_use",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "id": "toolu_01HxQ7bVf3mZ2kR9tLwN4cYp",
+            "index": 0,
+            "type": "function",
+            "function": {
+              "name": "read_frame",
+              "arguments": "{\"shot\":3}"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 2431,
+    "completion_tokens": 58,
+    "total_tokens": 2489,
+    "cost": 0.010884,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 1820,
+      "audio_tokens": 0
+    },
+    "cache_creation_input_tokens": 412,
+    "cost_details": {
+      "upstream_inference_cost": null
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "image_tokens": 0
+    }
+  }
+}
