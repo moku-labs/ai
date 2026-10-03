@@ -131,7 +131,7 @@ describe("openai unit: prompt-gen handler (prompt-gen contract)", () => {
       expect(result.costUsd).toBeCloseTo((15 / 1_000_000) * 0.15 + (8 / 1_000_000) * 0.6, 10);
       expect(result.toolCalls).toEqual([]);
       expect(result.finishReason).toBe("stop");
-      expect(result.usage).toEqual({
+      expect(result.usage).toStrictEqual({
         promptTokens: 15,
         completionTokens: 8,
         cachedTokens: 0,
@@ -155,12 +155,58 @@ describe("openai unit: prompt-gen handler (prompt-gen contract)", () => {
 
       const result = await handler.execute({ prompt: "hi" }, {});
 
-      expect(result.usage).toEqual({
+      expect(result.usage).toStrictEqual({
         promptTokens: 2400,
         completionTokens: 120,
         cachedTokens: 1800,
+        cacheWriteTokens: 0,
+        cachedReadTokens: 1800
+      });
+    });
+
+    it("keeps a reported cached count of 0 as cachedReadTokens", async () => {
+      const { client } = createFakeOpenaiClient({
+        chatResult: {
+          choices: [{ message: textMessage("ok"), finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: 2400,
+            completion_tokens: 120,
+            prompt_tokens_details: { cached_tokens: 0 }
+          }
+        }
+      });
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+
+      const result = await handler.execute({ prompt: "hi" }, {});
+
+      expect(result.usage).toStrictEqual({
+        promptTokens: 2400,
+        completionTokens: 120,
+        cachedTokens: 0,
+        cacheWriteTokens: 0,
+        cachedReadTokens: 0
+      });
+    });
+
+    it("leaves cachedReadTokens out when the details carry no cached count", async () => {
+      const { client } = createFakeOpenaiClient({
+        chatResult: {
+          choices: [{ message: textMessage("ok"), finish_reason: "stop" }],
+          usage: { prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: {} }
+        }
+      });
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+
+      const result = await handler.execute({ prompt: "hi" }, {});
+
+      expect(result.usage).toStrictEqual({
+        promptTokens: 2400,
+        completionTokens: 120,
+        cachedTokens: 0,
         cacheWriteTokens: 0
       });
+      expect(result.usage).not.toHaveProperty("cachedReadTokens");
+      expect(result.usage).not.toHaveProperty("cachedWriteTokens");
     });
 
     it("reports zero usage when the provider sends none", async () => {
@@ -171,7 +217,7 @@ describe("openai unit: prompt-gen handler (prompt-gen contract)", () => {
 
       const result = await handler.execute({ prompt: "hi" }, {});
 
-      expect(result.usage).toEqual({
+      expect(result.usage).toStrictEqual({
         promptTokens: 0,
         completionTokens: 0,
         cachedTokens: 0,

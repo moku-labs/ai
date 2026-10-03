@@ -79,7 +79,7 @@ A bad `images`, `responseSchema` or `reasoning` throws a plain `Error` before an
   costUsd: 0,
   toolCalls: [],
   finishReason: "stop",
-  usage: { promptTokens: 12, completionTokens: 3, cachedTokens: 0, cacheWriteTokens: 0 },
+  usage: { promptTokens: 12, completionTokens: 3, cachedTokens: 0, cacheWriteTokens: 0, cachedReadTokens: 0 },
   meta: {
     provider: "claude",
     model: "claude-opus-5-5",
@@ -95,6 +95,7 @@ A bad `images`, `responseSchema` or `reasoning` throws a plain `Error` before an
 `usage` is typed. `promptTokens` is `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
 `completionTokens` is `output_tokens`. `cachedTokens` is `cache_read_input_tokens`. `cacheWriteTokens` is
 `cache_creation_input_tokens`. A count the CLI does not report is 0. `meta.usage` keeps its old keys.
+`cachedReadTokens` and `cachedWriteTokens` hold the same two cache counts only when the CLI reports them; otherwise the key is absent.
 
 `toolCalls` is always `[]` and `finishReason` always `"stop"`. `cacheSystem` is ignored.
 

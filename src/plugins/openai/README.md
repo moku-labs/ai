@@ -154,7 +154,8 @@ execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<Prom
   `"length"` when `finish_reason` is `"length"`, else `"stop"`. `usage` is `{ promptTokens,
   completionTokens, cachedTokens, cacheWriteTokens }` from `prompt_tokens`, `completion_tokens`
   and `prompt_tokens_details.cached_tokens`; a missing count is 0 and `cacheWriteTokens` is
-  always 0. `cacheSystem` is ignored.
+  always 0. `cachedReadTokens` is set only when `cached_tokens` is reported; `cachedWriteTokens`
+  is never set. `cacheSystem` is ignored.
 - **throws** — `PromptGenUnavailableError` with reason `"unsupported"` when `messages`, `tools`
   or `toolChoice` is set, from `estimate` and `execute`, before any SDK call; promptGen falls back.
   Otherwise the same taxonomy as translate (missing key, classified errors, no-choices terminal,

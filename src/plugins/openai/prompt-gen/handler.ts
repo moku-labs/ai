@@ -21,22 +21,36 @@ import type {
 /**
  * The typed usage of a completion; counts the API did not send are 0.
  * OpenAI caches prompts on its own, so cache writes are always 0.
+ * `cachedReadTokens` is set only when `prompt_tokens_details.cached_tokens`
+ * is in the answer (a reported 0 is kept); otherwise the key is absent.
+ * OpenAI reports no write count, so `cachedWriteTokens` is always absent.
  *
  * @param usage - The completion's `usage`, if reported.
  * @returns The usage for `PromptGenResult.usage`.
  * @example
  * ```ts
+ * // A cached count in the answer: kept as cachedReadTokens, 0 included.
  * usageOf({ prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 1800 } });
- * // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0 }
+ * // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0, cachedReadTokens: 1800 }
+ * // No cached count: the optional key is absent.
+ * usageOf({ prompt_tokens: 15, completion_tokens: 8 });
+ * // => { promptTokens: 15, completionTokens: 8, cachedTokens: 0, cacheWriteTokens: 0 }
  * ```
  */
 function usageOf(usage: OpenaiChatUsage | undefined): PromptGenUsage {
-  return {
+  const cacheReads = usage?.prompt_tokens_details?.cached_tokens;
+
+  // The counts every provider has: 0 when OpenAI does not report one.
+  const result: PromptGenUsage = {
     promptTokens: usage?.prompt_tokens ?? 0,
     completionTokens: usage?.completion_tokens ?? 0,
-    cachedTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cachedTokens: cacheReads ?? 0,
     cacheWriteTokens: 0
   };
+
+  // A reported cache count is kept, 0 included; an unreported one leaves the key out.
+  if (typeof cacheReads === "number") result.cachedReadTokens = cacheReads;
+  return result;
 }
 
 /**

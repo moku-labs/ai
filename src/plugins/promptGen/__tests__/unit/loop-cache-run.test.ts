@@ -787,6 +787,14 @@ describe("runToolLoop — cache types", () => {
     expect(wrong).toBe("always");
   });
 
+  it("rejects a cache mode outside the three in the loop options", () => {
+    const { generate } = scriptModel([]);
+
+    // @ts-expect-error "all" is not a cache mode
+    const options = loopOptions({ generate, cache: "all" });
+    expect(options.cache).toBe("all");
+  });
+
   it("makes the cached usage counts optional numbers", () => {
     expectTypeOf<Pick<PromptGenUsage, "cachedReadTokens" | "cachedWriteTokens">>().toEqualTypeOf<{
       cachedReadTokens?: number;

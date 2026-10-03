@@ -110,7 +110,7 @@ describe("claude integration", () => {
 
     expect(result.text).toBe("ok");
     expect(result.costUsd).toBe(0);
-    expect(result.usage).toEqual({
+    expect(result.usage).toStrictEqual({
       promptTokens: 12,
       completionTokens: 3,
       cachedTokens: 0,

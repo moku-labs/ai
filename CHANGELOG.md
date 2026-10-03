@@ -17,7 +17,7 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 - **promptGen: `PromptGenUsage.cachedReadTokens?` and `cachedWriteTokens?`.** Set only when the
   provider reports the count. `fal` reads `cache_read_input_tokens` / `cache_creation_input_tokens`,
   else `prompt_tokens_details.cached_tokens` / `cache_write_tokens`. The `model` event of
-  `runToolLoop` carries them.
+  `runToolLoop` carries them. `openai` sets `cachedReadTokens`; `claude` sets both.
 - **ark: Seedream group generation.** `params.images: N` on an `image` item with `provider: ark`
   asks for up to N consistent images from one call (`sequential_image_generation: "auto"`,
   `max_images: N`). N is 1 to 15, and refs plus N is at most 15. A short group logs
