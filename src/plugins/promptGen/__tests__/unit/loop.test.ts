@@ -136,6 +136,17 @@ function toolContent(
     ?.content;
 }
 
+/** A user message as the default cache mode sends its mark target: one marked text part. */
+function markedUser(text: string): ChatMessage {
+  return { role: "user", content: [{ type: "text", text, cache: true }] };
+}
+
+/** The text of a message, whether it is sent as a string or as text parts. */
+function textOf(message: ChatMessage): string | null {
+  if (!Array.isArray(message.content)) return message.content;
+  return message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("");
+}
+
 /** A tool with no content. */
 async function silent(): Promise<ToolOutput> {
   return { value: 0, content: [], costUsd: 0 };
@@ -218,7 +229,7 @@ describe("runToolLoop — the turn loop", () => {
       prompt: "",
       system: "You review frames.",
       model: "anthropic/claude-opus-5.5",
-      messages: [USER],
+      messages: [markedUser("Check shot 3.")],
       tools: [
         {
           name: "read_frame",
@@ -538,7 +549,7 @@ describe("runToolLoop — replay against a grown outside spend", () => {
       })
     );
 
-    expect(requests[2]?.messages?.at(-1)).toEqual({ role: "user", content: NOTE });
+    expect(requests[2]?.messages?.at(-1)).toEqual(markedUser(NOTE));
     expect(first.messages.at(-2)).toEqual({ role: "user", content: NOTE });
     expect(replay.messages).toEqual(first.messages);
     expect(replayEvents).toEqual(firstEvents);
@@ -696,9 +707,9 @@ describe("runToolLoop — finish mode", () => {
 
     expect(requests[1]?.messages?.slice(-2)).toEqual([
       { role: "tool", toolCallId: "c1", content: [{ type: "text", text: "Frame." }] },
-      { role: "user", content: NOTE }
+      markedUser(NOTE)
     ]);
-    expect(requests[2]?.messages?.filter(message => message.content === NOTE)).toHaveLength(1);
+    expect(requests[2]?.messages?.filter(message => textOf(message) === NOTE)).toHaveLength(1);
     expect(result.messages.filter(message => message.content === NOTE)).toHaveLength(1);
     expect(events.map(event => event.kind)).toEqual([
       "model",
@@ -729,7 +740,7 @@ describe("runToolLoop — finish mode", () => {
       })
     );
 
-    expect(requests[1]?.messages?.filter(message => message.content === NOTE)).toHaveLength(1);
+    expect(requests[1]?.messages?.filter(message => textOf(message) === NOTE)).toHaveLength(1);
     expect(result.messages.filter(message => message.content === NOTE)).toHaveLength(1);
     expect(events.filter(event => event.kind === "budget")).toHaveLength(1);
   });
@@ -746,7 +757,7 @@ describe("runToolLoop — finish mode", () => {
       })
     );
 
-    expect(requests[0]?.messages).toEqual([USER, { role: "user", content: NOTE }]);
+    expect(requests[0]?.messages).toEqual([USER, markedUser(NOTE)]);
   });
 
   it("emits the finish event without a note when no finishNote is set", async () => {
@@ -847,8 +858,16 @@ describe("runToolLoop — keepImages", () => {
     );
 
     const lastRequest = model.requests[3]?.messages;
-    expect(imagePart(lastRequest, "c1")).toEqual({ type: "text", text: "[image dropped: f1.png]" });
-    expect(imagePart(lastRequest, "c2")).toEqual({ type: "text", text: "[image dropped: f2.png]" });
+    expect(imagePart(lastRequest, "c1")).toEqual({
+      type: "text",
+      text: "[image dropped: f1.png]",
+      cache: true
+    });
+    expect(imagePart(lastRequest, "c2")).toEqual({
+      type: "text",
+      text: "[image dropped: f2.png]",
+      cache: true
+    });
     expect(imagePart(lastRequest, "c3")).toMatchObject({ type: "image", path: "frames/f3.png" });
     expect(imagePart(result.messages, "c1")).toMatchObject({
       type: "image",
@@ -864,7 +883,11 @@ describe("runToolLoop — keepImages", () => {
     );
 
     const lastRequest = model.requests[3]?.messages;
-    expect(imagePart(lastRequest, "c1")).toEqual({ type: "text", text: "[image dropped: f1.png]" });
+    expect(imagePart(lastRequest, "c1")).toEqual({
+      type: "text",
+      text: "[image dropped: f1.png]",
+      cache: true
+    });
     expect(imagePart(lastRequest, "c2")).toMatchObject({ type: "image" });
     expect(imagePart(lastRequest, "c3")).toMatchObject({ type: "image" });
     expect(imagePart(model.requests[2]?.messages, "c1")).toMatchObject({ type: "image" });
