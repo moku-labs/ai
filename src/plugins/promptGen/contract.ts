@@ -151,12 +151,16 @@ export type PromptGenRequest = {
 };
 
 /**
- * Token usage of one call. Counts a provider does not report are 0.
+ * Token usage of one call. Counts a provider does not report are 0; the two
+ * optional cache counts are absent instead, so a reported 0 and "not
+ * reported" stay apart.
  *
  * @example
  * ```ts
  * // A tool-loop step whose cached system text served 1800 of the prompt tokens.
  * const usage: PromptGenUsage = { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0 };
+ * // The same step from a provider that reports its cache reads and writes.
+ * const reported: PromptGenUsage = { ...usage, cacheWriteTokens: 350, cachedReadTokens: 1800, cachedWriteTokens: 350 };
  * ```
  */
 export type PromptGenUsage = {
@@ -168,6 +172,10 @@ export type PromptGenUsage = {
   cachedTokens: number;
   /** Tokens written to the cache (0 when unknown). */
   cacheWriteTokens: number;
+  /** Prompt tokens read from the cache; set only when the provider reports the count. */
+  cachedReadTokens?: number;
+  /** Prompt tokens written to the cache; set only when the provider reports the count. */
+  cachedWriteTokens?: number;
 };
 
 /**

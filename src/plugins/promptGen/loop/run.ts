@@ -6,6 +6,10 @@
  * Every budget decision runs inside the work of the step it guards. The
  * journal never stores a work that throws, so a replayed step is never
  * checked again, even when the outside spend has grown since.
+ *
+ * The prompt-cache marks of a request come from the history and the options
+ * alone (`./cache`), never from loop state. The history never carries them,
+ * and a resumed run sends the same request for the same step.
  */
 import type {
   ChatMessage,
@@ -14,6 +18,7 @@ import type {
   ToolCall,
   ToolDefinition
 } from "../contract";
+import { type CachePlan, cachedRequest } from "./cache";
 import {
   assistantMessage,
   NO_TEXT,
@@ -21,8 +26,7 @@ import {
   summaryOf,
   textOrNull,
   toolMessage,
-  withFinishNote,
-  withoutOldImages
+  withFinishNote
 } from "./history";
 import {
   answerWithText,
@@ -36,6 +40,9 @@ import type { LoopEvent, RunToolLoopOptions, RunToolLoopResult, ToolSpec } from 
 
 /** Assistant turns whose tool-result images stay in the request by default. */
 const DEFAULT_KEEP_IMAGES = 2;
+
+/** What the loop marks for the prompt cache by default. */
+const DEFAULT_CACHE: CachePlan["mode"] = "conversation";
 
 /** The answer to a second `ask` call in one turn: only the first one waits for the person. */
 const ONE_QUESTION = "Ask one question at a time.";
@@ -64,6 +71,8 @@ type Loop = {
   options: RunToolLoopOptions;
   /** The tool definitions every request carries. */
   definitions: ToolDefinition[];
+  /** What decides the cache marks of every request; fixed by the options. */
+  cache: CachePlan;
   /** The history: the given messages, then this run's turns. */
   messages: ChatMessage[];
   /** Cost of every step so far, replayed ones included. */
@@ -100,7 +109,25 @@ class BudgetStop extends Error {
 }
 
 /**
- * Sets up a run: copies the given messages and builds the tool definitions.
+ * What decides the cache marks of every request, from the options alone: the
+ * mode, the kept image turns, and the most assistant messages a request of
+ * this run carries (those given, plus one per model call before the last).
+ *
+ * @param options - The caller's options.
+ * @returns The cache plan.
+ */
+function cachePlanOf(options: RunToolLoopOptions): CachePlan {
+  const givenAssistants = options.messages.filter(message => message.role === "assistant").length;
+  return {
+    mode: options.cache ?? DEFAULT_CACHE,
+    keepImages: options.keepImages ?? DEFAULT_KEEP_IMAGES,
+    maxAssistants: givenAssistants + options.maxSteps - 1
+  };
+}
+
+/**
+ * Sets up a run: copies the given messages, builds the tool definitions and
+ * fixes the cache plan.
  *
  * @param options - The caller's options.
  * @returns The loop, before its first step.
@@ -109,6 +136,7 @@ function startLoop(options: RunToolLoopOptions): Loop {
   return {
     options,
     definitions: toolDefinitions(options.tools),
+    cache: cachePlanOf(options),
     messages: [...options.messages],
     stepCostUsd: 0,
     steps: 0,
@@ -153,8 +181,9 @@ async function spentNow(loop: Loop): Promise<number> {
 }
 
 /**
- * The request of a model call: the history with old tool images dropped, the
- * tools, a cached system text and the reasoning when set.
+ * The request of a model call: the history with old tool images dropped and
+ * the cache marks of the run's mode, the tools, the system mark unless the
+ * mode leaves it out, and the reasoning when set.
  *
  * @param loop - The loop.
  * @param history - The history to send.
@@ -162,14 +191,18 @@ async function spentNow(loop: Loop): Promise<number> {
  */
 function modelRequest(loop: Loop, history: readonly ChatMessage[]): PromptGenRequest {
   const { options } = loop;
-  const request: PromptGenRequest = {
+  const { messages, cacheSystem } = cachedRequest(history, loop.cache);
+
+  // A request without the system mark carries no `cacheSystem` key at all.
+  const plain: PromptGenRequest = {
     prompt: "",
     system: options.system,
     model: options.model,
-    messages: withoutOldImages(history, options.keepImages ?? DEFAULT_KEEP_IMAGES),
-    tools: loop.definitions,
-    cacheSystem: true
+    messages,
+    tools: loop.definitions
   };
+  const request: PromptGenRequest = cacheSystem ? { ...plain, cacheSystem: true } : plain;
+
   if (options.reasoning === undefined) return request;
   return { ...request, params: { reasoning: options.reasoning } };
 }
@@ -416,7 +449,11 @@ async function resultOf(loop: Loop, stoppedBy: StopReason): Promise<RunToolLoopR
  * of that turn). On a budget, steps or cancel stop the open calls are
  * answered `Not run: <reason>.`, so `messages` is a valid history to resume
  * from. Calls only `options.generate`; a tool's error and a `generate` error
- * propagate unless the run was aborted.
+ * propagate unless the run was aborted. By default each request marks the
+ * system text and the conversation up to its newest stable message as
+ * prompt-cache breakpoints; `options.cache` chooses. The marks depend on the
+ * history and the options only, so a resumed run sends the same request for
+ * the same step, and `messages` never carries them.
  *
  * @param options - The model call, the conversation, the tools, the budget, the journal and the signal.
  * @returns Why the loop stopped, the spend, the model calls, the history and the last model text.

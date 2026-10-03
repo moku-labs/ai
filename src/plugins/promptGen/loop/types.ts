@@ -191,7 +191,7 @@ export type RunToolLoopOptions = {
   model: string;
   /** Reasoning effort, sent as `params.reasoning` when set. */
   reasoning?: "off" | "low" | "medium" | "high";
-  /** System text of every call; marked as a prompt-cache breakpoint. */
+  /** System text of every call; marked as a prompt-cache breakpoint unless `cache` is `"off"`. */
   system: string;
   /** The conversation so far; never mutated. */
   messages: ChatMessage[];
@@ -240,8 +240,24 @@ export type RunToolLoopOptions = {
    * when a user message already has exactly this text.
    */
   finishNote?: string;
-  /** Assistant turns whose tool-result images stay in the request. Default 2; older images become text. */
+  /**
+   * Assistant turns whose tool-result images stay in the request. Default 2;
+   * older images become text. With `cache: "conversation"`, a tool message
+   * whose images can still be dropped is sent after the cache mark.
+   */
   keepImages?: number;
+  /**
+   * What the loop marks for the prompt cache. Default `"conversation"`: the
+   * system text, and the conversation up to its newest stable message, with
+   * two rolling marks (this request's and the previous request's). `"system"`:
+   * the system text only. `"off"`: nothing, and `cacheSystem` is not sent. The
+   * marks go on the request only, never on `messages`; a request carries at
+   * most 4 breakpoints, and the caller's own `cache: true` parts are never
+   * removed. Images: a tool message whose images `keepImages` can still drop
+   * is not stable, so the mark sits in front of it; its
+   * `[image dropped: <name>]` form is fixed and is cached.
+   */
+  cache?: "system" | "conversation" | "off";
   /** Aborts the loop: it returns `stoppedBy: "cancel"` after the running step settles. */
   signal: AbortSignal;
 };
