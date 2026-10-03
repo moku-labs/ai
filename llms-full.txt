@@ -639,6 +639,8 @@ export type PromptGenUsage = {
   promptTokens: number; completionTokens: number;
   cachedTokens: number;              // 0 when unknown
   cacheWriteTokens: number;          // 0 when unknown
+  cachedReadTokens?: number;         // set only when the provider reports it
+  cachedWriteTokens?: number;        // set only when the provider reports it
 };
 export type PromptGenResult = {
   text: string;                      // "" when the turn is only tool calls
@@ -705,6 +707,7 @@ export type RunToolLoopOptions = {
   step: <T>(key: string, work: (signal: AbortSignal) => Promise<{ value: T; costUsd: number }>) => Promise<T>;
   onStep?: (event: LoopEvent) => void;
   finishNote?: string; keepImages?: number;  // keepImages default 2
+  cache?: "system" | "conversation" | "off";  // default "conversation": system mark + up to two rolling cache: true marks on the newest stable user/tool message; max 4 breakpoints with caller marks
   signal: AbortSignal;
 };
 export type RunToolLoopResult = {
