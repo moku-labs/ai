@@ -12,11 +12,15 @@ import type { ClaudeRun } from "../cli";
 import { TerminalProviderError } from "../errors";
 
 /**
- * The answer of a successful run, with the CLI's own accounting.
+ * The answer of a successful run, with the CLI's own accounting. The two
+ * optional cache counts are set only when the CLI reported them, so a
+ * reported 0 and "not reported" stay apart.
  *
  * @example
  * ```ts
- * const answer: ClaudeAnswer = { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120 };
+ * const answer: ClaudeAnswer = { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120, cachedReadTokens: 900, cachedWriteTokens: 120 };
+ * // The CLI sent no cache counts: both are 0 and the optional keys are absent.
+ * const plain: ClaudeAnswer = { text: "ok", structured: undefined, listCostUsd: 0.1, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 };
  * ```
  */
 export type ClaudeAnswer = {
@@ -34,6 +38,10 @@ export type ClaudeAnswer = {
   cacheReadTokens: number;
   /** Input tokens written to the prompt cache (`usage.cache_creation_input_tokens`). */
   cacheWriteTokens: number;
+  /** `usage.cache_read_input_tokens` as reported; absent when the CLI did not send it. */
+  cachedReadTokens?: number;
+  /** `usage.cache_creation_input_tokens` as reported; absent when the CLI did not send it. */
+  cachedWriteTokens?: number;
 };
 
 /** The fields of claude's JSON result this plugin reads; the rest is ignored. */
@@ -202,7 +210,7 @@ function exitError(run: ClaudeRun): Error {
  * exit: the not-logged-in result exits 1 with valid JSON.
  *
  * @param run - The finished run.
- * @returns The answer text, the structured output if any, list price and token usage (cache tokens included).
+ * @returns The answer text, the structured output if any, list price and token usage (cache tokens included; the reported cache counts only when the CLI sent them).
  * @throws {PromptGenUnavailableError} With reason "auth" or "limit" when claude cannot serve.
  * @throws {TerminalProviderError} For a reported error, a failed exit, or a blank answer without structured output.
  * @example
@@ -220,37 +228,55 @@ export function parseClaudeResult(run: ClaudeRun): ClaudeAnswer {
   if (text.trim() === "" && structured === undefined)
     throw new TerminalProviderError(`[ai] Claude wrote no answer.\n  ${BY_HAND}`);
 
-  return {
+  const cacheReads = output.usage?.cache_read_input_tokens;
+  const cacheWrites = output.usage?.cache_creation_input_tokens;
+  const answer: ClaudeAnswer = {
     text,
     structured,
     listCostUsd: output.total_cost_usd ?? 0,
     inputTokens: output.usage?.input_tokens ?? 0,
     outputTokens: output.usage?.output_tokens ?? 0,
-    cacheReadTokens: output.usage?.cache_read_input_tokens ?? 0,
-    cacheWriteTokens: output.usage?.cache_creation_input_tokens ?? 0
+    cacheReadTokens: cacheReads ?? 0,
+    cacheWriteTokens: cacheWrites ?? 0
   };
+
+  // A reported cache count is kept, 0 included; an unreported one leaves the key out.
+  if (cacheReads !== undefined) answer.cachedReadTokens = cacheReads;
+  if (cacheWrites !== undefined) answer.cachedWriteTokens = cacheWrites;
+  return answer;
 }
 
 /**
  * The typed token usage of an answer. claude's `input_tokens` leaves out the
  * cached part, so the prompt tokens are input plus cache reads plus cache
- * writes.
+ * writes. `cachedReadTokens` and `cachedWriteTokens` are set only when the
+ * CLI reported the count (a reported 0 is kept); otherwise the key is absent.
  *
  * @param answer - The parsed run answer.
  * @returns The usage for `PromptGenResult.usage`.
  * @example
  * ```ts
- * usageOf({ text: "ok", structured: undefined, listCostUsd: 0, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120 });
- * // => { promptTokens: 1025, completionTokens: 2, cachedTokens: 900, cacheWriteTokens: 120 }
+ * // The CLI reported both cache counts.
+ * usageOf({ text: "ok", structured: undefined, listCostUsd: 0, inputTokens: 5, outputTokens: 2, cacheReadTokens: 900, cacheWriteTokens: 120, cachedReadTokens: 900, cachedWriteTokens: 120 });
+ * // => { promptTokens: 1025, completionTokens: 2, cachedTokens: 900, cacheWriteTokens: 120, cachedReadTokens: 900, cachedWriteTokens: 120 }
+ * // No cache counts: the optional keys are absent.
+ * usageOf({ text: "ok", structured: undefined, listCostUsd: 0, inputTokens: 5, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 });
+ * // => { promptTokens: 5, completionTokens: 2, cachedTokens: 0, cacheWriteTokens: 0 }
  * ```
  */
 export function usageOf(answer: ClaudeAnswer): PromptGenUsage {
-  return {
+  // The counts every provider has: 0 when the CLI does not report one.
+  const result: PromptGenUsage = {
     promptTokens: answer.inputTokens + answer.cacheReadTokens + answer.cacheWriteTokens,
     completionTokens: answer.outputTokens,
     cachedTokens: answer.cacheReadTokens,
     cacheWriteTokens: answer.cacheWriteTokens
   };
+
+  // A reported cache count is kept, 0 included; an unreported one leaves the key out.
+  if (answer.cachedReadTokens !== undefined) result.cachedReadTokens = answer.cachedReadTokens;
+  if (answer.cachedWriteTokens !== undefined) result.cachedWriteTokens = answer.cachedWriteTokens;
+  return result;
 }
 
 /**

@@ -40,13 +40,15 @@ function failureOf(value: ReturnType<typeof run>): unknown {
 
 describe("parseClaudeResult", () => {
   it("reads the answer, list price and token usage from the success sample", () => {
-    expect(parseClaudeResult(run(SUCCESS_STDOUT))).toEqual({
+    expect(parseClaudeResult(run(SUCCESS_STDOUT))).toStrictEqual({
       text: "ok",
+      structured: undefined,
       listCostUsd: 0.114_22,
       inputTokens: 12,
       outputTokens: 3,
       cacheReadTokens: 0,
-      cacheWriteTokens: 0
+      cacheWriteTokens: 0,
+      cachedReadTokens: 0
     });
   });
 
@@ -151,8 +153,9 @@ describe("parseClaudeResult", () => {
   it("defaults missing cost and usage to 0", () => {
     const stdout = JSON.stringify({ is_error: false, result: "ok" });
 
-    expect(parseClaudeResult(run(stdout))).toEqual({
+    expect(parseClaudeResult(run(stdout))).toStrictEqual({
       text: "ok",
+      structured: undefined,
       listCostUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
@@ -173,29 +176,90 @@ describe("parseClaudeResult", () => {
       inputTokens: 5,
       outputTokens: 2,
       cacheReadTokens: 900,
-      cacheWriteTokens: 120
+      cacheWriteTokens: 120,
+      cachedReadTokens: 900,
+      cachedWriteTokens: 120
     });
+  });
+
+  it("keeps a reported cache count of 0 and leaves an unreported one out", () => {
+    const onlyWrites = { input_tokens: 5, output_tokens: 2, cache_creation_input_tokens: 0 };
+
+    const answer = parseClaudeResult(run(claudeJson({ usage: onlyWrites })));
+
+    expect(answer).toMatchObject({ cacheReadTokens: 0, cacheWriteTokens: 0, cachedWriteTokens: 0 });
+    expect(answer).not.toHaveProperty("cachedReadTokens");
+  });
+
+  it("leaves both reported cache counts out when the CLI sends none", () => {
+    const answer = parseClaudeResult(run(claudeJson({})));
+
+    expect(answer).not.toHaveProperty("cachedReadTokens");
+    expect(answer).not.toHaveProperty("cachedWriteTokens");
   });
 });
 
 describe("usageOf", () => {
-  it("counts cache reads and writes into promptTokens", () => {
-    const answer = {
-      text: "ok",
-      structured: undefined,
-      listCostUsd: 0,
-      inputTokens: 5,
-      outputTokens: 2,
-      cacheReadTokens: 900,
-      cacheWriteTokens: 120
-    };
+  const base = {
+    text: "ok",
+    structured: undefined,
+    listCostUsd: 0,
+    inputTokens: 5,
+    outputTokens: 2,
+    cacheReadTokens: 900,
+    cacheWriteTokens: 120
+  };
 
-    expect(usageOf(answer)).toEqual({
+  it("counts cache reads and writes into promptTokens", () => {
+    const answer = { ...base, cachedReadTokens: 900, cachedWriteTokens: 120 };
+
+    expect(usageOf(answer)).toStrictEqual({
       promptTokens: 1025,
       completionTokens: 2,
       cachedTokens: 900,
-      cacheWriteTokens: 120
+      cacheWriteTokens: 120,
+      cachedReadTokens: 900,
+      cachedWriteTokens: 120
     });
+  });
+
+  it("keeps a reported cache count of 0", () => {
+    const answer = {
+      ...base,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0
+    };
+
+    expect(usageOf(answer)).toStrictEqual({
+      promptTokens: 5,
+      completionTokens: 2,
+      cachedTokens: 0,
+      cacheWriteTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0
+    });
+  });
+
+  it("leaves the cached counts out when the CLI reported none", () => {
+    const answer = { ...base, cacheReadTokens: 0, cacheWriteTokens: 0 };
+
+    expect(usageOf(answer)).toStrictEqual({
+      promptTokens: 5,
+      completionTokens: 2,
+      cachedTokens: 0,
+      cacheWriteTokens: 0
+    });
+  });
+
+  it("sets only the count the CLI reported", () => {
+    const answer = { ...base, cacheWriteTokens: 0, cachedReadTokens: 900 };
+
+    const usage = usageOf(answer);
+
+    expect(usage.cachedReadTokens).toBe(900);
+    expect(usage).not.toHaveProperty("cachedWriteTokens");
   });
 });
 

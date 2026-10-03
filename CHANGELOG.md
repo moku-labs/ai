@@ -7,6 +7,17 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **promptGen: `runToolLoop` conversation prompt cache.** New option
+  `cache?: "system" | "conversation" | "off"`, default `"conversation"`. The loop marks the newest
+  stable message of each request, and the one of the request before, as cache breakpoints next to
+  the system one. At most 4 breakpoints with the caller's `cache: true` parts; rolling marks are
+  dropped first. A tool message whose images `keepImages` can still drop is sent after the mark.
+  The marks are a pure function of the history and the options, so a resumed run sends the same
+  request for the same step. `"system"` is the 0.12.0 behaviour.
+- **promptGen: `PromptGenUsage.cachedReadTokens?` and `cachedWriteTokens?`.** Set only when the
+  provider reports the count. `fal` reads `cache_read_input_tokens` / `cache_creation_input_tokens`,
+  else `prompt_tokens_details.cached_tokens` / `cache_write_tokens`. The `model` event of
+  `runToolLoop` carries them. `openai` sets `cachedReadTokens`; `claude` sets both.
 - **ark: Seedream group generation.** `params.images: N` on an `image` item with `provider: ark`
   asks for up to N consistent images from one call (`sequential_image_generation: "auto"`,
   `max_images: N`). N is 1 to 15, and refs plus N is at most 15. A short group logs
@@ -20,6 +31,17 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 - **journal:** `items.outputs` column (migrated in place), `DoneOutput` and `DoneResult` types;
   `commitDone`, `findDoneArtifact` and `reuseDone` carry outputs.
 - **image:** `ImageOutput` type and `ImageResult.images`.
+
+### Changed
+
+- **runToolLoop: default request shape.** With the default `cache: "conversation"` up to two
+  text parts of each request carry `cache: true`; a marked string content is sent as one text part.
+  Pass `cache: "system"` for the 0.12.0 request.
+- **fal: `usage.cachedTokens` also reads `cache_read_input_tokens`.** Before it read only
+  `prompt_tokens_details.cached_tokens`.
+- **fal: cost is unchanged.** `usage.cost` wins. The token fallback has no cache rates and prices
+  cached tokens as normal input. The pass-through of `cache_control` by fal's router is not
+  confirmed live; the fal README has a one-request check.
 
 ### Fixed
 

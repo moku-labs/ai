@@ -138,7 +138,13 @@ describe("createPromptGenHandler", () => {
         costUsd: 0,
         toolCalls: [],
         finishReason: "stop",
-        usage: { promptTokens: 12, completionTokens: 3, cachedTokens: 0, cacheWriteTokens: 0 },
+        usage: {
+          promptTokens: 12,
+          completionTokens: 3,
+          cachedTokens: 0,
+          cacheWriteTokens: 0,
+          cachedReadTokens: 0
+        },
         meta: {
           provider: "claude",
           model: "claude-opus-5-5",
@@ -348,13 +354,30 @@ describe("createPromptGenHandler", () => {
 
       const result = await handler.execute({ prompt: "p" }, {});
 
-      expect(result.usage).toEqual({
+      expect(result.usage).toStrictEqual({
         promptTokens: 2300,
         completionTokens: 7,
         cachedTokens: 1800,
-        cacheWriteTokens: 400
+        cacheWriteTokens: 400,
+        cachedReadTokens: 1800,
+        cachedWriteTokens: 400
       });
       expect(result.meta).toMatchObject({ usage: { inputTokens: 100, outputTokens: 7 } });
+    });
+
+    it("leaves the cached counts out of the typed usage when the CLI reports none", async () => {
+      const usage = { input_tokens: 100, output_tokens: 7 };
+      const bin = writeFakeClaude(root, printStdout(claudeJson({ usage })));
+      const handler = createPromptGenHandler(createTestCtx({ config: { bin, workDir: work } }));
+
+      const result = await handler.execute({ prompt: "p" }, {});
+
+      expect(result.usage).toStrictEqual({
+        promptTokens: 100,
+        completionTokens: 7,
+        cachedTokens: 0,
+        cacheWriteTokens: 0
+      });
     });
 
     it("ignores cacheSystem alone: same argv and stdin as without it", async () => {

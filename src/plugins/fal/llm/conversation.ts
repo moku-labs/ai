@@ -465,27 +465,47 @@ export function finishReasonOf(value: string | undefined): FinishReason {
 }
 
 /**
- * The typed usage of an answer; each count is 0 when fal does not report it.
- * Cache writes are `cache_creation_input_tokens`, else
- * `prompt_tokens_details.cache_write_tokens`.
+ * The typed usage of an answer. Cache reads are `cache_read_input_tokens`
+ * (Anthropic style), else `prompt_tokens_details.cached_tokens` (OpenRouter
+ * style). Cache writes are `cache_creation_input_tokens`, else
+ * `prompt_tokens_details.cache_write_tokens`. `promptTokens`,
+ * `completionTokens`, `cachedTokens` and `cacheWriteTokens` are 0 when fal
+ * does not report them. `cachedReadTokens` and `cachedWriteTokens` are set
+ * only when the count is in the answer (a reported 0 is kept); otherwise
+ * the key is absent.
  *
  * @param usage - The answer's `usage` field, untrusted.
  * @returns The usage.
  * @example
  * ```ts
- * usageOf({ prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 1800 } }); // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0 }
+ * // OpenRouter style: a read count, no write count.
+ * usageOf({ prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 1800 } }); // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0, cachedReadTokens: 1800 }
+ * // Anthropic style: both counts, a reported 0 is kept.
+ * usageOf({ prompt_tokens: 2400, completion_tokens: 120, cache_read_input_tokens: 0, cache_creation_input_tokens: 2200 }); // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 0, cacheWriteTokens: 2200, cachedReadTokens: 0, cachedWriteTokens: 2200 }
+ * // No cache counts: the optional keys are absent.
+ * usageOf({ prompt_tokens: 10, completion_tokens: 5 }); // => { promptTokens: 10, completionTokens: 5, cachedTokens: 0, cacheWriteTokens: 0 }
  * ```
  */
 export function usageOf(usage: unknown): PromptGenUsage {
+  // The Anthropic-style keys win; OpenRouter's prompt_tokens_details is the fallback.
   const details = readField(usage, "prompt_tokens_details");
+  const cacheReads =
+    readNumber(usage, "cache_read_input_tokens") ?? readNumber(details, "cached_tokens");
   const cacheWrites =
     readNumber(usage, "cache_creation_input_tokens") ?? readNumber(details, "cache_write_tokens");
-  return {
+
+  // The counts every provider has: 0 when fal does not report one.
+  const result: PromptGenUsage = {
     promptTokens: readNumber(usage, "prompt_tokens") ?? 0,
     completionTokens: readNumber(usage, "completion_tokens") ?? 0,
-    cachedTokens: readNumber(details, "cached_tokens") ?? 0,
+    cachedTokens: cacheReads ?? 0,
     cacheWriteTokens: cacheWrites ?? 0
   };
+
+  // A reported cache count is kept, 0 included; an unreported one leaves the key out.
+  if (cacheReads !== undefined) result.cachedReadTokens = cacheReads;
+  if (cacheWrites !== undefined) result.cachedWriteTokens = cacheWrites;
+  return result;
 }
 
 /**

@@ -329,20 +329,149 @@ With `messages` the request is a multi-turn chat and `prompt` is ignored (it may
 | `tools` | `[{ type: "function", function: { name, description, parameters: inputSchema } }]`; an empty list sends none |
 | `toolChoice` | `tool_choice`: `"auto"` / `"none"` / `"required"` as is, `{ name }` as `{ type: "function", function: { name } }`; not sent when unset |
 
-`cache_control` reaches Anthropic models through OpenRouter; other model families ignore it. `messages: []` and
-`params.images` together with `messages` are a terminal 400 before any upload.
+`cache_control` is for Anthropic models; other model families ignore it. Whether it passes through fal is not
+confirmed, see "Does fal pass `cache_control` through" below. `messages: []` and `params.images` together with
+`messages` are a terminal 400 before any upload.
 
 The answer's `choices[0].message.tool_calls` become `toolCalls`: `arguments` is parsed, `""` or missing is `{}`, text
 that is not JSON throws `ToolArgumentsError` with the raw text (never retried). A null content is `""` when the
 answer has tool calls or ended by `tool_calls` or `length`. `finishReason` is `stop`, `tool_calls` or `length` as
 sent, else `other`.
 
-| `usage` | From fal's `usage`, 0 when absent |
-| --- | --- |
-| `promptTokens` | `prompt_tokens` |
-| `completionTokens` | `completion_tokens` |
-| `cachedTokens` | `prompt_tokens_details.cached_tokens` |
-| `cacheWriteTokens` | `cache_creation_input_tokens`, else `prompt_tokens_details.cache_write_tokens` |
+| `usage` | From fal's `usage` | When fal does not report it |
+| --- | --- | --- |
+| `promptTokens` | `prompt_tokens` | `0` |
+| `completionTokens` | `completion_tokens` | `0` |
+| `cachedTokens` | `cache_read_input_tokens`, else `prompt_tokens_details.cached_tokens` | `0` |
+| `cacheWriteTokens` | `cache_creation_input_tokens`, else `prompt_tokens_details.cache_write_tokens` | `0` |
+| `cachedReadTokens` | the same count as `cachedTokens` | the key is absent |
+| `cachedWriteTokens` | the same count as `cacheWriteTokens` | the key is absent |
+
+`cachedReadTokens` and `cachedWriteTokens` tell a reported `0` from "not reported". A reported `0` is kept as `0`.
+`cachedTokens` reads `cache_read_input_tokens` first. Before this change it read only
+`prompt_tokens_details.cached_tokens`.
+
+**Cost.** `costUsd` is fal's `usage.cost` when fal reports it. Else it is the token counts × the table price.
+The table has no cache rates. So in the token fallback cached tokens are priced as normal input tokens. The
+fallback never shows a cache saving. Only `usage.cost` can show one.
+
+#### Does fal pass `cache_control` through
+
+Status: NOT confirmed live. No saving is claimed until the check below shows `cached_tokens > 0`.
+
+What the plugin sends:
+
+- `cache_control: { type: "ephemeral" }` on the system text with `cacheSystem: true`.
+- `cache_control: { type: "ephemeral" }` on every text part with `cache: true`, in user and tool messages.
+
+What is documented:
+
+- OpenRouter documents `cache_control` on text parts for Anthropic models.
+- fal's router endpoint schema accepts open bodies (`additionalProperties: true`). It says the body follows the
+  OpenAI chat completions format.
+- The response `usage` is fal's shape: `prompt_tokens`, `completion_tokens`, `total_tokens`, `cost`,
+  `prompt_tokens_details`.
+
+What is not documented:
+
+- fal does not state that `cache_control` reaches Anthropic.
+- The mark on tool-role parts is not in OpenRouter's examples.
+
+#### Live check (paid, about 0.03 USD per request, run by hand)
+
+The script makes exactly one request per run. Save it outside the repo as `check-cache.ts`. It needs `FAL_KEY`
+in the environment.
+
+```bash
+bun check-cache.ts          # run 1: writes the cache
+bun check-cache.ts          # run 2: within 5 minutes of run 1, reads the cache
+bun check-cache.ts string   # run 3: within 5 minutes of run 2, tool result as a plain string
+```
+
+```ts
+// check-cache.ts: one paid request to fal per run. Prints the answer's usage.
+const CHAT_URL = "https://fal.run/openrouter/router/openai/v1/chat/completions";
+const MARK = { type: "ephemeral" };
+
+const key = process.env.FAL_KEY;
+if (!key) throw new Error("FAL_KEY is not set.");
+
+// About 30 000 characters, the same on every run: no time, no random.
+// The prefix must be above the 4096-token cache minimum of the model.
+const NOTES = Array.from(
+  { length: 530 },
+  (_, index) =>
+    `Note ${String(index + 1).padStart(3, "0")}: scene ${index + 1} opens on a wide shot of the harbour.`
+).join("\n");
+
+// Run 3 ("string"): the tool result is a plain string and the mark moves to a next user message.
+const asString = process.argv[2] === "string";
+const toolResult = asString
+  ? { role: "tool", tool_call_id: "toolu_01", content: NOTES }
+  : {
+      role: "tool",
+      tool_call_id: "toolu_01",
+      content: [{ type: "text", text: NOTES, cache_control: MARK }]
+    };
+const followUp = asString
+  ? [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Answer in one word.", cache_control: MARK }]
+      }
+    ]
+  : [];
+
+const body = {
+  model: "anthropic/claude-opus-5.5",
+  max_tokens: 16,
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "read_notes",
+        description: "Return the production notes.",
+        parameters: { type: "object", properties: {} }
+      }
+    }
+  ],
+  messages: [
+    { role: "system", content: "You answer in one word." },
+    { role: "user", content: "Read the notes." },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        { id: "toolu_01", type: "function", function: { name: "read_notes", arguments: "{}" } }
+      ]
+    },
+    toolResult,
+    ...followUp
+  ]
+};
+
+// The same auth header as the plugin's client: "Authorization: Key <FAL_KEY>".
+const response = await fetch(CHAT_URL, {
+  method: "POST",
+  headers: { Authorization: `Key ${key}`, "content-type": "application/json" },
+  body: JSON.stringify(body)
+});
+const answer = await response.json();
+
+console.log(`HTTP ${response.status}, ${asString ? "string" : "part"} form`);
+console.log(JSON.stringify(answer.usage ?? answer, null, 2));
+```
+
+What the output means:
+
+| Run | Output | Meaning |
+| --- | --- | --- |
+| 1 | `cache_write_tokens` (or `cache_creation_input_tokens`) > 0 | marks on tool parts pass through |
+| 2 | `cached_tokens` > 0 | reads work |
+| 3 | `cached_tokens` > 0 | the string form and the part form share the cache |
+| any | all zero, or the fields are missing | fal drops the mark or hides the counts. Compare `usage.cost` of run 1 and run 2: a read costs about 0.1× input |
+
+When the script prints no `usage`, it prints the whole answer. That is the error body.
 
 ## Music
 

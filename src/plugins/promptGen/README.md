@@ -93,7 +93,7 @@ type ToolCall = { id: string; name: string; input: unknown };
 /** inputSchema: a JSON schema. */
 type ToolDefinition = { name: string; description: string; inputSchema: Record<string, unknown> };
 
-/** Counts a provider does not report are 0. */
+/** Counts a provider does not report are 0. The two optional counts are absent instead. */
 type PromptGenUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -101,6 +101,10 @@ type PromptGenUsage = {
   cachedTokens: number;
   /** Tokens written to the cache. */
   cacheWriteTokens: number;
+  /** Prompt tokens read from the cache. Set only when the provider reports the count. */
+  cachedReadTokens?: number;
+  /** Prompt tokens written to the cache. Set only when the provider reports the count. */
+  cachedWriteTokens?: number;
 };
 
 type PromptGenHandler = {
@@ -140,7 +144,7 @@ Who serves the new fields:
 
 | Provider | `messages` / `tools` / `toolChoice` | `cacheSystem` | `usage` |
 | --- | --- | --- | --- |
-| `fal` | served. See [fal: Tool calling and cache](../fal/README.md#tool-calling-and-cache) | `cache_control` on the system text | prompt, completion, cached, cache-write tokens |
+| `fal` | served. See [fal: Tool calling and cache](../fal/README.md#tool-calling-and-cache) | `cache_control` on the system text | prompt, completion, cached, cache-write tokens; `cachedReadTokens` / `cachedWriteTokens` when fal reports them |
 | `claude` | `PromptGenUnavailableError` `"unsupported"` | ignored | `promptTokens` = input + cache read + cache write; cached and cache-write tokens |
 | `codex` | `PromptGenUnavailableError` `"unsupported"` | ignored | all 0. The CLI reports none |
 | `openai` | `PromptGenUnavailableError` `"unsupported"` | ignored | prompt, completion, cached tokens |
@@ -308,7 +312,7 @@ function runToolLoop(options: RunToolLoopOptions): Promise<RunToolLoopResult>;
 | `generate` | `(request, signal) => Promise<PromptGenResult>` | One model call. Usually `app.promptGen.generate` with `provider: "fal"`. |
 | `model` | `string` | Model id sent with every call. |
 | `reasoning` | `"off" \| "low" \| "medium" \| "high"` | Sent as `params.reasoning` when set. |
-| `system` | `string` | System text of every call. Always sent with `cacheSystem: true`. |
+| `system` | `string` | System text of every call. Marked as a prompt-cache breakpoint unless `cache` is `"off"`. |
 | `messages` | `ChatMessage[]` | The conversation so far. Never changed. |
 | `tools` | `readonly ToolSpec[]` | Tools the model may call. |
 | `budget.usd` | `number` | The limit in USD. |
@@ -320,11 +324,15 @@ function runToolLoop(options: RunToolLoopOptions): Promise<RunToolLoopResult>;
 | `onStep` | `(event: LoopEvent) => void` | Called with every event. |
 | `finishNote` | `string` | User text added once, before the first model call made in finish mode. |
 | `keepImages` | `number` | Assistant turns whose tool-result images stay in the request. Default 2. |
+| `cache` | `"system" \| "conversation" \| "off"` | What the loop marks for the prompt cache. Default `"conversation"`. See [Prompt cache](#prompt-cache). |
 | `signal` | `AbortSignal` | Cancels the loop. |
 
 Each model call sends `{ prompt: "", system, model, messages, tools, cacheSystem: true }`, plus
 `params: { reasoning }` when `reasoning` is set. `messages` is the history with old images
-trimmed (see `keepImages`). Each tool becomes
+trimmed (see `keepImages`). With `cache: "conversation"` one or two of its text parts also carry
+`cache: true`. The request has no `cacheSystem` key with `cache: "off"`, and with
+`cache: "conversation"` when the caller's messages already carry 4 or more marks. See
+[Prompt cache](#prompt-cache). Each tool becomes
 `{ name, description, inputSchema }`, where `inputSchema` is
 `z.toJSONSchema(schema, { io: "input" })` without the `$schema` key.
 
@@ -423,6 +431,101 @@ a work that throws, and must pass its error on unchanged.
   two halves of a start/wait tool it stops before `wait`.
 - **`maxSteps`** counts model calls, replayed ones too.
 
+### Prompt cache
+
+A provider with a prompt cache stores the start of a request. A later request that starts with the
+same content reads that part from the cache. A cache mark says where the stored part ends. It is
+also called a breakpoint. `cache` chooses what the loop marks.
+
+| `cache` | The loop marks | The request |
+| --- | --- | --- |
+| `"conversation"` | The system text, and the conversation up to its newest stable message. This is the default. | `cacheSystem: true`, and `cache: true` on one or two text parts of `messages`. |
+| `"system"` | The system text only. This is the behaviour of 0.12.0. | `cacheSystem: true`. The loop marks no part. |
+| `"off"` | Nothing. | No `cacheSystem` key. The loop marks no part. |
+
+A `cache: true` part that the caller set is sent as it is, in every mode.
+
+#### What is cached
+
+- **The system mark** covers the tools and the system text. They are the same in every step.
+- **A conversation mark** covers everything before it: the tools, the system text, and the messages
+  up to the marked one.
+- **The marked message** is the newest stable message that is a user message or a tool message
+  with text. The mark goes on its last text part that is not blank. A string content is sent as one
+  text part with the mark. An assistant message is never marked.
+- **Two rolling marks.** One is the mark of this request. The other is the mark of the request
+  before, at the same place as in that request. The second one lets the provider read the entry
+  that the step before wrote, however many parts the newest turn added. The first one writes the
+  entry that the next step reads.
+- **The marks are on the request only.** The loop sets them on copies. `options.messages` and
+  `result.messages` never carry them.
+
+A request carries at most 4 breakpoints. This is the Anthropic limit. The system mark takes one.
+The caller's marks are never removed. The rolling marks take what is left, and the older one is
+dropped first. A rolling mark on a part that the caller already marked takes no slot.
+
+| Caller marks in `messages` | System mark | Rolling marks |
+| --- | --- | --- |
+| 0 or 1 | yes | 2 |
+| 2 | yes | 1, the newest |
+| 3 | yes | none |
+| 4 or more | no | none |
+
+With 4 or more caller marks the caller owns every mark. `"system"` still sends
+`cacheSystem: true` then, as 0.12.0 did.
+
+#### Images
+
+- `keepImages` replaces the images of old tool results with the text `[image dropped: <name>]`.
+- The replaced form is fixed. Every later step sends the same text, so it is stable and can be
+  cached.
+- A tool message whose images can still be dropped in this run is not stable. It is sent after the
+  mark. So the last `keepImages` image turns are not cached.
+- `keepImages: 0` replaces every tool image in every request. A value of `maxSteps` or more never
+  replaces an image of a new conversation. Both make every message cacheable. For a continued
+  conversation, add the assistant turns already in `messages` to that value.
+- The image bytes must be the same file in every step. The fal upload cache keys an upload by its
+  content hash. So the same image gets the same URL within one process. After a process restart
+  the images that are still in the request get new URLs. A cached part with such an image misses
+  the cache once, on that step.
+
+#### Resume
+
+The marks are a pure function of the history and the options: `messages`, `keepImages`, `cache`
+and `maxSteps`. The loop keeps no cache state. A resumed run sends the same request for the same
+step as the first run did.
+
+#### Providers
+
+| Provider | What happens to the marks |
+| --- | --- |
+| `fal` | A marked text part is sent with `cache_control: { type: "ephemeral" }`. Model families other than Anthropic ignore the marks. |
+| `claude`, `codex`, `openai` | They refuse `messages` and `tools` with `PromptGenUnavailableError` `"unsupported"`. So the loop and its cache do not run on them. |
+
+OpenRouter documents `cache_control` for Anthropic models:
+
+| Rule | Value |
+| --- | --- |
+| Breakpoints per request | 4 |
+| Lifetime of an entry | 5 minutes |
+| Price of a cache read | 0.1× the input price |
+| Price of a cache write | 1.25× the input price |
+| Shortest prefix that is cached, Opus-class models | 4096 tokens |
+| Shortest prefix that is cached, Sonnet-class models | 1024 tokens |
+
+One case is NOT confirmed live. fal's router accepts open request bodies. But its pass-through of
+`cache_control` on the parts of a `tool` message has not been checked against the live service.
+[fal: Tool calling and cache](../fal/README.md#tool-calling-and-cache) has the check.
+
+#### Usage and cost
+
+- `cachedReadTokens` and `cachedWriteTokens` are set when the provider reports them. They are on
+  `PromptGenResult.usage` and on the `usage` of the `model` event. They are absent when the
+  provider reports no count. `cachedTokens` and `cacheWriteTokens` stay as before: 0 when unknown.
+- `costUsd` is the provider's reported cost when the answer has one.
+- The token-count fallback has no cache rates in the price table. It prices cached tokens as
+  normal input. This is unchanged.
+
 ### Result
 
 | Field | Meaning |
@@ -430,7 +533,7 @@ a work that throws, and must pass its error on unchanged.
 | `stoppedBy` | `"done" \| "budget" \| "steps" \| "cancel" \| "asked"` |
 | `spentUsd` | Spend at the stop: `budget.spentUsd` + step costs + `budget.spent()`. |
 | `steps` | Model calls made, replayed ones included. |
-| `messages` | The given messages, then every turn of this run. |
+| `messages` | The given messages, then every turn of this run. It never carries the loop's cache marks. |
 | `finalText` | The last model text; `null` when it was empty or no model call ran. |
 | `asked` | `{ input }` of the `ask` call; set only for `"asked"`. |
 
