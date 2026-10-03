@@ -317,7 +317,9 @@ describe("answer with tool calls", () => {
         promptTokens: 2431,
         completionTokens: 58,
         cachedTokens: 1820,
-        cacheWriteTokens: 412
+        cacheWriteTokens: 412,
+        cachedReadTokens: 1820,
+        cachedWriteTokens: 412
       },
       meta: {
         modelId: OPUS,
@@ -412,11 +414,12 @@ describe("answer with tool calls", () => {
       )
     );
     const result = await createPromptGenHandler(createTestCtx()).execute({ prompt: "p" }, {});
-    expect(result.usage).toEqual({
+    expect(result.usage).toStrictEqual({
       promptTokens: 100,
       completionTokens: 3,
       cachedTokens: 0,
-      cacheWriteTokens: 90
+      cacheWriteTokens: 90,
+      cachedWriteTokens: 90
     });
   });
 
@@ -431,7 +434,7 @@ describe("answer with tool calls", () => {
     );
     // 1 token in (abcd) × 4, 2 tokens out × 20, per M.
     expect(result).toMatchObject({ costUsd: 0.000_044, meta: { costSource: "chars" } });
-    expect(result.usage).toEqual({
+    expect(result.usage).toStrictEqual({
       promptTokens: 0,
       completionTokens: 0,
       cachedTokens: 0,

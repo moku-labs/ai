@@ -135,6 +135,20 @@ describe("turnMessages", () => {
     ]);
   });
 
+  it("marks a cached text part of a tool message", () => {
+    const messages: ChatMessage[] = [
+      { role: "tool", toolCallId: "toolu_01", content: [{ type: "text", text: "x", cache: true }] }
+    ];
+
+    expect(turnMessages(messages, [])).toStrictEqual([
+      {
+        role: "tool",
+        tool_call_id: "toolu_01",
+        content: [{ type: "text", text: "x", cache_control: { type: "ephemeral" } }]
+      }
+    ]);
+  });
+
   it("leaves image parts out before the upload", () => {
     expect(turnMessages([{ role: "user", content: [STILL] }], [])).toEqual([
       { role: "user", content: [] }
@@ -263,11 +277,13 @@ describe("usageOf", () => {
         prompt_tokens_details: { cached_tokens: 1800, cache_write_tokens: 7 },
         cache_creation_input_tokens: 300
       })
-    ).toEqual({
+    ).toStrictEqual({
       promptTokens: 2400,
       completionTokens: 120,
       cachedTokens: 1800,
-      cacheWriteTokens: 300
+      cacheWriteTokens: 300,
+      cachedReadTokens: 1800,
+      cachedWriteTokens: 300
     });
   });
 
@@ -276,11 +292,124 @@ describe("usageOf", () => {
   });
 
   it("reads 0 for every count fal does not report", () => {
-    expect(usageOf(undefined)).toEqual({
+    expect(usageOf(undefined)).toStrictEqual({
       promptTokens: 0,
       completionTokens: 0,
       cachedTokens: 0,
       cacheWriteTokens: 0
+    });
+  });
+
+  it("reads Anthropic-style cache counts", () => {
+    expect(
+      usageOf({
+        prompt_tokens: 9000,
+        completion_tokens: 16,
+        cache_read_input_tokens: 7400,
+        cache_creation_input_tokens: 1200
+      })
+    ).toStrictEqual({
+      promptTokens: 9000,
+      completionTokens: 16,
+      cachedTokens: 7400,
+      cacheWriteTokens: 1200,
+      cachedReadTokens: 7400,
+      cachedWriteTokens: 1200
+    });
+  });
+
+  it("reads OpenRouter-style cache counts from prompt_tokens_details", () => {
+    expect(
+      usageOf({
+        prompt_tokens: 9000,
+        completion_tokens: 16,
+        prompt_tokens_details: { cached_tokens: 7400, cache_write_tokens: 1200 }
+      })
+    ).toStrictEqual({
+      promptTokens: 9000,
+      completionTokens: 16,
+      cachedTokens: 7400,
+      cacheWriteTokens: 1200,
+      cachedReadTokens: 7400,
+      cachedWriteTokens: 1200
+    });
+  });
+
+  it("prefers the Anthropic-style counts when both styles are present", () => {
+    expect(
+      usageOf({
+        prompt_tokens: 9000,
+        completion_tokens: 16,
+        cache_read_input_tokens: 7400,
+        cache_creation_input_tokens: 1200,
+        prompt_tokens_details: { cached_tokens: 5, cache_write_tokens: 6 }
+      })
+    ).toStrictEqual({
+      promptTokens: 9000,
+      completionTokens: 16,
+      cachedTokens: 7400,
+      cacheWriteTokens: 1200,
+      cachedReadTokens: 7400,
+      cachedWriteTokens: 1200
+    });
+  });
+
+  it("leaves the optional cache counts out when the answer has none", () => {
+    const usage = usageOf({ prompt_tokens: 9000, completion_tokens: 16 });
+
+    expect(usage).toStrictEqual({
+      promptTokens: 9000,
+      completionTokens: 16,
+      cachedTokens: 0,
+      cacheWriteTokens: 0
+    });
+    expect(Object.keys(usage)).not.toContain("cachedReadTokens");
+    expect(Object.keys(usage)).not.toContain("cachedWriteTokens");
+  });
+
+  it("sets only the count the answer reports", () => {
+    expect(usageOf({ cache_read_input_tokens: 7400 })).toStrictEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 7400,
+      cacheWriteTokens: 0,
+      cachedReadTokens: 7400
+    });
+    expect(usageOf({ prompt_tokens_details: { cache_write_tokens: 1200 } })).toStrictEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 0,
+      cacheWriteTokens: 1200,
+      cachedWriteTokens: 1200
+    });
+  });
+
+  it.each([
+    ["Anthropic-style", { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }],
+    ["OpenRouter-style", { prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } }]
+  ])("keeps a reported %s count of 0", (_label, reported) => {
+    expect(usageOf({ prompt_tokens: 9000, completion_tokens: 16, ...reported })).toStrictEqual({
+      promptTokens: 9000,
+      completionTokens: 16,
+      cachedTokens: 0,
+      cacheWriteTokens: 0,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0
+    });
+  });
+
+  it("falls back to prompt_tokens_details when an Anthropic-style count is not a number", () => {
+    expect(
+      usageOf({
+        cache_read_input_tokens: "7400",
+        prompt_tokens_details: { cached_tokens: 5 }
+      })
+    ).toStrictEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 5,
+      cacheWriteTokens: 0,
+      cachedReadTokens: 5
     });
   });
 });
