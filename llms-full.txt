@@ -10,7 +10,8 @@ Contents:
 2. Public package surface
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
-   elevenlabs, openai, compose, cli, asset, ark, music, fal, apimodels, sfx, sprite (full types + APIs)
+   image, video, elevenlabs, openai, codex, claude, compose, cli, asset, ark, music, fal,
+   apimodels, sfx, sprite (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -770,7 +771,7 @@ return them (a one-turn handler: toolCalls [], finishReason "stop", its token co
 A request without messages, tools, toolChoice and cacheSystem is sent exactly as before.
 claude, codex and openai throw PromptGenUnavailableError reason "unsupported" for
 messages/tools/toolChoice in estimate() and execute(); cacheSystem alone is ignored there.
-generate then falls back to the next provider; fal serves them (see §4 fal). estimate has
+generate then falls back to the next provider; fal serves them (see §4.18 fal). estimate has
 no fallback: estimate a tool request with { provider: "fal" }. ToolArgumentsError is not
 "unavailable": generate rethrows it at once.
 
@@ -845,11 +846,152 @@ export function runToolLoop(options: RunToolLoopOptions): Promise<RunToolLoopRes
 - Full guide: src/plugins/promptGen/README.md "Tool loop — runToolLoop".
 
 --------------------------------------------------------------------------------
-4.7 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
+4.7 image — app.image (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "image" task contract (still images); providers implement + register it; this
+plugin resolves, runtime-shape-guards (estimate and execute must be functions) and
+performs the task's ONE audited cast. No state, no lifecycle, no events, no packs. The
+runner never calls this facade; it drives the registered handlers directly. Providers in
+registration order: codex (the default), fal, ark. contract.ts imports nothing.
+
+Contract (src/plugins/image/contract.ts; `Image.*` namespace):
+
+```ts
+export type ImageFile = {           // a resolved $ref / $file input
+  path: string;
+  mimeType: string;                  // e.g. image/png
+  hash: string;                      // content hash: artifact identity follows the bytes
+};
+export type ImageRequest = {
+  prompt: string;                    // what to draw; the caller already appended the series style
+  negative?: string;                 // things to avoid
+  model?: string;                    // provider-scoped model id
+  aspect?: string;                   // e.g. "9:16"; providers default to "9:16"
+  refs?: ImageFile[];                // character sheet, location plate, earlier keyframe
+  params?: Record<string, unknown>;  // pass-through provider params
+};
+export type ImageOutput = { image: Uint8Array; mimeType: string }; // one image of a group
+export type ImageResult = {
+  image: Uint8Array;
+  mimeType: string;                  // e.g. image/png, image/webp
+  images?: ImageOutput[];            // every image of a group, in order; images[0] is image; absent for one image
+  costUsd: number;
+  meta?: Record<string, unknown>;    // metadata only — never a payload echo
+};
+export type ImageHandler = {
+  estimate(request: ImageRequest): { usd: number };
+  execute(request: ImageRequest, opts: { signal?: AbortSignal }): Promise<ImageResult>;
+};
+```
+
+Groups: a provider that makes several consistent images in one call (ark Seedream with
+params.images) returns all of them in `images` and the first again as image / mimeType.
+The runner stores every entry and journals them as the item's ordered outputs; export
+writes <label>.<ext>, <label>-2.<ext> … <label>-N.<ext>; a $ref to the item is the first
+image. generate() passes the result through unchanged.
+
+Config + API (src/plugins/image/types.ts):
+
+```ts
+export type Config = { defaultProvider: string }; // default "codex"
+export type ImageApi = {
+  generate(request: ImageRequest,
+    opts?: { provider?: string; signal?: AbortSignal }): Promise<ImageResult>; // NOT journaled
+  estimate(request: ImageRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[]; // = registry.providers("image"), registration order
+};
+```
+
+Unknown-provider error (also for a registered value that is not an ImageHandler):
+`[ai] No image provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+--------------------------------------------------------------------------------
+4.8 video — app.video (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "video" task contract; providers implement + register it; this plugin exposes a
+one-off facade. A handler has `estimate` plus either `execute`, or the async pair
+`submit` + `poll` (or both). The runner prefers `submit`/`poll` and journals the job id,
+so a resume polls the live job and never re-submits; the facade `generate` prefers
+`execute`, else submits once and polls in memory every `pollIntervalMs`. The ONE audited
+cast is behind `isVideoHandler` (module export, not on app.video). No state, no lifecycle,
+no events. Providers in registration order: fal (the default), apimodels, ark.
+contract.ts imports nothing.
+
+Contract (src/plugins/video/contract.ts; `Video.*` namespace):
+
+```ts
+export type VideoFile = { path: string; mimeType: string; hash: string };
+export type VideoRequest = {
+  model: string;           // provider-scoped id or alias; REQUIRED: price and endpoint depend on it
+  prompt: string;          // motion and scene prompt
+  negative?: string;       // ignored by models without a negative prompt
+  image?: VideoFile;       // first frame / keyframe
+  endImage?: VideoFile;    // last frame; a model without one rejects the request before any upload or charge
+  refs?: VideoFile[];      // images, audio or video files, told apart by MIME type
+  seconds?: number;        // default 5
+  aspect?: string;         // default "9:16"
+  resolution?: string;     // model-specific, e.g. "720p", "768P"
+  audio?: boolean;         // native audio when the model can; default false
+  params?: Record<string, unknown>; // pass-through, merged last into the provider body
+  fromDraft?: VideoFile;   // the draft clip this request renders as a final (pass prompt "" from code)
+};
+export type EstimateInput = VideoFile | { $ref: string } | { $file: string };
+export type EstimateRequest = Omit<VideoRequest, "image" | "endImage" | "refs" | "fromDraft"> & {
+  image?: EstimateInput; endImage?: EstimateInput; refs?: EstimateInput[]; fromDraft?: EstimateInput;
+};                         // estimate runs at plan time, before references resolve; every VideoRequest is one
+export type VideoResult = {
+  video: Uint8Array;
+  mimeType: string;        // e.g. video/mp4
+  costUsd: number;
+  meta?: Record<string, unknown>; // metadata only — never a payload echo
+};
+export type VideoJobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & VideoResult)
+  | { state: "failed"; error: unknown };
+export type VideoHandler = {
+  estimate(request: EstimateRequest): { usd: number };
+  execute?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoResult>;
+  submit?(request: VideoRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(jobId: string, request: VideoRequest, opts: { signal?: AbortSignal }): Promise<VideoJobPoll>;
+};
+```
+
+isVideoHandler(candidate: unknown) (video/api.ts) is the runtime guard: estimate is a
+function, and execute is, or submit and poll both are.
+
+Draft → final (only ark, Seedance 2.5): the draft item sets params.draft: true; the final
+item sets input.fromDraft: { $ref: <draft item> } and may omit prompt. The provider reuses
+the draft's prompt, frames, duration, ratio, seed and audio; the final renders at 1080p
+only; draft ids expire after 7 days. Providers without a draft mode refuse fromDraft.
+
+Config + API (src/plugins/video/types.ts):
+
+```ts
+export type Config = {
+  defaultProvider: string; // default "fal"
+  pollIntervalMs: number;  // default 5000 (facade only; the runner uses runner.pollIntervalMs)
+};
+export type VideoApi = {
+  // One-off, NOT journaled. execute when present; else submit once, poll every
+  // config.pollIntervalMs; done → the result without `state`; a failed poll throws its
+  // error as-is; abort during the wait rejects at once with the signal's reason.
+  generate(request: VideoRequest,
+    opts?: { provider?: string; signal?: AbortSignal }): Promise<VideoResult>;
+  estimate(request: VideoRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];   // = registry.providers("video"), registration order
+};
+```
+
+Unknown-provider error (also for a value that fails isVideoHandler):
+`[ai] No video provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+--------------------------------------------------------------------------------
+4.9 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
 ("voiceover", "elevenlabs") → createVoiceoverHandler(ctx) and ("sfx", "elevenlabs") →
-createSfxHandler(ctx) (§4.16). POST
+createSfxHandler(ctx) (§4.20). POST
 /v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
 ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
 are key-free). estimate = text.length × per-character price for the resolved model
@@ -894,7 +1036,7 @@ Missing-key error (before any network call):
 Logs (redacted): elevenlabs:voiceover:done (info) / elevenlabs:voiceover:failed (warn).
 
 --------------------------------------------------------------------------------
-4.8 openai — app.openai (Complex tier; depends: [registryPlugin])
+4.10 openai — app.openai (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Provider adapter via the official `openai` SDK (fetch-based; SDK retries disabled with
 maxRetries: 0 — the runner owns retry timing). onInit registers THREE handlers:
@@ -946,7 +1088,259 @@ to the variable that holds your key.`
 Logs (redacted): openai:{tts|translate|prompt-gen}:{done|failed}.
 
 --------------------------------------------------------------------------------
-4.9 compose — app.compose (Standard tier; depends: [buildfilePlugin, promptGenPlugin])
+4.11 codex — app.codex (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Image and prompt-gen provider over the local Codex CLI (`codex exec`). onInit registers
+("image","codex") image/handler.ts, then ("prompt-gen","codex") prompt/handler.ts. Emits
+no events. No API key: the CLI owns auth. Codex runs on the user's ChatGPT plan: images
+are priced from a table whose bundled row is an explicit "gpt-6-astra": 0 (a model
+without a price throws, it never counts as free); every prompt-gen result costs $0.
+Registered after openai and before claude, fal and ark, so codex is the first image
+provider (image.defaultProvider is "codex").
+
+Per call, both tasks: a fresh temp dir `codex-*` under workDir (resolved against the cwd;
+"" = os.tmpdir()), removed in `finally` on success and on every failure. Refs and images
+are copied in as ref-<n>.<png|jpg|webp> (store paths have no extension and codex reads the
+type from it; an unknown MIME is copied as png). The CLI is spawned with cwd <dir> and
+stdin closed (an open stdin makes codex wait forever). timeoutMs → SIGTERM, then SIGKILL
+5 s later; a caller abort kills the same way and rethrows signal.reason unchanged.
+
+Image command (`--` is mandatory: --image is greedy and would take the prompt):
+
+```
+codex exec -m <model> -c model_reasoning_effort="<effort>" --sandbox workspace-write
+  --skip-git-repo-check -C <dir> -o <dir>/last-message.txt [--image <ref>]... -- <prompt>
+```
+
+- model = request.model ?? config.model; estimate = { usd: price of that model }.
+- Prompt, one line each: "Generate exactly one image with your image generation tool.",
+  request.prompt, "Avoid: <negative>." when set, the size line, a line naming the attached
+  refs when there are any, then: save as output.png, no other files, reply with the file
+  name only. Size line by aspect: "9:16" → "Portrait, 1024x1536." (also the default for a
+  missing or unknown aspect), "16:9" → "Landscape, 1536x1024.", "1:1" → "Square, 1024x1024.".
+- Result: output.png, else the newest .png/.jpg/.jpeg/.webp that is not a ref copy;
+  mimeType by extension (image/png when unknown); meta { model, bytes }.
+
+Prompt-gen command (never --output-schema: codex sends it as an OpenAI strict json_schema,
+which rejects what z.toJSONSchema makes, so the schema travels in the prompt):
+
+```
+codex exec [-m <model>] -c model_reasoning_effort="<effort>" --sandbox read-only
+  --skip-git-repo-check -C <dir> -o <dir>/last-message.txt [--image <abs path>]... -- <prompt>
+```
+
+- Prompt: codex has no system flag, so system, a blank line, then prompt. With a schema, a
+  blank line, "Answer with one JSON value only, no prose, no code fence. It must match this
+  JSON Schema:" and the schema as compact JSON.
+- Answer: <dir>/last-message.txt, trimmed. With a schema: one ```json fence stripped,
+  JSON.parse, checked with z.fromJSONSchema(schema); text is the validated JSON, re-stringified.
+- params.images: ImageFile or ImageFile[], one --image each. params.responseSchema: a plain
+  JSON-schema object. params.reasoning: "off" | "low" | "medium" | "high" (off → low;
+  absent → config.reasoningEffort). temperature is ignored and listed in meta.ignored;
+  cacheSystem and every other param are ignored. A bad images / responseSchema / reasoning
+  throws a plain Error before any spawn, from estimate() too.
+- messages, tools or toolChoice → PromptGenUnavailableError reason "unsupported", in
+  estimate() and execute(), before any other work (see §4.6).
+- estimate() validates the params and returns { usd: 0 }. execute() returns costUsd 0,
+  toolCalls [], finishReason "stop", every usage count 0 (the CLI reports no tokens), and
+  meta: CodexPromptMeta.
+- Model mapping (request ids are OpenRouter style), in order: an exact modelMap entry; no
+  request model → textModel; "openai/<id>" → "<id>"; a bare codex id (gpt-*, o<digit>*,
+  codex-*) passes; anything else (e.g. "anthropic/claude-opus-5.5") → textModel. An empty
+  textModel means no -m (codex's own default).
+
+```ts
+export type Config = {
+  bin: string;              // default "codex" (bare name looked up on PATH, or a path)
+  model: string;            // default "gpt-6-astra" (image model when a request names none)
+  reasoningEffort: string;  // default "low" (-c model_reasoning_effort="<effort>", both tasks)
+  timeoutMs: number;        // default 600_000 (kill the CLI after this long)
+  workDir: string;          // default ".moku/tmp" (per-call temp dirs, against the cwd; "" = os.tmpdir())
+  priceOverrides: Record<string, number>; // default {} (USD per image by model, merged over the bundled table)
+  textModel: string;        // default "" (prompt-gen model when none maps; "" leaves -m out)
+  modelMap: Record<string, string>; // default {} (exact request-model id → codex model, checked first)
+};
+export type State = { prices: Record<string, number> | null }; // effective table, computed at first use
+
+export type CodexInfo = {
+  provider: "codex";
+  configured: boolean;      // config.bin exists: a path-like bin directly, a bare name on PATH (read via ctx.env)
+  models: string[];         // models in the effective price table
+};
+export type CodexPromptMeta = {
+  provider: "codex";
+  model?: string;           // mapped -m; absent = codex's own default
+  modelRequested?: string;  // request.model as the request named it
+  effort: string;           // passed as -c model_reasoning_effort
+  ignored?: string[];       // e.g. ["temperature"]
+};
+export type CodexApi = { info(): CodexInfo };  // no spawn
+
+// Error classes (values in CodexErrors; types under Codex are aliases only) — no flagged class:
+export class RetryableProviderError extends Error {
+  readonly kind: "timeout" | "network";        // "timeout": the CLI ran past timeoutMs
+  constructor(message: string, kind: "timeout" | "network");
+}
+export class TerminalProviderError extends Error {
+  constructor(message: string);                // no status, no kind → runner class "unknown"
+}
+```
+
+Errors (two-line messages, never the prompt):
+- `[ai] No price for codex model "<m>".\n  Add it to codex priceOverrides.` (plain Error,
+  estimate() and execute()).
+- `[ai] Codex CLI not found: <bin>.\n  Install codex or set codex.bin.` (spawn ENOENT,
+  PromptGenUnavailableError "missing").
+- `[ai] Codex CLI is not logged in.\n  Run codex login, or use another provider.`
+  (PromptGenUnavailableError "auth": API error status 401/403, or stderr matches
+  /401 Unauthorized|not logged in|codex login/i).
+- `[ai] Codex CLI hit its plan or rate limit.\n  Wait for the reset, or use another
+  provider.` (PromptGenUnavailableError "limit": API error status 429, or stderr matches
+  /usage limit|rate limit|\b429\b|too many requests/i).
+- `[ai] Codex CLI could not start: <code>.\n  Check that codex.bin is an executable file.`
+- `[ai] Codex exited with code <n>: <detail>.\n  Run the same codex exec by hand to see the
+  full output.` (or "signal <name>"). detail = error.message of the API error codex prints
+  as `ERROR: {…}` on stderr or as JSON on stdout, else the last stderr line; capped at 300
+  chars. An API error with a status decides by status alone: any status other than
+  401/403/429 (a 400 invalid_json_schema included) is terminal; one without a status is
+  read by its wording.
+- `[ai] Codex finished without writing an image.\n  Check that the codex model can generate
+  images, then retry.` · `[ai] Codex wrote no answer.\n  Run the same codex exec by hand to
+  see the full output.` · `[ai] Codex answer does not match params.responseSchema.\n  <path>:
+  <issue>.` (or "The answer is not valid JSON.").
+- `[ai] Codex timed out after <ms> ms.\n  Raise codex.timeoutMs or retry the build.`
+  (RetryableProviderError kind "timeout").
+- Param shape: `[ai] Codex params.images must be image files.`, `[ai] Codex
+  params.responseSchema must be a JSON schema object.`, `[ai] Codex params.reasoning must
+  be off, low, medium or high.`
+Terminal and unavailable errors carry neither kind nor status, so the runner classifies
+them "unknown" (terminal); promptGen.generate falls back only on the unavailable ones.
+The framework sets no codex lane: image/codex and prompt-gen/codex use the limits
+defaults; the README suggests capping a local CLI, e.g. "prompt-gen/codex": { concurrency: 2 }.
+Logs: codex:image:done { model, bytes }, codex:prompt-gen:done { model ("default" when no
+-m), chars }. The prompt and the answer are never logged.
+
+--------------------------------------------------------------------------------
+4.12 claude — app.claude (Complex tier; depends: [registryPlugin]; no state)
+--------------------------------------------------------------------------------
+Text provider over the local Claude Code CLI (`claude -p --output-format json`). onInit
+registers ("prompt-gen","claude") prompt/handler.ts. Emits no events. No API key: the CLI
+owns auth. Plan-billed: costUsd is always 0; the CLI's own list price (total_cost_usd) is
+kept in meta.listCostUsd for reference only. Registered after codex.
+
+Per call: a fresh temp dir `moku-claude-*` under workDir ("" = os.tmpdir(), the default:
+outside the repo, so no project CLAUDE.md is loaded), removed in `finally`. params.images
+are copied in as image-<n>.<png|jpg|webp> (the Read tool needs an extension; an unknown
+MIME is copied as png). The prompt goes to stdin, then stdin is closed; stdout is read in
+full (the JSON result), stderr as a 4096-char tail. timeoutMs → SIGTERM, then SIGKILL 5 s
+later; a caller abort kills the same way and rethrows signal.reason unchanged.
+
+Command (the prompt is never in argv):
+
+```
+claude -p --output-format json --no-session-persistence --setting-sources user
+  --strict-mcp-config --disable-slash-commands --system-prompt <request.system or default>
+  --restricted --tools Read --allowedTools Read --permission-prompts none   (with images)
+  --tools ""                                                                 (without images)
+  [--model <mapped>] [--effort <low|medium|high>] [--json-schema <schema>]
+```
+
+- Default system prompt: "Answer the request directly. Output only the answer." It
+  replaces Claude Code's coding-agent prompt. Never --bare: it disables OAuth, so plan
+  billing breaks. --restricted confines the Read tool to the call dir.
+- stdin text: request.prompt; with images, a blank line and "Attached images, read each
+  with the Read tool before answering: ./image-1.png, …."; with a schema that cannot go to
+  the flag, a blank line, the answer rule ("Answer with one JSON value only, no prose, no
+  code fence. It must match this JSON Schema:") and the schema.
+- params.responseSchema (a plain JSON-schema object) becomes compact JSON without a
+  top-level $schema (the flag rejects that key). Root type "object" → --json-schema, and the
+  answer is structured_output; any other root → in the prompt, and the answer is the result
+  text with one ```json fence stripped. Either is checked with z.fromJSONSchema(schema);
+  text is the validated JSON, re-stringified.
+- params.reasoning "off" | "low" | "medium" | "high" → --effort (off → low); absent → no
+  flag. params.images: ImageFile or ImageFile[]. temperature is ignored and listed in
+  meta.ignored; cacheSystem and every other param are ignored. A bad images /
+  responseSchema / reasoning throws a plain Error before any spawn, from estimate() too.
+- messages, tools or toolChoice → PromptGenUnavailableError reason "unsupported", in
+  estimate() and execute(), before any other work (see §4.6).
+- estimate() validates the params and returns { usd: 0 }. execute() returns costUsd 0,
+  toolCalls [], finishReason "stop" and typed usage: promptTokens = input_tokens +
+  cache_read_input_tokens + cache_creation_input_tokens, completionTokens = output_tokens,
+  cachedTokens = cache_read_input_tokens, cacheWriteTokens = cache_creation_input_tokens
+  (0 when unreported); cachedReadTokens / cachedWriteTokens only when the CLI reports them.
+- Model mapping, in order: an exact modelMap entry; no request model → textModel;
+  "anthropic/<id>" → prefix stripped, dots to dashes ("anthropic/claude-opus-5.5" →
+  "claude-opus-5-5"); a bare claude-*, opus, sonnet, haiku or fable passes; anything else
+  (e.g. "openai/gpt-6-sol") → textModel. An empty textModel means no --model (the CLI's
+  default).
+
+```ts
+export type Config = {
+  bin: string;          // default "claude" (bare name looked up on PATH, or a path)
+  textModel: string;    // default "" (model when mapping gives none; "" = no --model)
+  modelMap: Record<string, string>; // default {} (exact request-model id → claude model, checked first)
+  timeoutMs: number;    // default 600_000 (kill the CLI, SIGTERM, after this long)
+  workDir: string;      // default "" (per-call temp dirs; "" = os.tmpdir(), outside the repo)
+};
+export type Reasoning = "off" | "low" | "medium" | "high"; // params.reasoning
+export type Effort = "low" | "medium" | "high";            // --effort
+
+export type ClaudePromptMeta = {
+  provider: "claude";
+  model?: string;           // mapped --model; absent = the CLI's default
+  modelRequested?: string;  // request.model as the request named it
+  effort?: Effort;          // only when --effort was passed
+  listCostUsd: number;      // total_cost_usd, reference only (the plan bills $0)
+  usage: { inputTokens: number; outputTokens: number };
+  ignored?: string[];       // e.g. ["temperature"]
+};
+export type ClaudeInfo = {
+  provider: "claude";
+  configured: boolean;      // config.bin exists: a path-like bin directly, a bare name on PATH (read via ctx.env)
+};
+export type ClaudeApi = { info(): ClaudeInfo };  // no spawn
+
+// Error classes (values in ClaudeErrors; types under Claude are aliases only) — no flagged class:
+export class RetryableProviderError extends Error {
+  readonly kind: "timeout" | "network";        // "timeout": the CLI ran past timeoutMs
+  constructor(message: string, kind: "timeout" | "network");
+}
+export class TerminalProviderError extends Error {
+  constructor(message: string);                // no status, no kind → runner class "unknown"
+}
+```
+
+Errors (stdout JSON is parsed first, even on a non-zero exit: the not-logged-in result
+exits 1 with valid JSON; two-line messages, never the prompt):
+- `[ai] Claude CLI not found: <bin>.\n  Install Claude Code or set claude.bin.` (spawn
+  ENOENT, PromptGenUnavailableError "missing").
+- `[ai] Claude CLI is not logged in.\n  Run claude and /login, or use another provider.`
+  (PromptGenUnavailableError "auth": text matches /not logged in|\/login|invalid api key/i
+  or api_error_status 401/403).
+- `[ai] Claude CLI hit its plan or rate limit.\n  Wait for the reset, or use another
+  provider.` (PromptGenUnavailableError "limit": text matches /usage limit|limit
+  reached|hit your limit|rate limit/i or api_error_status 429). Both patterns read the
+  is_error result, or stderr when stdout is not JSON.
+- `[ai] Claude CLI could not start: <code>.\n  Check that claude.bin is an executable file.`
+- `[ai] Claude returned an error: <first line, max 200 chars>.\n  Run the same claude -p by
+  hand to see the full output.` (is_error true, not auth or limit).
+- `[ai] Claude exited with code <n>: <last stderr line>.` (or "signal <name>"; no JSON) ·
+  `[ai] Claude printed no JSON result.` (exit 0, no JSON) · `[ai] Claude wrote no answer.`
+  (blank result, no structured_output). Each adds `\n  Run the same claude -p by hand to
+  see the full output.` · `[ai] Claude answer does not match
+  params.responseSchema.\n  <path>: <issue>.` (or "The answer is not valid JSON.").
+- `[ai] Claude timed out after <ms> ms.\n  Raise claude.timeoutMs or retry the build.`
+  (RetryableProviderError kind "timeout").
+- Param shape: `[ai] Claude params.images must be image files.`, `[ai] Claude
+  params.responseSchema must be a JSON schema object.`, `[ai] Claude params.reasoning must
+  be off, low, medium or high.`
+promptGen.generate falls back only on the unavailable errors; it rethrows the rest. The
+"prompt-gen/claude" lane caps how many local claude processes run at once (limits
+defaults unless set). Logs: claude:prompt-gen:done { model ("default" when no --model),
+chars }. The prompt and the answer are never logged.
+
+--------------------------------------------------------------------------------
+4.13 compose — app.compose (Standard tier; depends: [buildfilePlugin, promptGenPlugin])
 --------------------------------------------------------------------------------
 Natural-language prompt → validated build file. Pipeline: system prompt embedding
 buildfile.jsonSchema() + per-task input docs → promptGen.generate({ prompt, system },
@@ -977,7 +1371,7 @@ Exhaustion error: `[ai] Compose could not produce a valid build file after <n> a
   Refine the prompt or write the build file manually with "moku new".`
 
 --------------------------------------------------------------------------------
-4.10 cli — app.cli (Complex tier; depends: [runnerPlugin, buildfilePlugin, composePlugin])
+4.14 cli — app.cli (Complex tier; depends: [runnerPlugin, buildfilePlugin, composePlugin])
 --------------------------------------------------------------------------------
 The `moku` command surface: 7 commands (new, validate, estimate, run, export, status,
 compose). No lifecycle, no state (ratified OQ1). `--config` is read and stripped by the
@@ -1027,7 +1421,7 @@ Commands:
   writes --out or prints; exits 0 ok, 3 usage, 2 repair-exhausted, else 1.
 
 --------------------------------------------------------------------------------
-4.11 asset — app.asset (Standard tier; depends: [registryPlugin]; stateless)
+4.15 asset — app.asset (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "asset" task contract: register ONE portrait with a provider, in the
 provider's own account, and get back an opaque AssetRecord. Registration is its own
@@ -1111,7 +1505,7 @@ Errors: `[ai] No asset provider named "<name>" is registered.\n  Available: <lis
 JSON with assetId, provider, account, groupId, registeredAt.`
 
 --------------------------------------------------------------------------------
-4.12 ark — app.ark (Complex tier; depends: [registryPlugin])
+4.16 ark — app.ark (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Seedance straight from ByteDance. One instance = one region + one account. onInit
 registers ("video","ark"), ("asset","ark") and ("image","ark"). Video and asset are
@@ -1203,7 +1597,7 @@ URL; priceOverrides[model] USD wins; cn ÷ cnyPerUsd). Estimate (no file read) =
 seconds/1024 tokens at the base price (480p 864×480, 720p 1280×720, 1080p 1920×1080).
 
 Face refusal: a SensitiveContent refusal of a request with a plain local image →
-`[ai] ark refused an image with a face: <code>.\n  Make it an asset item and $ref it.`;
+`[ai] ark refused an image with a face: <code>.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.`;
 otherwise `[ai] ark flagged the request: <code>.\n  Change the prompt or the inputs.`
 No raw-photo fallback, no on-refusal registration (CreateAsset needs a public URL).
 
@@ -1236,7 +1630,7 @@ Tests are local on mocked fetch; __tests__/fixtures.ts copies documented example
 signing script) with a // source: per fixture, and built bodies toEqual them.
 
 --------------------------------------------------------------------------------
-4.13 music — app.music (Standard tier; depends: [registryPlugin]; stateless)
+4.17 music — app.music (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "music" task contract; providers implement + register it; this plugin
 exposes a one-off facade. A handler has `estimate` plus either `execute`, or the async
@@ -1344,7 +1738,7 @@ Errors: `[ai] No music provider named "<name>" is registered.\n  Available: <lis
 (also for a value that fails isMusicHandler).
 
 --------------------------------------------------------------------------------
-4.14 fal — app.fal (Complex tier; depends: [registryPlugin])
+4.18 fal — app.fal (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Every fal-hosted task over one client (client/http.ts, client/queue.ts,
 client/upload.ts), one FAL_KEY, one upload cache and one merged price table. onInit
@@ -1508,7 +1902,7 @@ fal:poll:retry, fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallb
 fal:request-log:failed.
 
 --------------------------------------------------------------------------------
-4.15 apimodels — app.apimodels (Complex tier; depends: [registryPlugin])
+4.19 apimodels — app.apimodels (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Video provider over the apimodels.app task API: Seedance 2.5 and Seedance 2.0 official,
 which accept real faces. onInit registers ("video","apimodels"), submit + poll (no
@@ -1563,7 +1957,7 @@ apimodels:negative:ignored, apimodels:poll:unknown-state, apimodels:records:unav
 apimodels:result:unreadable. Full reference: src/plugins/apimodels/README.md.
 
 --------------------------------------------------------------------------------
-4.16 sfx — app.sfx (Standard tier; depends: [registryPlugin]; stateless)
+4.20 sfx — app.sfx (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "sfx" task contract: short sound effects from a text prompt, always mp3. A
 handler has `estimate` + `execute`; there is no job form. `model` is REQUIRED (the
@@ -1600,7 +1994,7 @@ export type SfxApi = {
 Errors: `[ai] No sfx provider named "<name>" is registered.\n  Available: <list or "none">.`
 
 --------------------------------------------------------------------------------
-4.17 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
+4.21 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "sprite" task contract: cut an existing image into a transparent RGBA PNG
 (matte, trim to alpha bounds, resize, padding). A sprite item `$ref`s an image item;
@@ -1694,13 +2088,14 @@ Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, a
 
 Structured log events (ctx.log; diagnostics, not bus events): runner:stale-item,
 elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/failed,
-openai:prompt-gen:done/failed, ark:video:submitted/done/failed, ark:asset:group-created
+openai:prompt-gen:done/failed, codex:image:done, codex:prompt-gen:done,
+claude:prompt-gen:done, ark:video:submitted/done/failed, ark:asset:group-created
 (warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn),
 fal:video|image|music:submitted/done/failed, fal:sfx|sprite:submitted/done,
 fal:llm:done/partial/retry, fal:poll:retry,
 fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
 fal:request-log:failed, apimodels:video:submitted/done/failed, apimodels:asset:registered
-(see §4.15 for the rest).
+(see §4.19 for the rest).
 
 ================================================================================
 6. CONFIG SCHEMA — EVERY FIELD
@@ -2116,10 +2511,38 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.
 - [ai] No music provider named "<name>" is registered.\n  Available: <list or "none">.
   (same shape for sfx / sprite)
+- [ai] No image provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not an ImageHandler)
+- [ai] No video provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not a VideoHandler)
+- [ai] No price for codex model "<model>".\n  Add it to codex priceOverrides.
+- [ai] Codex CLI not found: <bin>.\n  Install codex or set codex.bin.  (PromptGenUnavailableError "missing")
+- [ai] Codex CLI is not logged in.\n  Run codex login, or use another provider.  (PromptGenUnavailableError "auth")
+- [ai] Codex CLI hit its plan or rate limit.\n  Wait for the reset, or use another provider.  (PromptGenUnavailableError "limit")
+- [ai] Codex CLI could not start: <code or message>.\n  Check that codex.bin is an executable file.
+- [ai] Codex exited with <code <n> | signal <name>>[: <detail>].\n  Run the same codex exec by hand to see the full output.  (TerminalProviderError)
+- [ai] Codex timed out after <ms> ms.\n  Raise codex.timeoutMs or retry the build.  (RetryableProviderError "timeout")
+- [ai] Codex finished without writing an image.\n  Check that the codex model can generate images, then retry.
+- [ai] Codex wrote no answer.\n  Run the same codex exec by hand to see the full output.  (TerminalProviderError)
+- [ai] Codex answer does not match params.responseSchema.\n  <path>: <issue>.  (or second line "The answer is not valid JSON."; TerminalProviderError)
+- [ai] Codex params.images must be image files.\n  Pass { path, mimeType, hash } for every image.
+- [ai] Codex params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object.
+- [ai] Codex params.reasoning must be off, low, medium or high.\n  Got "<value>".
+- [ai] Claude CLI not found: <bin>.\n  Install Claude Code or set claude.bin.  (PromptGenUnavailableError "missing")
+- [ai] Claude CLI is not logged in.\n  Run claude and /login, or use another provider.  (PromptGenUnavailableError "auth")
+- [ai] Claude CLI hit its plan or rate limit.\n  Wait for the reset, or use another provider.  (PromptGenUnavailableError "limit")
+- [ai] Claude CLI could not start: <code or message>.\n  Check that claude.bin is an executable file.
+- [ai] Claude returned an error: <detail>.\n  Run the same claude -p by hand to see the full output.  (TerminalProviderError)
+- [ai] Claude exited with <code <n> | signal <name>>[: <last stderr line>].\n  Run the same claude -p by hand to see the full output.  (TerminalProviderError)
+- [ai] Claude printed no JSON result.\n  Run the same claude -p by hand to see the full output.  (TerminalProviderError)
+- [ai] Claude wrote no answer.\n  Run the same claude -p by hand to see the full output.  (TerminalProviderError)
+- [ai] Claude timed out after <ms> ms.\n  Raise claude.timeoutMs or retry the build.  (RetryableProviderError "timeout")
+- [ai] Claude answer does not match params.responseSchema.\n  <path>: <issue>.  (or second line "The answer is not valid JSON."; TerminalProviderError)
+- [ai] Claude params.images must be image files.\n  Pass { path, mimeType, hash } for every image.
+- [ai] Claude params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object.
+- [ai] Claude params.reasoning must be off, low, medium or high.\n  Got "<value>".
 - [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music, sfx, sprite.
 - [ai] No price for fal <task> model "<id>".\n  Add it to fal.priceOverrides.  (image, music, sfx, sprite, prompt-gen)
 - [ai] Not an asset record: <reason>.\n  Expected JSON with assetId, provider, account, groupId, registeredAt.
-- [ai] ark refused an image with a face: <code>.\n  Make it an asset item and $ref it.
+- [ai] ark refused an image with a face: <code>.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.
 - [ai] ark refused asset "<name>": <reason>.\n  Items that use it will not run.
 - [ai] ark asset "<assetId>" is <Status>.\n  Bump params.generation on its asset item to register again.
 - [ai] ark CreateAsset needs a public https url.\n  Pass input.url with the same bytes as input.image.
@@ -2259,10 +2682,10 @@ items:
     input: { prompt: "a neon city skyline", size: "1024x1024" }
 ```
 
-The built-in `image` (codex, fal), `video` (fal), `music` (fal), `sfx` (elevenlabs, fal)
-and `sprite` (fal) tasks follow the
-same pattern; a video or music handler exposes `submit` + `poll` so the provider job id
-is journaled.
+The built-in `image` (codex, fal, ark), `video` (fal, apimodels, ark), `music` (fal),
+`asset` (ark), `sfx` (elevenlabs, fal) and `sprite` (fal) tasks follow the same pattern;
+a video, music or asset handler exposes `submit` + `poll` so the provider job id is
+journaled.
 
 10.3 Event-consumer plugin (bus subscription — the only way; no app.on):
 
