@@ -1,15 +1,18 @@
 /**
  * @file fal price table — merge and prefix only. The tables live in the task
  * directories (`video/prices.ts`, `image/prices.ts`, `llm/prices.ts`,
- * `music/prices.ts`); this module merges them into the one table every task
- * reads, with `config.priceOverrides` last. Video keys stay unprefixed; the
- * other tasks' keys carry `image:`, `music:` or `llm:`. The merge runs at call
- * time, never at module load, so the import cycle with `video/prices.ts` is safe.
+ * `music/prices.ts`, `sfx/prices.ts`, `sprite/prices.ts`); this module merges
+ * them into the one table every task reads, with `config.priceOverrides` last.
+ * Video keys stay unprefixed; the other tasks' keys carry `image:`, `music:`,
+ * `llm:`, `sfx:` or `sprite:`. The merge runs at call time, never at module
+ * load, so the import cycle with the task price modules is safe.
  */
 import { TerminalProviderError } from "./errors";
 import { imagePrices } from "./image/prices";
 import { llmPriceRows } from "./llm/prices";
 import { musicPrices } from "./music/prices";
+import { sfxPrices } from "./sfx/prices";
+import { spritePrices } from "./sprite/prices";
 import type { FalContext, FalTask } from "./types";
 import { videoPrices } from "./video/prices";
 
@@ -39,7 +42,7 @@ export function prefixKeys(
  * Merges every task's bundled table with config overrides (overrides win).
  *
  * @param overrides - `config.priceOverrides`.
- * @returns The effective price table of all four tasks.
+ * @returns The effective price table of all six tasks.
  * @example
  * ```ts
  * mergePrices({ "image:gpt-image-2.5": 0.07 })["image:gpt-image-2.5"]; // => 0.07
@@ -51,6 +54,8 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
     ...videoPrices,
     ...prefixKeys("image", imagePrices),
     ...prefixKeys("music", musicPrices),
+    ...prefixKeys("sfx", sfxPrices),
+    ...prefixKeys("sprite", spritePrices),
     ...llmPriceRows(),
     ...overrides
   };

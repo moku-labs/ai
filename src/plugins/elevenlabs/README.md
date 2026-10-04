@@ -1,6 +1,6 @@
 # elevenlabs
 
-> The ElevenLabs provider adapter — a Complex-tier plugin that owns everything ElevenLabs-specific and registers the `("voiceover", "elevenlabs")` capability with the registry.
+> The ElevenLabs provider adapter — a Complex-tier plugin that owns everything ElevenLabs-specific and registers the `("voiceover", "elevenlabs")` and `("sfx", "elevenlabs")` capabilities with the registry.
 
 ## Purpose
 
@@ -9,11 +9,12 @@
 generate it, and the [`registry`](../registry) connects the two. The `elevenlabs` plugin is the
 provider side of that contract for ElevenLabs: it owns a thin internal `fetch` client (no SDK
 dependency — one TTS endpoint doesn't justify one), a bundled per-character price table, and
-per-task handler submodules. At M0 it implements one capability — text-to-speech via
-`POST /v1/text-to-speech/{voiceId}` — registered under `("voiceover", "elevenlabs")` in `onInit`.
+per-task handler submodules. It implements two capabilities, both registered in `onInit`:
+text-to-speech via `POST /v1/text-to-speech/{voiceId}` under `("voiceover", "elevenlabs")`, and
+sound effects via `POST /v1/sound-generation` under `("sfx", "elevenlabs")`.
 
-The plugin follows the provider-owns-all-tasks shape: future capabilities (sfx, music) land as
-sibling submodules next to `voiceover/`. Per-task submodules never import each other — they
+The plugin follows the provider-owns-all-tasks shape: each capability is a sibling submodule
+(`voiceover/`, `sfx/`). Per-task submodules never import each other — they
 coordinate through the plugin's root state (the shared, lazily-computed price table in
 `prices.ts` / `state.ts`).
 
@@ -28,7 +29,7 @@ plugin works out of the box once the API key env var is exported.
 | `baseUrl` | `string` | `"https://api.elevenlabs.io"` | API base URL. |
 | `defaultModel` | `string` | `"eleven_multilingual_v2"` | Model used when a request doesn't name one. |
 | `timeoutMs` | `number` | `60_000` | Per-request timeout, ms (enforced via `AbortSignal.timeout`, merged with any caller signal). |
-| `priceOverrides` | `Record<string, number>` | `{}` | Per-model USD-per-character overrides, merged over the bundled table (overrides win). |
+| `priceOverrides` | `Record<string, number>` | `{}` | Price overrides, merged over the bundled table (overrides win). Voice models: USD per character, keyed by model id. sfx: `sfx:<model>#second` (USD per started second) and `sfx:<model>#auto` (USD for a model-picked length). |
 
 ```ts
 import { createApp } from "@moku-labs/ai";
@@ -62,8 +63,8 @@ is unset, `execute()` throws **before any network call** with the pinned two-lin
 
 ### Bundled price table
 
-`prices.ts` ships approximate USD-per-character defaults; override precisely via
-`priceOverrides` for your account's actual tier.
+`prices.ts` ships approximate defaults; override precisely via `priceOverrides` for your
+account's actual tier.
 
 | Model | USD / character |
 | --- | --- |
@@ -72,8 +73,27 @@ is unset, `execute()` throws **before any network call** with the pinned two-lin
 | `eleven_flash_v2_5` | 0.000_06 |
 | `eleven_monolingual_v1` | 0.0003 |
 
+| sfx key | USD |
+| --- | --- |
+| `sfx:eleven_text_to_sound_v2#second` | 0.002 per started second |
+| `sfx:eleven_text_to_sound_v2#auto` | 0.01 per generation, when the request has no `durationMs` |
+
+The sfx prices are an estimate. ElevenLabs bills 40 credits per second and 200 credits for an
+auto-length sound ([help article](https://help.elevenlabs.io/hc/en-us/articles/25735337678481)),
+and lists the SFX API at $0.12 per minute ([pricing](https://elevenlabs.io/pricing/api)), both
+checked 2026-10-04. The per-credit USD rate is not published. Set the real price for your plan:
+
+```ts
+createApp({
+  pluginConfigs: {
+    elevenlabs: { priceOverrides: { "sfx:eleven_text_to_sound_v2#second": 0.0025 } }
+  }
+});
+```
+
 The effective table (bundled ∪ overrides) is computed once at first use and cached in plugin
-state; models absent from the effective table estimate at `$0`.
+state. Voice models absent from the effective table estimate at `$0`. A missing sfx price is a
+terminal error instead, because a paid job never runs at an unknown price (see the sfx handler).
 
 ## API reference
 
@@ -89,8 +109,9 @@ Provider health/info for `moku status` and docs.
 
 - **Params:** none.
 - **Returns:** `provider` (always `"elevenlabs"`), `configured` (whether the configured API key
-  env var is present — checked via `ctx.env.has`, never throws), and `models` (the model ids
-  known to the effective price table, including any `priceOverrides` additions).
+  env var is present — checked via `ctx.env.has`, never throws), and `models` (the voice model
+  ids known to the effective price table, including any `priceOverrides` additions; `sfx:` price
+  rows are left out).
 - **Throws:** never.
 
 ```ts
@@ -139,6 +160,71 @@ const result = await app.voiceover.generate(
   { provider: "elevenlabs" }
 );
 // result.audio: Uint8Array, result.mimeType: "audio/mpeg", result.costUsd: number
+```
+
+### Registered handler — `("sfx", "elevenlabs")`
+
+`sfx/handler.ts` implements the task-owned `SfxHandler` contract (`../sfx/contract.ts`) and is
+registered in `onInit`, after voiceover. Reachable as
+`app.sfx.generate(request, { provider: "elevenlabs" })`. elevenlabs is the sfx default provider.
+
+The output is always mp3 (`audio/mpeg`): the game engine accepts mp3 only.
+
+#### Request rules
+
+Every rule is checked before any HTTP call. A refused request throws
+`TerminalProviderError` with `status: 400`, so the runner marks the item `failed` and never
+retries it. The messages never contain the prompt text.
+
+| Field | Rule |
+| --- | --- |
+| `model` | Must be `"eleven_text_to_sound_v2"`. |
+| `prompt` | At most 450 characters. Sent as `text`. |
+| `durationMs` | Optional. 500..30000. Sent as `duration_seconds` (`durationMs / 1000`). Omitted means the model picks the length. |
+| `promptInfluence` | Optional. 0..1. Sent as `prompt_influence`. |
+| `loop` | Optional boolean. Sent as `loop`. |
+| `params.output_format` | Optional. Must start with `mp3_`, for example `"mp3_22050_32"`. Default `"mp3_44100_128"`. Any other format throws. This is the only `params` key the handler reads. |
+
+#### `estimate(request: SfxRequest): { usd: number }`
+
+Checks `model` and `durationMs` only, then prices the request. It reads no other field, because
+the runner estimates a request before its references are resolved. It never touches the network
+and never needs the API key.
+
+- `durationMs` set: `ceil(durationMs / 1000) × price["sfx:<model>#second"]`.
+- `durationMs` omitted: `price["sfx:<model>#auto"]`.
+- A missing price throws `TerminalProviderError(400)`:
+
+```
+[ai] No price for ElevenLabs sfx model "eleven_text_to_sound_v2".
+  Add it to elevenlabs.priceOverrides.
+```
+
+```ts
+app.sfx.estimate({ prompt: "sword hit, metallic", model: "eleven_text_to_sound_v2", durationMs: 1500 });
+// => { usd: 0.004 } (2 started seconds × 0.002)
+app.sfx.estimate({ prompt: "sword hit, metallic", model: "eleven_text_to_sound_v2" });
+// => { usd: 0.01 }
+```
+
+#### `execute(request: SfxRequest, opts: { signal?: AbortSignal }): Promise<SfxResult>`
+
+Checks every rule above, prices the request, reads the API key, then POSTs
+`{ text, model_id, duration_seconds?, prompt_influence?, loop? }` to
+`/v1/sound-generation?output_format=<mp3 format>`. `opts.signal` cancels the in-flight fetch, and
+the abort propagates unchanged.
+
+- **Returns:** `SfxResult` — `audio` (`Uint8Array`), `mimeType: "audio/mpeg"`, `costUsd` (same
+  math as `estimate`), and `meta: { model, outputFormat, durationMs? }`.
+- **Throws:** the request-rule and missing-price errors above, the missing-key `Error`, or the
+  provider error taxonomy below.
+
+```ts
+const hit = await app.sfx.generate(
+  { prompt: "sword hit, metallic", model: "eleven_text_to_sound_v2", durationMs: 800 },
+  { provider: "elevenlabs" }
+);
+await Bun.write("sword-hit.mp3", hit.audio); // hit.mimeType === "audio/mpeg", hit.costUsd === 0.002
 ```
 
 ### Error taxonomy
@@ -193,6 +279,8 @@ structured logs through `ctx.log`:
 | --- | --- | --- | --- |
 | `elevenlabs:voiceover:done` | `info` | `{ model, format }` | After a successful generation. |
 | `elevenlabs:voiceover:failed` | `warn` | `{ errorType, status?, kind? }` (redacted — never message text) | Before rethrowing any `execute()` failure. |
+| `elevenlabs:sfx:done` | `info` | `{ model, outputFormat }` | After a successful sound generation. |
+| `elevenlabs:sfx:failed` | `warn` | `{ errorType, status?, kind? }` (redacted — never message text) | Before rethrowing an HTTP failure of sfx `execute()`. Request-rule errors are thrown without a log. |
 
 ## Usage examples
 
@@ -259,12 +347,13 @@ try {
 ## Integration
 
 - **Registration.** `onInit` calls
-  `ctx.require(registryPlugin).register("voiceover", "elevenlabs", createVoiceoverHandler(ctx))`.
+  `register("voiceover", "elevenlabs", createVoiceoverHandler(ctx))`, then
+  `register("sfx", "elevenlabs", createSfxHandler(ctx))`, on `ctx.require(registryPlugin)`.
   Registration is a synchronous map insertion, so there is no `onStart`/`onStop` — the fetch
   client is stateless and holds no connections. After startup the provider is visible in
-  `app.voiceover.providers()` and `app.registry.providers("voiceover")`; registration order in
-  `src/index.ts` makes the *first*-registered provider the task default.
-- **Task fulfilled:** `voiceover` (the only capability at M0).
+  `app.voiceover.providers()`, `app.sfx.providers()` and `app.registry.providers(task)`;
+  registration order in `src/index.ts` makes the *first*-registered provider the task default.
+- **Tasks fulfilled:** `voiceover` and `sfx`.
 - **Runner retry interplay.** When a build runs through `app.runner`, the runner catches
   `execute()` failures and classifies them structurally via `classifyError`
   (`../runner/retry.ts`): `RetryableProviderError` instances are re-queued with exponential,
@@ -291,6 +380,8 @@ try {
 | `errors.ts` | The three provider error classes (values, exported as `ElevenlabsErrors`) and their module-private `RetryHint`. Imports nothing from `types.ts`. |
 | `api.ts` | `createElevenlabsApi` — the `info()` surface. |
 | `client.ts` | Thin generic fetch client: request execution, timeout/signal merging, HTTP failure classification. |
-| `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state). |
+| `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state), `sfxPriceOf` (missing price is terminal) and `isSfxPriceKey`. |
+| `support.ts` | What every handler shares: `resolveApiKey` and `redactedFailureOf`. |
 | `state.ts` | `createElevenlabsState` — `{ prices: null }` sentinel. |
 | `voiceover/handler.ts` | The `VoiceoverHandler` implementation: request mapping, cost math, redacted logging. |
+| `sfx/handler.ts` | The `SfxHandler` implementation: request rules, mp3 guard, per-second or auto cost, redacted logging. |

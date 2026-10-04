@@ -11,7 +11,7 @@ Contents:
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
    image, video, elevenlabs, openai, codex, claude, compose, cli, asset, ark, music, fal,
-   apimodels (full types + APIs)
+   apimodels, sfx, sprite (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -45,9 +45,9 @@ Layer 2 — src/index.ts:
 
 ```ts
 const framework = createCore(coreConfig, {
-  plugins: [                                  // 19 regular plugins, dependency order
+  plugins: [                                  // 21 regular plugins, dependency order
     registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, translatePlugin,
-    promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, assetPlugin,
+    promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, sfxPlugin, spritePlugin, assetPlugin,
     elevenlabsPlugin, openaiPlugin, codexPlugin, claudePlugin, falPlugin,
     apimodelsPlugin, arkPlugin, composePlugin, cliPlugin
   ],
@@ -98,7 +98,7 @@ stop → process.exit(code). Project config:
 Key facts:
 - Regular plugin APIs mount on the app BY NAME: app.registry, app.buildfile,
   app.runner, app.voiceover, app.translate, app.promptGen, app.image, app.video,
-  app.music, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
+  app.music, app.sfx, app.sprite, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
   app.apimodels, app.ark, app.compose, app.cli. Core APIs mount too (app.limits, ...).
   There is NO `app.plugins.<name>` indirection.
 - App base methods: start(), stop(), emit(), require(), has(). There is NO `app.on` —
@@ -120,8 +120,8 @@ Value exports:
 - Plugin instances: apimodelsPlugin, arkPlugin, assetPlugin, buildfilePlugin,
   claudePlugin, cliPlugin, codexPlugin, composePlugin, elevenlabsPlugin, falPlugin,
   imagePlugin, journalPlugin, limitsPlugin, musicPlugin, openaiPlugin, promptGenPlugin,
-  registryPlugin, runnerPlugin, storePlugin, translatePlugin, videoPlugin,
-  voiceoverPlugin
+  registryPlugin, runnerPlugin, sfxPlugin, spritePlugin, storePlugin, translatePlugin,
+  videoPlugin, voiceoverPlugin
 - Error classes as runtime values, for `instanceof` (src/index.ts, `export * as`):
   ElevenlabsErrors, OpenaiErrors, ArkErrors, FalErrors, ApimodelsErrors (each
   RetryableProviderError, TerminalProviderError, FlaggedProviderError) and ClaudeErrors,
@@ -145,6 +145,10 @@ Value exports:
 - Type namespaces Codex (Config, State, CodexInfo, CodexPromptMeta, CodexApi,
   CodexContext, RegistryApi, error class types) and Claude (Config, Reasoning, Effort,
   ClaudePromptMeta, ClaudeInfo, ClaudeApi, ClaudeContext, RegistryApi, error class types)
+- Type namespaces Sfx (SfxRequest, SfxResult, SfxHandler, SfxApi, SfxContext, Config,
+  RegistryApi) and Sprite (SpriteFile, SpriteRequest, SpriteResult, SpriteHandler,
+  SpriteProcessOptions, ProcessedSprite, TrimBox, SpriteApi, SpriteContext, Config,
+  RegistryApi). processSprite is not on the package root
 - promptGen values: PromptGenUnavailableError (reason "missing" | "auth" | "limit" |
   "unsupported"), isPromptGenUnavailable, ToolArgumentsError (toolName, raw), and
   runToolLoop (the journaled tool loop; a library function, not a plugin — see §4.6)
@@ -986,7 +990,8 @@ Unknown-provider error (also for a value that fails isVideoHandler):
 4.9 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
-("voiceover", "elevenlabs") → createVoiceoverHandler(ctx). POST
+("voiceover", "elevenlabs") → createVoiceoverHandler(ctx) and ("sfx", "elevenlabs") →
+createSfxHandler(ctx) (§4.20). POST
 /v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
 ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
 are key-free). estimate = text.length × per-character price for the resolved model
@@ -1737,9 +1742,9 @@ Errors: `[ai] No music provider named "<name>" is registered.\n  Available: <lis
 --------------------------------------------------------------------------------
 Every fal-hosted task over one client (client/http.ts, client/queue.ts,
 client/upload.ts), one FAL_KEY, one upload cache and one merged price table. onInit
-registers four handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
-("music","fal"). Emits no events. Each task directory (video/, image/, llm/, music/)
-owns its models and prices.
+registers six handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
+("music","fal"), ("sfx","fal"), ("sprite","fal"). Emits no events. Each task directory
+(video/, image/, llm/, music/, sfx/, sprite/) owns its models and prices.
 
 - video: submit + poll (no execute). Aliases seedance-2.5, seedance-2.5-ref,
   minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref,
@@ -1772,8 +1777,13 @@ owns its models and prices.
   composition_plan) and stable-audio-2.5 (fal-ai/stable-audio-25/text-to-audio,
   1 000–190 000 ms, per generation). Chunks: 3 000–120 000 ms each, at most 30, adding
   up to lengthMs. `params` never reach the body.
+- sfx: estimate + execute. elevenlabs-sfx-v2 (fal-ai/elevenlabs/sound-effects/v2,
+  500–22 000 ms, per started second; no durationMs bills the 22 s cap). A result that
+  is not mp3 is terminal (415).
+- sprite: estimate + execute. birefnet (per image) uploads the source, removes the
+  background, then runs processSprite; none ($0) makes no fal call.
 
-Image and music `execute` submit, then wait in process every `pollIntervalMs`, at most
+Image, music, sfx and sprite `execute` submit, then wait in process every `pollIntervalMs`, at most
 `jobTimeoutMs` (then a retryable `kind: "timeout"`; the job keeps running on fal and
 stays adoptable through `poll`). Every handler validates and prices a request before
 it reads the key, uploads or POSTs; a model without a price throws from `estimate`.
@@ -1782,9 +1792,11 @@ Prices — one table: each task's bundled rows, then `priceOverrides` (overrides
 Video keys are unprefixed (`<alias>`, `<alias>@<resolution>`, `<alias>+audio`,
 `<alias>#ref*`); the other tasks carry the task: `image:<alias>` /
 `image:<alias>@<resolution>` (USD per image), `music:<alias>` (USD per started minute
-or per generation), `llm:<id>#in` / `llm:<id>#out` (USD per M tokens). Bundled:
+or per generation), `sfx:<alias>` (USD per started second), `sprite:<alias>` (USD per
+image), `llm:<id>#in` / `llm:<id>#out` (USD per M tokens). Bundled:
 image:nano-banana-pro@1K/@2K/@4K 0.15/0.15/0.30, image:seedream-4.5-edit 0.04,
-image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20.
+image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20,
+sfx:elevenlabs-sfx-v2 0.002, sprite:birefnet 0.002.
 
 Types (src/plugins/fal/types.ts; `Fal.*` namespace):
 
@@ -1848,7 +1860,7 @@ export type FalInfo = {
   models: string[];
 };
 
-export type FalTask = "video" | "image" | "prompt-gen" | "music";
+export type FalTask = "video" | "image" | "prompt-gen" | "music" | "sfx" | "sprite";
 
 export type FalModelInfo =
   | { id: string; price: { inputPerM: number; outputPerM: number } }
@@ -1880,11 +1892,12 @@ app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per
 ```
 
 Request log (off by default): with `requestLog` set, every billable request (queue
-submit of image and music, each prompt-gen POST attempt) writes one JSONL line
+submit of image, music, sfx and sprite, each prompt-gen POST attempt) writes one JSONL line
 { at, task, model, endpoint, requestId | error, prompt, body }; body without its prompt
 field, URLs and data URIs cut; never the key or a header. A failed write warns once.
 Logs (redacted): fal:video:submitted/done/failed, fal:image:submitted/done/failed,
-fal:music:submitted/done/failed, fal:llm:done, fal:llm:partial, fal:llm:retry,
+fal:music:submitted/done/failed, fal:sfx:submitted/done, fal:sprite:submitted/done,
+fal:llm:done, fal:llm:partial, fal:llm:retry,
 fal:poll:retry, fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
 fal:request-log:failed.
 
@@ -1943,6 +1956,92 @@ apimodels:asset:stale, apimodels:asset-group:stale, apimodels:journal:closed,
 apimodels:negative:ignored, apimodels:poll:unknown-state, apimodels:records:unavailable,
 apimodels:result:unreadable. Full reference: src/plugins/apimodels/README.md.
 
+--------------------------------------------------------------------------------
+4.20 sfx — app.sfx (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "sfx" task contract: short sound effects from a text prompt, always mp3. A
+handler has `estimate` + `execute`; there is no job form. `model` is REQUIRED (the
+runner hashes the input as written). The ONE audited cast is behind `isSfxHandler`.
+Providers: elevenlabs (default; eleven_text_to_sound_v2) and fal (elevenlabs-sfx-v2).
+
+```ts
+export type SfxRequest = {
+  prompt: string;
+  model: string;               // required, part of the artifact key
+  durationMs?: number;         // omitted → the provider picks the length
+  promptInfluence?: number;    // 0..1
+  loop?: boolean;
+  params?: Record<string, unknown>;
+};
+export type SfxResult = { audio: Uint8Array; mimeType: "audio/mpeg"; costUsd: number; meta?: Record<string, unknown> };
+export type SfxHandler = {
+  estimate(request: SfxRequest): { usd: number };
+  execute(request: SfxRequest, opts: { signal?: AbortSignal }): Promise<SfxResult>;
+};
+export type SfxApi = {
+  generate(request: SfxRequest, opts?: { provider?: string; signal?: AbortSignal }): Promise<SfxResult>;
+  estimate(request: SfxRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];
+};
+```
+
+```yaml
+- task: sfx
+  id: coin-pickup
+  input: { model: "eleven_text_to_sound_v2", prompt: "Coin pickup, bright 8-bit chime.", durationMs: 600 }
+```
+
+Errors: `[ai] No sfx provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+--------------------------------------------------------------------------------
+4.21 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "sprite" task contract: cut an existing image into a transparent RGBA PNG
+(matte, trim to alpha bounds, resize, padding). A sprite item `$ref`s an image item;
+changing sprite options re-cuts the stored image and never regenerates it. `model` is
+REQUIRED. Module exports `isSpriteHandler` and `processSprite(png, options)` (the pure
+sharp pixel step every provider runs after its matte). Provider: fal (default).
+An item id may end with a nine-slice hint `<label>{nine=l,t,r,b}` (whole pixels); it
+stays in the exported file name. Any other brace in an id fails at load.
+
+```ts
+export type SpriteFile = { path: string; mimeType: string; hash: string };
+export type SpriteRequest = {
+  source: SpriteFile;          // the runner resolves { $ref } / { $file } into this
+  model: string;               // "birefnet"; "none" = already transparent
+  trim?: boolean;              // default true
+  padding?: number;            // px, default 0; with size, inside it (16x16 + padding 2 = 12x12 picture, 2 px border)
+  size?: { width: number; height: number };   // default: size after trim
+  fit?: "contain" | "cover" | "fill";         // default "contain" (transparent letterbox)
+  pixelArt?: boolean;          // nearest-neighbour; default false (lanczos3)
+  alphaThreshold?: number;     // 0..255, default 8
+  params?: Record<string, unknown>;
+};
+export type SpriteResult = { image: Uint8Array; mimeType: "image/png"; costUsd: number; meta?: Record<string, unknown> };
+export type SpriteHandler = {
+  estimate(request: SpriteRequest): { usd: number };   // reads model only
+  execute(request: SpriteRequest, opts: { signal?: AbortSignal }): Promise<SpriteResult>;
+};
+export type SpriteApi = {
+  generate(request: SpriteRequest, opts?: { provider?: string; signal?: AbortSignal }): Promise<SpriteResult>;
+  estimate(request: SpriteRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];
+};
+```
+
+```yaml
+- task: image
+  id: button-raw
+  input: { prompt: "Wooden game UI button, flat colour background.", aspect: "1:1" }
+- task: sprite
+  id: "button{nine=12,12,12,12}"
+  input: { model: "birefnet", source: { $ref: button-raw }, size: { width: 128, height: 64 }, padding: 2 }
+```
+
+Errors: `[ai] No sprite provider named "<name>" is registered.\n  Available: <list or "none">.`
+`[ai] Sprite is empty after background removal.\n  Check the source image or lower alphaThreshold.`
+`[ai] Sprite padding <p> leaves no room inside <w>x<h>.\n  Lower padding or raise size.`
+
 ================================================================================
 5. COMPLETE EVENT CATALOG
 ================================================================================
@@ -1992,7 +2091,8 @@ elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/
 openai:prompt-gen:done/failed, codex:image:done, codex:prompt-gen:done,
 claude:prompt-gen:done, ark:video:submitted/done/failed, ark:asset:group-created
 (warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn),
-fal:video|image|music:submitted/done/failed, fal:llm:done/partial/retry, fal:poll:retry,
+fal:video|image|music:submitted/done/failed, fal:sfx|sprite:submitted/done,
+fal:llm:done/partial/retry, fal:poll:retry,
 fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
 fal:request-log:failed, apimodels:video:submitted/done/failed, apimodels:asset:registered
 (see §4.19 for the rest).
@@ -2062,7 +2162,7 @@ elevenlabs:
   baseUrl: string = "https://api.elevenlabs.io"
   defaultModel: string = "eleven_multilingual_v2"
   timeoutMs: number = 60_000
-  priceOverrides: Record<string, number> = {}  — USD/char by model
+  priceOverrides: Record<string, number> = {}  — USD/char by model; sfx:<model>#second / sfx:<model>#auto
 
 openai:
   apiKeyEnv: string = "OPENAI_API_KEY"
@@ -2092,17 +2192,23 @@ music:
   defaultProvider: string = "fal"
   pollIntervalMs: number = 5000                — facade poll cadence (the runner uses runner.pollIntervalMs)
 
+sfx:
+  defaultProvider: string = "elevenlabs"
+
+sprite:
+  defaultProvider: string = "fal"
+
 fal:
   apiKeyEnv: string = "FAL_KEY"
-  queueUrl: string = "https://queue.fal.run"   — submit is POST <queueUrl>/<endpoint> (video, image, music)
+  queueUrl: string = "https://queue.fal.run"   — submit is POST <queueUrl>/<endpoint> (video, image, music, sfx, sprite)
   uploadUrl: string = "https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"
   upload: "storage" | "data-uri" = "storage"   — storage falls back to a data URI when the upload fails
   timeoutMs: number = 60_000                   — one HTTP request
-  priceOverrides: Record<string, number> = {}  — video <alias>; image:<alias>; music:<alias>; llm:<id>#in / #out
+  priceOverrides: Record<string, number> = {}  — video <alias>; image:<alias>; music:<alias>; sfx:<alias>; sprite:<alias>; llm:<id>#in / #out
   runUrl: string = "https://fal.run"           — sync base for prompt-gen
   imageDefaultModel: string = "gpt-image-2.5"
   llmDefaultModel: string = "anthropic/claude-opus-5.5"
-  pollIntervalMs: number = 2000                 — in-process wait of image and music execute
+  pollIntervalMs: number = 2000                 — in-process wait of image, music, sfx and sprite execute
   jobTimeoutMs: number = 900_000               — that wait gives up (retryable timeout); the job stays adoptable
   requestLog: string = ""                      — JSONL path; off when ""
 
@@ -2196,6 +2302,8 @@ const track = await app.music.generate(
   { provider: "fal" }
 );
 await Bun.write("teaser.mp3", track.audio);
+const coin = await app.sfx.generate({ prompt: "coin pickup, bright chime", model: "eleven_text_to_sound_v2", durationMs: 600 });
+await Bun.write("coin-pickup.mp3", coin.audio);
 const tagline = await app.promptGen.generate(
   { prompt: "One-line tagline for a durable AI build system.", temperature: 0.7 },
   { provider: "openai" }
@@ -2402,6 +2510,7 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] Compose could not produce a valid build file after <n> attempts.\n  Refine the prompt or write the build file manually with "moku new".
 - [ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.
 - [ai] No music provider named "<name>" is registered.\n  Available: <list or "none">.
+  (same shape for sfx / sprite)
 - [ai] No image provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not an ImageHandler)
 - [ai] No video provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not a VideoHandler)
 - [ai] No price for codex model "<model>".\n  Add it to codex priceOverrides.
@@ -2430,8 +2539,8 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] Claude params.images must be image files.\n  Pass { path, mimeType, hash } for every image.
 - [ai] Claude params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object.
 - [ai] Claude params.reasoning must be off, low, medium or high.\n  Got "<value>".
-- [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music.
-- [ai] No price for fal <task> model "<id>".\n  Add it to fal.priceOverrides.  (image, music, prompt-gen)
+- [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music, sfx, sprite.
+- [ai] No price for fal <task> model "<id>".\n  Add it to fal.priceOverrides.  (image, music, sfx, sprite, prompt-gen)
 - [ai] Not an asset record: <reason>.\n  Expected JSON with assetId, provider, account, groupId, registeredAt.
 - [ai] ark refused an image with a face: <code>.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.
 - [ai] ark refused asset "<name>": <reason>.\n  Items that use it will not run.
@@ -2463,24 +2572,28 @@ everything it depends on):
   7. image         (deps: registry)                      Standard
   8. video         (deps: registry)                      Standard
   9. music         (deps: registry)                      Standard
- 10. asset         (deps: registry)                      Standard
- 11. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs")   Complex
- 12. openai        (deps: registry) — onInit registers ("voiceover","openai"),
+ 10. sfx           (deps: registry)                      Standard
+ 11. sprite        (deps: registry)                      Standard
+ 12. asset         (deps: registry)                      Standard
+ 13. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs"),
+                    ("sfx","elevenlabs")                                             Complex
+ 14. openai        (deps: registry) — onInit registers ("voiceover","openai"),
                     ("translate","openai"), ("prompt-gen","openai")                  Complex
- 13. codex         (deps: registry) — ("image","codex"), ("prompt-gen","codex")     Complex
- 14. claude        (deps: registry) — ("prompt-gen","claude")                       Complex
- 15. fal           (deps: registry) — ("video","fal"), ("image","fal"),
-                    ("prompt-gen","fal"), ("music","fal")                            Complex
- 16. apimodels     (deps: registry) — ("video","apimodels")                         Complex
- 17. ark           (deps: registry) — ("video","ark"), ("asset","ark"),
+ 15. codex         (deps: registry) — ("image","codex"), ("prompt-gen","codex")     Complex
+ 16. claude        (deps: registry) — ("prompt-gen","claude")                       Complex
+ 17. fal           (deps: registry) — ("video","fal"), ("image","fal"),
+                    ("prompt-gen","fal"), ("music","fal"), ("sfx","fal"),
+                    ("sprite","fal")                                                 Complex
+ 18. apimodels     (deps: registry) — ("video","apimodels")                         Complex
+ 19. ark           (deps: registry) — ("video","ark"), ("asset","ark"),
                     ("image","ark")                                                  Complex
- 18. compose       (deps: buildfile, promptGen)          Standard
- 19. cli           (deps: runner, buildfile, compose)    Complex
+ 20. compose       (deps: buildfile, promptGen)          Standard
+ 21. cli           (deps: runner, buildfile, compose)    Complex
 
 ASCII graph (A --> B means A depends on B):
 
   runner ----> registry        runner ----> buildfile
-  voiceover, translate, promptGen, image, video, music, asset ----------> registry
+  voiceover, translate, promptGen, image, video, music, sfx, sprite, asset -> registry
   elevenlabs, openai, codex, claude, fal, apimodels, ark ---------------> registry
   compose ---> buildfile       compose ---> promptGen
   cli -------> runner          cli --------> buildfile    cli --------> compose
@@ -2496,6 +2609,9 @@ and W6 ark (registered after fal, before compose — fal stays the first, defaul
 provider; ark is the only asset provider). claude registers after codex; apimodels
 registers after fal and before ark (a second video provider; fal stays the default). music is registered after video and before
 asset; fal registers ("music","fal"), so fal is the default (and only) music provider.
+sfx and sprite are registered right after music. elevenlabs registers ("sfx","elevenlabs")
+before fal registers ("sfx","fal"), so elevenlabs is the default sfx provider; fal is the
+only sprite provider.
 
 ================================================================================
 10. EXTENSION PATTERNS
@@ -2566,9 +2682,10 @@ items:
     input: { prompt: "a neon city skyline", size: "1024x1024" }
 ```
 
-The built-in `image` (codex, fal, ark), `video` (fal, apimodels, ark), `music` (fal) and
-`asset` (ark) tasks follow the same pattern; a video, music or asset handler exposes
-`submit` + `poll` so the provider job id is journaled.
+The built-in `image` (codex, fal, ark), `video` (fal, apimodels, ark), `music` (fal),
+`asset` (ark), `sfx` (elevenlabs, fal) and `sprite` (fal) tasks follow the same pattern;
+a video, music or asset handler exposes `submit` + `poll` so the provider job id is
+journaled.
 
 10.3 Event-consumer plugin (bus subscription — the only way; no app.on):
 

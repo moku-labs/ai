@@ -19,7 +19,9 @@ const TASK_INPUT_DOCS = [
   'Per-task "input" documentation for the available M0 tasks (task -> required input fields):',
   "- voiceover: { text: string, voice: string }",
   "- translate: { text: string, targetLang: string }",
-  "- prompt-gen: { prompt: string }"
+  "- prompt-gen: { prompt: string }",
+  '- sfx: { prompt: string, model: "eleven_text_to_sound_v2" (or "elevenlabs-sfx-v2" with provider fal), durationMs?: number, promptInfluence?: number (0..1), loop?: boolean } -> mp3',
+  '- sprite: { source: { $ref: <image item id> }, model: "birefnet" | "none", trim?: boolean, padding?: number, size?: { width: number, height: number }, fit?: "contain" | "cover" | "fill", pixelArt?: boolean, alphaThreshold?: number (0..255) } -> transparent png; a sprite item id may end with a nine-slice hint {nine=l,t,r,b}'
 ].join("\n");
 
 const FENCE_PATTERN = /^```(?:[A-Za-z]*)\n([\s\S]*?)\n?```$/;

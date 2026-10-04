@@ -23,6 +23,8 @@
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | music | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
+ * | sfx | `defaultProvider` | `"elevenlabs"` |
+ * | sprite | `defaultProvider` | `"fal"` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
@@ -73,6 +75,8 @@ import {
   promptGenPlugin,
   registryPlugin,
   runnerPlugin,
+  sfxPlugin,
+  spritePlugin,
   translatePlugin,
   videoPlugin,
   voiceoverPlugin
@@ -90,6 +94,8 @@ const framework = createCore(coreConfig, {
     imagePlugin,
     videoPlugin,
     musicPlugin,
+    sfxPlugin,
+    spritePlugin,
     assetPlugin,
     elevenlabsPlugin,
     openaiPlugin,
@@ -198,6 +204,8 @@ export {
   promptGenPlugin,
   registryPlugin,
   runnerPlugin,
+  sfxPlugin,
+  spritePlugin,
   storePlugin,
   translatePlugin,
   videoPlugin,
@@ -233,6 +241,8 @@ export {
   Openai,
   PromptGen,
   Runner,
+  Sfx,
+  Sprite,
   Store,
   Translate,
   Video,

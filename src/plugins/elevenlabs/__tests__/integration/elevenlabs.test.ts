@@ -5,10 +5,12 @@ import type { EnvProvider } from "@moku-labs/common";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
 import { registryPlugin } from "../../../registry";
+import type { SfxHandler } from "../../../sfx/contract";
 import { voiceoverPlugin } from "../../../voiceover";
 import type { VoiceoverHandler } from "../../../voiceover/types";
 import { RetryableProviderError } from "../../errors";
 import { elevenlabsPlugin } from "../../index";
+import { createSfxHandler } from "../../sfx/handler";
 import type { ElevenlabsContext } from "../../types";
 import { createVoiceoverHandler } from "../../voiceover/handler";
 
@@ -93,6 +95,18 @@ describe("elevenlabs integration", () => {
     await app.start();
 
     expect(app.voiceover.providers()).toEqual(["elevenlabs"]);
+
+    await app.stop();
+  });
+
+  it("registers under the sfx task after voiceover in onInit", async () => {
+    const { createApp } = buildFramework(dbPath);
+    const app = createApp();
+
+    await app.start();
+
+    expect(app.registry.tasks()).toEqual(["voiceover", "sfx"]);
+    expect(app.registry.providers("sfx")).toEqual(["elevenlabs"]);
 
     await app.stop();
   });
@@ -184,6 +198,11 @@ describe("elevenlabs integration", () => {
   describe("types", () => {
     it("createVoiceoverHandler's return value satisfies VoiceoverHandler structurally", () => {
       expectTypeOf(createVoiceoverHandler).returns.toEqualTypeOf<VoiceoverHandler>();
+    });
+
+    it("createSfxHandler's return value satisfies SfxHandler structurally", () => {
+      expectTypeOf(createSfxHandler).returns.toEqualTypeOf<SfxHandler>();
+      expectTypeOf(createSfxHandler).parameter(0).toEqualTypeOf<ElevenlabsContext>();
     });
 
     it("createVoiceoverHandler accepts an ElevenlabsContext", () => {

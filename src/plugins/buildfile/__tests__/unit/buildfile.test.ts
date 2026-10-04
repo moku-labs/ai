@@ -342,6 +342,21 @@ describe("buildfile unit", () => {
       expect(text).toContain("task: voiceover");
       expect(text).toContain("task: translate");
       expect(text).toContain("task: prompt-gen");
+      expect(text).toContain("task: sfx");
+      expect(text).toContain("task: sprite");
+    });
+
+    it("its commented examples compile once uncommented, nine-slice sprite id included", async () => {
+      const text = api.template({ name: "demo" });
+      const examples = text
+        .split("# Example items — uncomment and edit to use:\n#\n")[1]
+        ?.replaceAll(/^# ?/gm, "  ");
+      const uncommented = `version: 1\nname: demo\nitems:\n${examples ?? ""}`;
+
+      const { spec } = await api.compile({ text: uncommented, lang: "yaml" });
+
+      expect(spec.items.map(item => item.task)).toContain("sfx");
+      expect(spec.items.find(item => item.task === "sprite")?.id).toBe("button{nine=12,12,12,12}");
     });
 
     it("itself compiles into a valid, minimal BuildSpec", async () => {

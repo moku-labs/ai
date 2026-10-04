@@ -48,6 +48,7 @@
     "@moku-labs/core": "1.6.0",
     "better-sqlite3": "12.11.1",
     "openai": "^6.45.0",
+    "sharp": "0.35.5",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },

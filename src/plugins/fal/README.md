@@ -1,10 +1,10 @@
 # fal
 
-> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")` and `("music", "fal")` with the registry in `onInit`. Emits no events.
+> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")`, `("music", "fal")`, `("sfx", "fal")` and `("sprite", "fal")` with the registry in `onInit`. Emits no events.
 
 ## Purpose
 
-One plugin per vendor: the four fal tasks share `client/` (HTTP and error classification, the queue, the
+One plugin per vendor: the six fal tasks share `client/` (HTTP and error classification, the queue, the
 upload), one `FAL_KEY`, one upload cache keyed by content sha256, one merged price table and one opt-in
 request log.
 
@@ -14,6 +14,9 @@ request log.
   `submit` + `poll`; the one-off facades (`app.image.generate`, `app.music.generate`) call `execute`, which
   submits and waits in process every `pollIntervalMs`, at most `jobTimeoutMs`.
 - **prompt-gen**: `estimate` + `execute`, one sync POST to fal's OpenRouter router.
+- **sfx** and **sprite**: `estimate` + `execute` over the generic queue. Their contracts have no job form:
+  `execute` submits and waits in process, like the image and music `execute`. A sprite with model `none`
+  makes no call at all.
 
 Every handler validates and prices a request before it reads the key, uploads or POSTs: nothing is billed for a
 bad request. A model without a price throws from `estimate`, so `moku estimate` and `--max-cost` never count it
@@ -26,15 +29,15 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallo
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `apiKeyEnv` | `string` | `"FAL_KEY"` | Env var with the key, read through `ctx.env` per request. Estimates and `models()` never need it. |
-| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>` (video, image, music). |
+| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>` (video, image, music, sfx, sprite). |
 | `uploadUrl` | `string` | `"https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"` | Storage upload initiate URL. |
-| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (frames, refs, prompt-gen images) reach fal. `storage` falls back to a data URI when the upload fails. |
+| `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (frames, refs, prompt-gen images, sprite sources) reach fal. `storage` falls back to a data URI when the upload fails. |
 | `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download, chat POST). |
 | `priceOverrides` | `Record<string, number>` | `{}` | One table for every task; keys in [Prices](#prices). |
 | `runUrl` | `string` | `"https://fal.run"` | Sync endpoint base. prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. |
 | `imageDefaultModel` | `string` | `"gpt-image-2.5"` | Image model when `ImageRequest.model` is omitted. |
 | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` | prompt-gen model when `PromptGenRequest.model` is omitted or `"default"`. |
-| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image and music `execute`. |
+| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image, music, sfx and sprite `execute`. |
 | `jobTimeoutMs` | `number` | `900_000` | The in-process wait gives up after this (retryable `timeout`); the job keeps running on fal. |
 | `requestLog` | `string` | `""` | JSONL request log path, relative to the working directory. `""` = off. |
 
@@ -49,6 +52,8 @@ video/   handler.ts job.ts models.ts prices.ts image-size.ts upload.ts
 image/   handler.ts models.ts prices.ts
 llm/     handler.ts chat.ts conversation.ts models.ts prices.ts tokens.ts
 music/   handler.ts models.ts prices.ts
+sfx/     handler.ts models.ts prices.ts
+sprite/  handler.ts models.ts prices.ts                 the pixel step is ../sprite/process.ts (D6)
 ```
 
 Each task directory owns its models and prices; a new model touches one directory.
@@ -498,6 +503,65 @@ Audio too, though its body ignores them. `params` never reach the body. Every fa
 The result is `audio`: the MIME type is fal's `content_type`, else the download's `content-type`, else the URL
 extension (`mp3 wav ogg opus`), else `audio/mpeg`. `meta` is `{ model, endpoint, requestId, lengthMs }`.
 
+## Sfx
+
+`SfxRequest.model` is required and names this alias. The output is always mp3 (`audio/mpeg`): the game engine
+reads mp3 only (D1).
+
+| Alias | Endpoint | Duration | Billing | Body |
+| --- | --- | --- | --- | --- |
+| `elevenlabs-sfx-v2` | `fal-ai/elevenlabs/sound-effects/v2` | 500–22 000 ms, optional | per started second | `{ text, duration_seconds?, prompt_influence?, loop?, output_format: "mp3_44100_128" }` |
+
+The request is validated with zod first (the message names the bad field): `prompt` 1–450 characters,
+`promptInfluence` 0–1, `loop` a boolean. Then the alias and the duration range. `durationMs` goes out as
+`duration_seconds` (600 ms is 0.6). `params` are not read, so nothing can change the output format. Every failure
+is a terminal 400 before the key is read.
+
+Without `durationMs` the model picks the length, and `estimate` and the recorded cost bill the 22 s cap
+(`$0.044`), an upper bound for the budget gate.
+
+The result is `audio`. Its MIME type is fal's `content_type`, else the download's `content-type`, else the URL
+extension, else `audio/mpeg`. Anything but `audio/mpeg` (or its alias `audio/mp3`) is a terminal 415, never
+returned:
+
+```
+[ai] fal returned "audio/wav" for sfx model "elevenlabs-sfx-v2", not mp3 (audio/mpeg).
+  sfx output is mp3 only: run the item with provider elevenlabs.
+```
+
+`meta` is `{ model, endpoint, requestId, durationMs? }`.
+
+## Sprite
+
+A sprite item takes an existing image by `$ref` or `$file` and returns a transparent RGBA PNG (D2). The handler
+removes the background on fal, then calls `processSprite` from the sprite plugin (trim, resize, padding, PNG).
+
+| Alias | Endpoint | Billing | Body |
+| --- | --- | --- | --- |
+| `birefnet` | `fal-ai/birefnet/v2` | per image | `{ image_url, model: "General Use (Light)", operating_resolution: "1024x1024", output_format: "png", refine_foreground: true }` |
+| `none` | no call | 0 | none: the source is already transparent, so it goes to the pixel step as it is |
+
+| Param (`birefnet` only) | Values | Default |
+| --- | --- | --- |
+| `params.model` | `General Use (Light)`, `General Use (Light 2K)`, `General Use (Heavy)`, `Matting`, `Portrait`, `General Use (Dynamic)` | `General Use (Light)` |
+| `params.operating_resolution` | `1024x1024`, `2048x2048`, `2304x2304` | `1024x1024` |
+
+No other param is read. `none` reads no params.
+
+`estimate` reads `model` only: the runner estimates before it resolves the `source` `$ref`. `execute` checks the
+whole request before the key is read or anything is uploaded: the alias, a resolved `{ path, mimeType, hash }`
+source, the pixel options (`padding` a whole number ≥ 0, `size` whole numbers ≥ 1, `fit`, `alphaThreshold`
+0–255) and the params. Every failure is a terminal 400, e.g.
+
+```
+[ai] fal sprite got an unresolved source.
+  Run the item through app.runner, or pass a { path, mimeType, hash } file.
+```
+
+`birefnet` flow: upload the source (the shared upload and its cache), queue the job, wait, download `image.url`,
+then `processSprite`. `none` reads the source file and calls `processSprite`; it needs no key. `meta` is
+`{ model, endpoint?, requestId?, width, height, trimBox }`.
+
 ## Shared client
 
 **Upload.** Every task uploads the same way: `POST uploadUrl { file_name, content_type }` → `{ upload_url, file_url }`,
@@ -505,7 +569,7 @@ then `PUT upload_url`. Files of one call go 4 at a time, in order. A failed uplo
 to data URIs, logged once as `fal:upload:fallback`. Storage URLs are cached in `state.uploads` by
 `storage:<mime>:<sha256>`, shared by every task and kept for the life of the process.
 
-**Queue (image, music).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
+**Queue (image, music, sfx, sprite).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
 returns its id; an abort is checked after the uploads). The job id is JSON `{ endpoint, requestId, statusUrl, responseUrl }`,
 the same codec as video. `poll` reads the status once: `IN_QUEUE` / `IN_PROGRESS` pending, `COMPLETED` with `error`
 failed, `COMPLETED` collected (result, then the CDN download without the key), an unknown status pending with a
@@ -513,7 +577,7 @@ failed, `COMPLETED` collected (result, then the CDN download without the key), a
 (`fal:poll:retry`), an abort ends the wait with the signal's reason.
 
 **Request log.** Off by default. With `requestLog` set, every billable request writes one JSONL line: each queue
-submit of video, image and music, and each prompt-gen POST attempt.
+submit of video, image, music, sfx and sprite, and each prompt-gen POST attempt.
 
 ```json
 {"at":"2026-09-29T10:00:00.000Z","task":"image","model":"gpt-image-2.5","endpoint":"openai/gpt-image-2.5/sunburst/edit","requestId":"019a…","prompt":"hero shot","body":{"image_size":"portrait_16_9","quality":"high","num_images":1,"output_format":"jpeg","image_urls":["face.png"]}}
@@ -521,7 +585,7 @@ submit of video, image and music, and each prompt-gen POST attempt.
 
 `requestId` is fal's request id (prompt-gen: the answer's `id`); a failed request has `error: { errorType, status?, kind? }`
 instead, never the error text. prompt-gen's `prompt` is `request.prompt`, or with `messages` the text of the last
-user or tool message. `body` is the posted body without its prompt field (`prompt`, or the chat `messages`),
+user or tool message. `body` is the posted body without its prompt field (`prompt`, sfx `text`, or the chat `messages`),
 every string cut: http(s) URLs to `<host>/…/<last segment>`, data URIs to `data:<mime>;<length>`. Ref URLs
 (`image_urls`, the chat `image_url` parts) become the file names when there is one per uploaded file, else
 `{ count }`. Video matches `image_urls` to the first frame and the image refs, or to the image refs alone on
@@ -542,6 +606,8 @@ other tasks' keys carry the task:
 | `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
 | `music:stable-audio-2.5` | 0.20 | per generation |
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
+| `sfx:elevenlabs-sfx-v2` | 0.002 | per started second |
+| `sprite:birefnet` | 0.002 | per image, an estimate: fal bills $0.0008 per compute second and publishes no per-image figure |
 
 GPT Image prices are the `high` quality price. `params.quality` `xhigh` multiplies the row by 1.78, `max` by 4,
 the same ratio at every size in fal's table. Lower qualities keep the `high` price as an upper bound.
@@ -572,7 +638,9 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
 | `FAL_KEY` not set, unknown model, missing image, too many refs, end frame on a model without one | Plain error: terminal after one attempt, nothing billed |
 | Poll with `FAL_KEY` not set, or the status call answers 401 / 403 | Plain error with no `status` and no `kind` (`[ai] fal cannot poll without a valid API key.`): the runner marks the job `expired`, not `failed`, so the next run adopts the same job instead of paying again |
-| Image, prompt-gen or music: unknown model, too many refs, bad resolution, aspect or params, invalid music request, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
+| Image, prompt-gen, music, sfx or sprite: unknown model, too many refs, bad resolution, aspect or params, invalid music, sfx or sprite request, unresolved sprite source, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
+| sfx: the result is not mp3 | `TerminalProviderError` (415), never returned |
+| sprite: the cut-out is fully transparent | Plain error from `processSprite`: `[ai] Sprite is empty after background removal.` |
 | Image or music: result or download of a `COMPLETED` job answers 400 / 422, or is flagged | `failed`: fal's verdict, logged `fal:image:failed` / `fal:music:failed` |
 | Image or music: result or download fails with another 4xx | Retryable 503 (`fal:result:unreadable`), same rule as video |
 | Image or music `execute`: the in-process wait passes `jobTimeoutMs` | Retryable, `kind: "timeout"`; the job keeps running on fal and stays adoptable through `poll` |
@@ -581,7 +649,7 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | prompt-gen: 5xx or request timeout | Retried in the handler, 3 attempts at most, backoff 1 s then 2 s (logged `fal:llm:retry`) |
 | prompt-gen: a 2xx answer with `error.message` | Flagged when it names `content_policy`, else terminal 400 `[ai] fal LLM returned an error: <text>` |
 | prompt-gen: tool-call `arguments` that are not JSON | `ToolArgumentsError` (`toolName`, `raw`), never retried |
-| Incomplete result body (no `images[0].url`, `audio.url`, `choices[0].message.content`) | Plain two-line error |
+| Incomplete result body (no `images[0].url`, `audio.url`, `image.url`, `choices[0].message.content`) | Plain two-line error |
 
 Messages start with `[ai]` and never contain the key or the prompt. Logs carry ids, statuses, counts and error
 classes, never prompts.
@@ -594,6 +662,8 @@ app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price:
 app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
 app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
 app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
+app.fal.models("sfx"); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]
+app.fal.models("sprite"); // => [{ id: "birefnet", price: { usd: 0.002, per: "image" } }, { id: "none", price: { usd: 0, per: "image" } }]
 ```
 
 `info()` is unchanged: `configured` is true when `FAL_KEY` (or the configured variable) is set; `models` are the
@@ -622,10 +692,23 @@ items:
     task: music
     provider: fal
     input: { prompt: "tense synth pulse", model: "elevenlabs-music-v2.5", lengthMs: 60000 }
+  - id: coin-pickup
+    task: sfx
+    provider: fal
+    input: { prompt: "coin pickup, bright chime", model: elevenlabs-sfx-v2, durationMs: 600 }
+  - id: btn-raw
+    task: image
+    provider: fal
+    input: { prompt: "wooden game UI button, flat colour background", model: "nano-banana-pro", aspect: "1:1" }
+  - id: "btn{nine=12,12,12,12}"
+    task: sprite
+    provider: fal
+    input: { source: { $ref: btn-raw }, model: birefnet, size: { width: 128, height: 64 }, padding: 2 }
 ```
 
 ```ts
 app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }, { provider: "fal" }); // { usd: 0.3 }
 app.music.estimate({ prompt: "x", model: "stable-audio-2.5", lengthMs: 30_000 }, { provider: "fal" }); // { usd: 0.2 }
+app.sfx.estimate({ prompt: "x", model: "elevenlabs-sfx-v2" }, { provider: "fal" }); // { usd: 0.044 }, the 22 s cap
 await app.promptGen.generate({ prompt: "Caption a sunset in five words." }, { provider: "fal" });
 ```
