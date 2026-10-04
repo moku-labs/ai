@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TerminalProviderError } from "../../errors";
 import {
   checkImageAspect,
+  checkImageBackground,
   imageAliases,
   imageResolution,
   promptWithNegative,
@@ -114,7 +115,8 @@ describe("body builders", () => {
     resolution: undefined,
     imageUrls: [],
     quality: undefined,
-    outputFormat: undefined
+    outputFormat: undefined,
+    background: undefined
   };
 
   it("nano-banana-pro sends aspect_ratio and its native resolution", () => {
@@ -199,10 +201,81 @@ describe("body builders", () => {
     expect(GPT.body({ ...input, outputFormat })).toMatchObject({ output_format: sent });
   });
 
+  it("gpt-image sends a transparent background as png when no format is asked", () => {
+    expect(GPT.body({ ...input, background: "transparent" })).toMatchObject({
+      background: "transparent",
+      output_format: "png"
+    });
+  });
+
+  it.each([
+    ["webp", "webp"],
+    ["png", "png"],
+    ["gif", "png"]
+  ])("gpt-image transparent with output_format %s → %s", (outputFormat, sent) => {
+    expect(GPT.body({ ...input, background: "transparent", outputFormat })).toMatchObject({
+      background: "transparent",
+      output_format: sent
+    });
+  });
+
+  it.each(["auto", "opaque"])("gpt-image sends background %s and keeps jpeg", background => {
+    expect(GPT.body({ ...input, background })).toMatchObject({
+      background,
+      output_format: "jpeg"
+    });
+  });
+
+  it.each(["clear", undefined])("gpt-image does not send background %s", background => {
+    const body = GPT.body({ ...input, background });
+    expect(body).not.toHaveProperty("background");
+    expect(body).toMatchObject({ output_format: "jpeg" });
+  });
+
+  it("nano-banana-pro and seedream never send background", () => {
+    const transparent = { ...input, resolution: "1K", background: "transparent" };
+    expect(NANO.body(transparent)).not.toHaveProperty("background");
+    expect(SEEDREAM.body({ ...transparent, resolution: undefined })).not.toHaveProperty(
+      "background"
+    );
+  });
+
   it("nano-banana-pro keeps png whatever output_format the caller asks", () => {
     expect(NANO.body({ ...input, resolution: "1K", outputFormat: "jpeg" })).toMatchObject({
       output_format: "png"
     });
+  });
+});
+
+describe("checkImageBackground", () => {
+  it("refuses a transparent jpeg on gpt-image as a terminal 400", () => {
+    let caught: unknown;
+    try {
+      checkImageBackground(GPT, "transparent", "jpeg");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(TerminalProviderError);
+    expect(caught).toMatchObject({
+      status: 400,
+      message:
+        '[ai] fal image model "gpt-image-2.5" cannot write a transparent jpeg.\n  Use output_format "png" or "webp".'
+    });
+  });
+
+  it.each<[string | undefined, string | undefined]>([
+    ["transparent", undefined],
+    ["transparent", "png"],
+    ["transparent", "webp"],
+    ["opaque", "jpeg"],
+    [undefined, "jpeg"]
+  ])("accepts background %s with output_format %s on gpt-image", (background, outputFormat) => {
+    expect(() => checkImageBackground(GPT, background, outputFormat)).not.toThrow();
+  });
+
+  it("ignores background on models that never send it", () => {
+    expect(() => checkImageBackground(NANO, "transparent", "jpeg")).not.toThrow();
+    expect(() => checkImageBackground(SEEDREAM, "transparent", "jpeg")).not.toThrow();
   });
 });
 

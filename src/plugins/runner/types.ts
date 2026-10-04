@@ -471,13 +471,17 @@ export type RunnerApi = {
    */
   events(opts?: { runId?: string }): AsyncIterable<RunEvent>;
   /**
-   * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`. An item
-   * with several outputs (an image group) writes `<label>.<ext>`, then
-   * `<label>-2.<ext>` … `<label>-N.<ext>`; the item cost is on the first file.
+   * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`, or to
+   * `<outDir>/<label>.<ext>` with `flat`. An item with several outputs (an
+   * image group) writes `<label>.<ext>`, then `<label>-2.<ext>` …
+   * `<label>-N.<ext>`; the item cost is on the first file. A label that would
+   * escape `outDir`, or a file this export already wrote (with `flat`: the same
+   * label in two builds), is skipped and listed in `skipped`.
    *
-   * @param opts - Run id (default: newest run) and output directory (default "out").
+   * @param opts - Run id (default: newest run), output directory (default "out") and `flat` (default false).
    * @param opts.runId - Run to export.
    * @param opts.outDir - Export root directory.
+   * @param opts.flat - Write into `outDir` directly, without the `<build>/` folder.
    * @returns The files written and the labels skipped.
    * @example
    * ```ts
@@ -485,7 +489,12 @@ export type RunnerApi = {
    * const { files, skipped } = await app.runner.export({ outDir: "out" });
    * // files[0]: { label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }
    * // a group of 3 keyframes "e01.keys": labels "e01.keys", "e01.keys-2", "e01.keys-3"; costUsd 0.105, 0, 0
+   *
+   * // Drop the icons straight into the game's asset folder, no build folder.
+   * const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
+   * // icons.files[0].path: "/repo/assets/icons/sword.png"
+   * // a second build with a "sword" label: icons.skipped is ["sword"], the first file is kept
    * ```
    */
-  export(opts?: { runId?: string; outDir?: string }): Promise<ExportResult>;
+  export(opts?: { runId?: string; outDir?: string; flat?: boolean }): Promise<ExportResult>;
 };

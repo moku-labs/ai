@@ -54,6 +54,7 @@
  */
 // biome-ignore-all assist/source/organizeImports: manifest section order (Framework API → Plugins → Helpers → Types → Errors) is mandated by spec/04 §4
 import { dotenv, processEnv } from "@moku-labs/common";
+import type { AnyPluginInstance } from "@moku-labs/core";
 import { coreConfig, createCore } from "./config";
 import {
   apimodelsPlugin,
@@ -144,6 +145,38 @@ export const createApp = framework.createApp;
  * ```
  */
 export const createPlugin = framework.createPlugin;
+
+/**
+ * The shape of a project's `moku.config.ts`: the `plugins` and `pluginConfigs` of `createApp`'s
+ * options, nothing else. The `moku` bin loads the file's default export and passes it to
+ * `createApp`. `P` is the tuple of extra plugins, so their `pluginConfigs` keys stay typed.
+ *
+ * @example
+ * ```ts
+ * const config: ProjectConfig = { pluginConfigs: { ark: { region: "cn" } } };
+ * ```
+ */
+export type ProjectConfig<P extends readonly AnyPluginInstance[] = readonly AnyPluginInstance[]> =
+  Pick<NonNullable<Parameters<typeof createApp<P>>[0]>, "plugins" | "pluginConfigs">;
+
+/**
+ * Types a project's `moku.config.ts`. Returns the config unchanged; the value is the editor
+ * check: an unknown `pluginConfigs` key or a wrong option type is a compile error, also for the
+ * custom plugins listed in `plugins`. Pass no type arguments.
+ *
+ * @param config - The extra `plugins` and the `pluginConfigs` overrides.
+ * @returns The same config object.
+ * @example
+ * ```ts
+ * // moku.config.ts in the project root: `moku run` and every other command now see it.
+ * export default defineConfig({ pluginConfigs: { ark: { region: "cn" }, fal: { upload: "data-uri" } } });
+ * ```
+ */
+export function defineConfig<const P extends readonly AnyPluginInstance[] = readonly []>(
+  config: ProjectConfig<P>
+): ProjectConfig<P> {
+  return config;
+}
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {

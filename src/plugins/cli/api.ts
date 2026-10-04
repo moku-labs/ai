@@ -27,6 +27,9 @@ import type {
 } from "./types";
 import { EXIT_CODES } from "./types";
 
+/** Help text of the `--flat` flag, shared by `run` and `export`. */
+const FLAT_FLAG_DESCRIPTION = "Write files to --out directly, without the <build>/ folder";
+
 /** The mountable command tree — the single source for both `dispatch()` routing and `commands()`. */
 const COMMAND_REGISTRY: CommandDefinition[] = [
   {
@@ -53,15 +56,18 @@ const COMMAND_REGISTRY: CommandDefinition[] = [
     flags: {
       "max-cost": { type: "string", description: "Maximum spend in USD before the run stops" },
       "dry-run": { type: "boolean", description: "Estimate without executing" },
-      out: { type: "string", description: 'Directory for named artifacts (default "out")' }
+      out: { type: "string", description: 'Directory for named artifacts (default "out")' },
+      flat: { type: "boolean", description: FLAT_FLAG_DESCRIPTION }
     },
     run: runRunCommand
   },
   {
     name: "export",
-    description: "Copy a run's artifacts to out/<build>/<label>.<ext>",
+    description:
+      "Copy a run's artifacts to out/<build>/<label>.<ext> (or out/<label>.<ext> with --flat)",
     flags: {
-      out: { type: "string", description: 'Output directory (default "out")' }
+      out: { type: "string", description: 'Output directory (default "out")' },
+      flat: { type: "boolean", description: FLAT_FLAG_DESCRIPTION }
     },
     run: runExportCommand
   },
