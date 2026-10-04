@@ -64,6 +64,52 @@ function alphaValues(data: Uint8Array): number[] {
   return [...seen].toSorted((a, b) => a - b);
 }
 
+/**
+ * The bounding box of the fully opaque pixels of raw RGBA pixels.
+ *
+ * @param data - Raw RGBA bytes.
+ * @param width - Image width, px.
+ * @param height - Image height, px.
+ * @returns The box, or undefined when no pixel is fully opaque.
+ */
+function opaqueBox(data: Uint8Array, width: number, height: number) {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4 + 3] !== 255) continue;
+      xs.push(x);
+      ys.push(y);
+    }
+  }
+  if (xs.length === 0) return undefined;
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { left, top, width: Math.max(...xs) - left + 1, height: Math.max(...ys) - top + 1 };
+}
+
+/**
+ * The RGBA bytes of the pixels within `border` px of any edge.
+ *
+ * @param data - Raw RGBA bytes.
+ * @param width - Image width, px.
+ * @param height - Image height, px.
+ * @param border - Border width, px.
+ * @returns The border pixels as raw RGBA bytes.
+ */
+function borderAlpha(data: Uint8Array, width: number, height: number, border: number): Uint8Array {
+  const kept: number[] = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const inside = x >= border && x < width - border && y >= border && y < height - border;
+      if (inside) continue;
+      const offset = (y * width + x) * 4;
+      kept.push(...data.subarray(offset, offset + 4));
+    }
+  }
+  return new Uint8Array(kept);
+}
+
 /** The spec fixture: a 32x32 transparent canvas with an opaque 10x6 block at (5,7). */
 const BLOCK: Block = { left: 5, top: 7, width: 10, height: 6, alpha: 255 };
 
@@ -116,7 +162,7 @@ describe("sprite: processSprite", () => {
     expect(decoded.data[(3 * 16 + 3) * 4 + 3]).toBe(255);
   });
 
-  it("pads before it resizes, so the output is exactly the target size", async () => {
+  it("with size, resizes into size minus padding, then pads: a 12x12 content box in a 2 px border", async () => {
     const result = await processSprite(await pngWith(32, 32, [BLOCK]), {
       padding: 2,
       size: { width: 16, height: 16 },
@@ -124,6 +170,34 @@ describe("sprite: processSprite", () => {
     });
 
     expect([result.width, result.height]).toEqual([16, 16]);
+    expect(result.trimBox).toEqual(BLOCK_BOX);
+    const decoded = await decode(result.image);
+    expect([decoded.width, decoded.height]).toEqual([16, 16]);
+    expect(opaqueBox(decoded.data, 16, 16)).toEqual({ left: 2, top: 2, width: 12, height: 12 });
+    expect(alphaValues(borderAlpha(decoded.data, 16, 16, 2))).toEqual([0]);
+  });
+
+  it("with size and contain, the letterboxed content stays inside the padding border", async () => {
+    const result = await processSprite(await pngWith(32, 32, [BLOCK]), {
+      padding: 3,
+      size: { width: 20, height: 20 }
+    });
+
+    const decoded = await decode(result.image);
+    expect([decoded.width, decoded.height]).toEqual([20, 20]);
+    expect(alphaValues(borderAlpha(decoded.data, 20, 20, 3))).toEqual([0]);
+    // 10x6 contained in the 14x14 content box is 14x8, centred vertically.
+    expect(opaqueBox(decoded.data, 20, 20)).toEqual({ left: 3, top: 6, width: 14, height: 8 });
+  });
+
+  it("accepts the largest padding that leaves 1 px inside size", async () => {
+    const result = await processSprite(await pngWith(32, 32, [BLOCK]), {
+      padding: 7,
+      size: { width: 16, height: 15 },
+      fit: "fill"
+    });
+
+    expect([result.width, result.height]).toEqual([16, 15]);
   });
 
   it("contain letterboxes the 10x6 block into 16x16 with transparent bands", async () => {
@@ -230,6 +304,16 @@ describe("sprite: processSprite", () => {
     it.each([-1, 256, Number.NaN])("rejects alphaThreshold %d", async alphaThreshold => {
       await expect(processSprite(notAnImage, { alphaThreshold })).rejects.toThrow(
         `[ai] Sprite alphaThreshold must be between 0 and 255, got ${alphaThreshold}.\n  Set alphaThreshold to a value from 0 to 255.`
+      );
+    });
+
+    it.each([
+      [8, { width: 16, height: 16 }],
+      [4, { width: 20, height: 8 }],
+      [5, { width: 9, height: 32 }]
+    ])("rejects padding %d that leaves no room inside size %o", async (padding, size) => {
+      await expect(processSprite(notAnImage, { padding, size })).rejects.toThrow(
+        `[ai] Sprite padding ${padding} leaves no room inside ${size.width}x${size.height}.\n  Lower padding or raise size.`
       );
     });
 

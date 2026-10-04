@@ -1431,7 +1431,7 @@ Errors: `[ai] No sfx provider named "<name>" is registered.\n  Available: <list 
 4.16 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "sprite" task contract: cut an existing image into a transparent RGBA PNG
-(matte, trim to alpha bounds, padding, resize). A sprite item `$ref`s an image item;
+(matte, trim to alpha bounds, resize, padding). A sprite item `$ref`s an image item;
 changing sprite options re-cuts the stored image and never regenerates it. `model` is
 REQUIRED. Module exports `isSpriteHandler` and `processSprite(png, options)` (the pure
 sharp pixel step every provider runs after its matte). Provider: fal (default).
@@ -1444,7 +1444,7 @@ export type SpriteRequest = {
   source: SpriteFile;          // the runner resolves { $ref } / { $file } into this
   model: string;               // "birefnet"; "none" = already transparent
   trim?: boolean;              // default true
-  padding?: number;            // px, default 0
+  padding?: number;            // px, default 0; with size, inside it (16x16 + padding 2 = 12x12 picture, 2 px border)
   size?: { width: number; height: number };   // default: size after trim
   fit?: "contain" | "cover" | "fill";         // default "contain" (transparent letterbox)
   pixelArt?: boolean;          // nearest-neighbour; default false (lanczos3)
@@ -1474,6 +1474,7 @@ export type SpriteApi = {
 
 Errors: `[ai] No sprite provider named "<name>" is registered.\n  Available: <list or "none">.`
 `[ai] Sprite is empty after background removal.\n  Check the source image or lower alphaThreshold.`
+`[ai] Sprite padding <p> leaves no room inside <w>x<h>.\n  Lower padding or raise size.`
 
 ================================================================================
 5. COMPLETE EVENT CATALOG

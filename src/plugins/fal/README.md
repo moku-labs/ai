@@ -530,7 +530,7 @@ returned:
 ## Sprite
 
 A sprite item takes an existing image by `$ref` or `$file` and returns a transparent RGBA PNG (D2). The handler
-removes the background on fal, then calls `processSprite` from the sprite plugin (trim, padding, resize, PNG).
+removes the background on fal, then calls `processSprite` from the sprite plugin (trim, resize, padding, PNG).
 
 | Alias | Endpoint | Billing | Body |
 | --- | --- | --- | --- |

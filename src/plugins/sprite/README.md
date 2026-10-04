@@ -6,8 +6,8 @@
 
 `sprite` is the task plugin for game sprites in the `@moku-labs/ai` build system. A sprite item takes
 an existing image by `$ref` or `$file` and returns a transparent RGBA PNG. The steps are background
-removal (the provider's matte model), trim to the alpha bounds, optional padding, and an optional
-resize to a target size.
+removal (the provider's matte model), trim to the alpha bounds, an optional resize, and optional
+padding. A target size includes the padding.
 
 The plugin owns three things:
 
@@ -53,7 +53,7 @@ plugin module. Provider plugins type-import it via
 | `source` | `SpriteFile` | yes | | The source image. The runner resolves `{ $ref: id }` / `{ $file: path }` into `{ path, mimeType, hash }`. |
 | `model` | `string` | yes | | Matte model alias, e.g. `"birefnet"`. `"none"` means the source is already transparent. |
 | `trim` | `boolean` | no | `true` | Trim to the alpha bounding box. |
-| `padding` | `number` | no | `0` | Transparent padding kept around the trimmed box, px. |
+| `padding` | `number` | no | `0` | Transparent border around the trimmed box, px. With `size`, it sits inside `size`. |
 | `size` | `{ width, height }` | no | size after trim | Target size, px. |
 | `fit` | `"contain" \| "cover" \| "fill"` | no | `"contain"` | How the image fits `size`. `contain` letterboxes with transparent pixels. |
 | `pixelArt` | `boolean` | no | `false` | Nearest-neighbour resize. Otherwise lanczos3. |
@@ -93,7 +93,12 @@ request. The module imports only `sharp`. Providers import it at runtime (decisi
 function module, not a plugin, so no `depends` edge appears.
 
 1. Input checks run before any work: `size` must be whole pixels of at least 1, `padding` a whole
-   number of 0 or more, `alphaThreshold` in 0..255, `fit` one of the three values.
+   number of 0 or more, `alphaThreshold` in 0..255, `fit` one of the three values. With `size`,
+   `2 * padding` must be less than both `width` and `height`:
+   ```
+   [ai] Sprite padding <p> leaves no room inside <w>x<h>.
+     Lower padding or raise size.
+   ```
 2. The image is decoded to raw RGBA; an alpha channel is added when missing.
 3. The bounding box of pixels with alpha above `alphaThreshold` is found by scanning the buffer.
    An image with no such pixel throws, with `trim: false` too:
@@ -103,9 +108,11 @@ function module, not a plugin, so no `depends` edge appears.
    ```
 4. Unless `trim` is `false`, the image is cut to that box. `trimBox` is the box kept; with
    `trim: false` it is the whole image.
-5. `padding` adds transparent pixels on every side.
-6. `size` resizes the padded image, so the output is exactly `size`. `fit` maps to sharp's fit;
+5. `size` resizes the trimmed image to `size - 2 * padding` on each axis. `fit` maps to sharp's fit;
    `contain` uses a transparent background. The kernel is `nearest` with `pixelArt`, else `lanczos3`.
+6. `padding` adds transparent pixels on every side, last. With `size`, the output is exactly
+   `size` and the border is exactly `padding` px: `size: 16x16, padding: 2` gives a 12x12 picture
+   in a 2 px border. Without `size`, the output is the trimmed size plus `2 * padding`.
 7. The output is an RGBA PNG, `compressionLevel: 9`.
 
 ```ts

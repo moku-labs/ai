@@ -1,7 +1,7 @@
 /**
  * @file sprite pixel step — pure, `sharp` only.
  *
- * Trim to the alpha bounds, pad, resize, and encode an RGBA PNG. Sprite
+ * Trim to the alpha bounds, resize, pad, and encode an RGBA PNG. Sprite
  * providers import this module at runtime after their background-removal call
  * (decision D6): it is a function module, not a plugin, so it adds no
  * `depends` edge. It imports nothing from other plugins, and declares its own
@@ -32,7 +32,7 @@ export type TrimBox = { left: number; top: number; width: number; height: number
 export type SpriteProcessOptions = {
   /** Trim to the alpha bounding box. Default true. */
   trim?: boolean;
-  /** Transparent padding kept around the trimmed box, px. Default 0. */
+  /** Transparent border around the trimmed box, px. With `size`, it sits inside `size`. Default 0. */
   padding?: number;
   /** Target size. Omitted means the size after trim and padding. */
   size?: { width: number; height: number };
@@ -62,6 +62,9 @@ export type ProcessedSprite = {
   /** The box kept from the source; the whole image when `trim` is false. */
   trimBox: TrimBox;
 };
+
+/** A target size, px. */
+type Size = NonNullable<SpriteProcessOptions["size"]>;
 
 /** A sharp pipeline. */
 type Pipeline = ReturnType<typeof sharp>;
@@ -112,6 +115,21 @@ function isWholeAtLeast(value: number, minimum: number): boolean {
 }
 
 /**
+ * Whether `padding` on every side leaves at least 1 px inside `size`.
+ *
+ * @param size - The output size, padding included.
+ * @param padding - Transparent border, px.
+ * @returns True when `2 * padding` is less than both `width` and `height`.
+ * @example
+ * ```ts
+ * leavesRoom({ width: 16, height: 16 }, 8); // => false
+ * ```
+ */
+function leavesRoom(size: Size, padding: number): boolean {
+  return 2 * padding < size.width && 2 * padding < size.height;
+}
+
+/**
  * Throws for an invalid size, padding, alpha threshold or fit, before any pixel work.
  *
  * @param options - The pixel options.
@@ -134,6 +152,12 @@ function assertOptions(options: SpriteProcessOptions): void {
     throw spriteError(
       `Sprite padding must be a whole number of pixels of 0 or more, got ${padding}`,
       "Set padding to an integer of 0 or more"
+    );
+  }
+  if (size !== undefined && padding !== undefined && !leavesRoom(size, padding)) {
+    throw spriteError(
+      `Sprite padding ${padding} leaves no room inside ${size.width}x${size.height}`,
+      "Lower padding or raise size"
     );
   }
   if (alphaThreshold !== undefined && !(alphaThreshold >= 0 && alphaThreshold <= 255)) {
@@ -214,42 +238,84 @@ async function toRaw(pipeline: Pipeline): Promise<RawImage> {
 }
 
 /**
- * Cuts `box` out of `raw` and adds `padding` transparent pixels on every side.
+ * Cuts `box` out of `raw`.
  *
  * @param raw - Raw RGBA pixels.
  * @param box - The box to keep.
- * @param padding - Transparent border, px.
- * @returns The cut, padded pixels.
+ * @returns The cut pixels.
  * @example
  * ```ts
- * await cutAndPad(raw, { left: 5, top: 7, width: 10, height: 6 }, 3); // => 16x12 pixels
+ * await cut(raw, { left: 5, top: 7, width: 10, height: 6 }); // => 10x6 pixels
  * ```
  */
-async function cutAndPad(raw: RawImage, box: TrimBox, padding: number): Promise<RawImage> {
-  const pipeline = fromRaw(raw).extract(box);
-  if (padding > 0) {
-    pipeline.extend({
-      top: padding,
-      bottom: padding,
-      left: padding,
-      right: padding,
-      background: TRANSPARENT
-    });
-  }
+async function cut(raw: RawImage, box: TrimBox): Promise<RawImage> {
+  return toRaw(fromRaw(raw).extract(box));
+}
+
+/**
+ * Resizes `raw` into the box left inside `size` once `padding` is taken from
+ * every side, so padding it afterwards gives exactly `size`.
+ *
+ * @param raw - Raw RGBA pixels.
+ * @param size - The final output size, padding included.
+ * @param padding - Transparent border, px; `2 * padding` is less than both sides.
+ * @param options - The pixel options; `fit` and `pixelArt` are read.
+ * @returns The resized pixels, `size - 2 * padding` on each axis.
+ * @example
+ * ```ts
+ * await resizeInside(raw, { width: 16, height: 16 }, 2, { fit: "fill" }); // => 12x12 pixels
+ * ```
+ */
+async function resizeInside(
+  raw: RawImage,
+  size: Size,
+  padding: number,
+  options: SpriteProcessOptions
+): Promise<RawImage> {
+  const pipeline = fromRaw(raw).resize(size.width - 2 * padding, size.height - 2 * padding, {
+    fit: options.fit ?? "contain",
+    kernel: options.pixelArt === true ? "nearest" : "lanczos3",
+    background: TRANSPARENT
+  });
   return toRaw(pipeline);
 }
 
 /**
- * Trims a transparent image to its alpha bounds, pads it, resizes it, and
- * encodes it as an RGBA PNG (`compressionLevel: 9`). Steps run in that order,
- * so a `size` is the exact output size, padding included. A sprite provider
- * calls it after its background-removal step (the `none` model calls it on the
- * source as-is).
+ * Wraps `raw` in a pipeline that adds `padding` transparent pixels on every side.
+ *
+ * @param raw - Raw RGBA pixels.
+ * @param padding - Transparent border, px.
+ * @returns The sharp pipeline; it outputs `raw` unchanged when `padding` is 0.
+ * @example
+ * ```ts
+ * padded({ data, width: 10, height: 6 }, 3); // => a pipeline that outputs 16x12
+ * ```
+ */
+function padded(raw: RawImage, padding: number): Pipeline {
+  const pipeline = fromRaw(raw);
+  if (padding === 0) return pipeline;
+  return pipeline.extend({
+    top: padding,
+    bottom: padding,
+    left: padding,
+    right: padding,
+    background: TRANSPARENT
+  });
+}
+
+/**
+ * Trims a transparent image to its alpha bounds, resizes it, pads it, and
+ * encodes it as an RGBA PNG (`compressionLevel: 9`). With a `size`, the image
+ * is resized to `size - 2 * padding` and then padded, so the output is exactly
+ * `size` and the border is exactly `padding` px. Without a `size`, it is
+ * trimmed and padded. A sprite provider calls it after its background-removal
+ * step (the `none` model calls it on the source as-is).
  *
  * @param png - The image bytes, any format sharp reads; an alpha channel is added when missing.
  * @param options - The pixel options; a whole `SpriteRequest` fits.
  * @returns The PNG, its output size, and the box kept from the source.
  * @throws {Error} For an invalid `size`, `padding`, `alphaThreshold` or `fit`, before any work.
+ * @throws {Error} `[ai] Sprite padding <p> leaves no room inside <w>x<h>.` when `2 * padding` is not less than both sides of `size`.
  * @throws {Error} `[ai] Sprite is empty after background removal.` when no pixel is above `alphaThreshold`.
  * @example
  * ```ts
@@ -274,23 +340,20 @@ export async function processSprite(
     );
   }
 
-  // Trim, then pad, so a later resize lands on the exact target size.
+  // Trim, then resize into the box inside the padding when a size is set.
   const trimBox =
     options.trim === false
       ? { left: 0, top: 0, width: source.width, height: source.height }
       : bounds;
-  const cut = await cutAndPad(source, trimBox, options.padding ?? 0);
+  const padding = options.padding ?? 0;
+  const trimmed = await cut(source, trimBox);
+  const content =
+    options.size === undefined
+      ? trimmed
+      : await resizeInside(trimmed, options.size, padding, options);
 
-  // Resize when asked, then encode.
-  const pipeline = fromRaw(cut);
-  if (options.size !== undefined) {
-    pipeline.resize(options.size.width, options.size.height, {
-      fit: options.fit ?? "contain",
-      kernel: options.pixelArt === true ? "nearest" : "lanczos3",
-      background: TRANSPARENT
-    });
-  }
-  const { data, info } = await pipeline
+  // Pad last, so the border is exactly `padding` px, then encode.
+  const { data, info } = await padded(content, padding)
     .png({ compressionLevel: 9 })
     .toBuffer({ resolveWithObject: true });
 

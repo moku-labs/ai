@@ -43,7 +43,7 @@ export type SpriteRequest = {
   model: string;
   /** Trim to the alpha bounding box. Default true. */
   trim?: boolean;
-  /** Transparent padding kept around the trimmed box, px. Default 0. */
+  /** Transparent border around the trimmed box, px. With `size`, it sits inside `size`. Default 0. */
   padding?: number;
   /** Target size. Omitted means the size after trim. */
   size?: { width: number; height: number };
