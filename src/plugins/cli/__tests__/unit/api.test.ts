@@ -120,6 +120,22 @@ describe("createCliApi().commands", () => {
     expect(runCommand?.flags["dry-run"]).toEqual(expect.any(String));
   });
 
+  it("declares --flat on run and export", () => {
+    const ctx = createFakeCliContext();
+    const api = createCliApi(ctx);
+
+    const tree = api.commands();
+    const flagsOf = (name: string) => tree.commands.find(command => command.name === name)?.flags;
+
+    expect(flagsOf("run")?.flat).toBe("Write files to --out directly, without the <build>/ folder");
+    expect(flagsOf("export")?.flat).toBe(
+      "Write files to --out directly, without the <build>/ folder"
+    );
+    expect(tree.commands.find(command => command.name === "export")?.description).toBe(
+      "Copy a run's artifacts to out/<build>/<label>.<ext> (or out/<label>.<ext> with --flat)"
+    );
+  });
+
   it("is stable across repeated calls (no identity-sensitive shared mutation)", () => {
     const ctx = createFakeCliContext();
     const api = createCliApi(ctx);

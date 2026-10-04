@@ -10,7 +10,7 @@ Contents:
 2. Public package surface
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
-   elevenlabs, openai, compose, cli, asset, ark, music, fal, sfx, sprite (full types + APIs)
+   elevenlabs, openai, compose, cli, asset, ark, music, fal, apimodels, sfx, sprite (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -44,16 +44,26 @@ Layer 2 — src/index.ts:
 
 ```ts
 const framework = createCore(coreConfig, {
-  plugins: [
+  plugins: [                                  // 21 regular plugins, dependency order
     registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, translatePlugin,
-    promptGenPlugin, elevenlabsPlugin, openaiPlugin, composePlugin, cliPlugin
+    promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, sfxPlugin, spritePlugin, assetPlugin,
+    elevenlabsPlugin, openaiPlugin, codexPlugin, claudePlugin, falPlugin,
+    apimodelsPlugin, arkPlugin, composePlugin, cliPlugin
   ],
-  pluginConfigs: {}
+  pluginConfigs: {
+    env: { providers: [processEnv(), dotenv(".env.local")] }, // shell first, then .env.local
+    limits: { lanes: {
+      "video/apimodels": { concurrency: 2, rpm: 20 },
+      "video/ark": { concurrency: 3, rpm: 180 }
+    } }
+  }
 });
-export * from "./plugins";                    // plugin instances + type namespaces
 export const createApp = framework.createApp; // Layer-3 app factory
 export const createPlugin = framework.createPlugin;
+export function defineConfig<const P extends readonly AnyPluginInstance[] = readonly []>(
+  config: ProjectConfig<P>): ProjectConfig<P>; // identity; types moku.config.ts
 export { defineBuild } from "./plugins/buildfile";
+// + plugin instances, helpers, type namespaces, <Provider>Errors (see §2)
 ```
 
 Layer 3 — consumer apps (and src/bin.ts, the `moku` bin):
@@ -66,66 +76,97 @@ await app.start();
 await app.stop();
 ```
 
+The `moku` bin (src/bin.ts) is a Layer-3 consumer: loadProjectConfig
+(src/plugins/cli/project-config.ts) → createApp(options) → start → cli.dispatch(argv) →
+stop → process.exit(code). Project config:
+- Discovery: the first of moku.config.ts, moku.config.mts, moku.config.js,
+  moku.config.mjs in the cwd. No file → createApp({}).
+- `--config <path>` or `--config=<path>` on any command wins over the search, resolves
+  against the cwd, and is removed from argv before dispatch (the last one wins).
+- The file's default export goes to createApp as is:
+  `export default defineConfig({ plugins, pluginConfigs })`. Only `plugins` and
+  `pluginConfigs` are allowed. defineConfig returns its argument; it types
+  pluginConfigs, also for the custom plugins in `plugins`. Core-plugin keys (journal,
+  store, limits) are NOT typed in pluginConfigs: they work at runtime, typing tracked in
+  moku-labs/core#28.
+- A config that does not load exits 3 (usage) before any app exists: a missing
+  `--config` file, a module that throws, a default export that is not an object
+  (`[ai] Could not load <path>.\n  <reason>`), or `--config` with no path
+  (`[ai] --config needs a file path.\n  Pass --config <path> or --config=<path>.`).
+
 Key facts:
 - Regular plugin APIs mount on the app BY NAME: app.registry, app.buildfile,
-  app.runner, app.voiceover, app.translate, app.promptGen, app.elevenlabs, app.openai,
-  app.compose, app.cli. Core APIs mount too (app.limits, ...). There is NO
-  `app.plugins.<name>` indirection.
+  app.runner, app.voiceover, app.translate, app.promptGen, app.image, app.video,
+  app.music, app.sfx, app.sprite, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
+  app.apimodels, app.ark, app.compose, app.cli. Core APIs mount too (app.limits, ...).
+  There is NO `app.plugins.<name>` indirection.
 - App base methods: start(), stop(), emit(), require(), has(). There is NO `app.on` —
   bus-event subscription is a plugin concern (see §5, §10).
 - Every regular plugin's ctx carries the injected core APIs: ctx.journal, ctx.store,
   ctx.limits, ctx.log, ctx.env.
 - createApp's `pluginConfigs` is typed to REGULAR plugins only. Core-plugin config
-  (journal/store/limits) can only be overridden where createCore is called; the
-  framework passes `pluginConfigs: {}`, so those defaults are fixed for Layer-3
-  consumers at M0.
+  (journal/store/limits) is a createCore-level option. The framework sets env providers
+  and two limits lanes there (video/apimodels 2 concurrent / 20 rpm, video/ark 3
+  concurrent / 180 rpm); journal and store keep their defaults. Core keys passed to
+  createApp work at runtime but are not typed (moku-labs/core#28).
 
 ================================================================================
 2. PUBLIC PACKAGE SURFACE (@moku-labs/ai)
 ================================================================================
 
 Value exports:
-- createApp, createPlugin, defineBuild
-- Plugin instances: buildfilePlugin, cliPlugin, composePlugin, elevenlabsPlugin,
-  journalPlugin, limitsPlugin, openaiPlugin, promptGenPlugin, registryPlugin,
-  runnerPlugin, storePlugin, translatePlugin, voiceoverPlugin
-- Error classes (values, via namespaces): Elevenlabs.RetryableProviderError,
-  Elevenlabs.TerminalProviderError, Elevenlabs.FlaggedProviderError, and the same three
-  names under Openai.*
+- createApp, createPlugin, defineConfig (type ProjectConfig), defineBuild
+- Plugin instances: apimodelsPlugin, arkPlugin, assetPlugin, buildfilePlugin,
+  claudePlugin, cliPlugin, codexPlugin, composePlugin, elevenlabsPlugin, falPlugin,
+  imagePlugin, journalPlugin, limitsPlugin, musicPlugin, openaiPlugin, promptGenPlugin,
+  registryPlugin, runnerPlugin, sfxPlugin, spritePlugin, storePlugin, translatePlugin,
+  videoPlugin, voiceoverPlugin
+- Error classes as runtime values, for `instanceof` (src/index.ts, `export * as`):
+  ElevenlabsErrors, OpenaiErrors, ArkErrors, FalErrors, ApimodelsErrors (each
+  RetryableProviderError, TerminalProviderError, FlaggedProviderError) and ClaudeErrors,
+  CodexErrors (RetryableProviderError, TerminalProviderError; no flagged class).
+  The same names under the plugin namespaces (`Fal.RetryableProviderError`, ...) are
+  type aliases only: use them in annotations, never with `instanceof`.
 - Cli.EXIT_CODES (const object)
-- assetPlugin, arkPlugin (plugin instances); ASSET_MIME, encodeAssetRecord,
-  parseAssetRecord (asset contract values); Ark.RetryableProviderError,
-  Ark.TerminalProviderError, Ark.FlaggedProviderError
+- ASSET_MIME, encodeAssetRecord, parseAssetRecord (asset contract values)
 - Type namespaces Asset (AssetRequest, AssetRecord, AssetResult, AssetJobPoll,
   AssetHandler, AssetFile, AssetGroupKind, AssetApi, Config) and Ark (Config, State,
-  ArkApi, ArkInfo, ArkRegion, EstimateRequest, error classes)
-- musicPlugin, falPlugin (plugin instances); type namespaces Music (MusicChunk,
-  MusicRequest, MusicResult, MusicJobPoll, MusicHandler, MusicApi, MusicContext,
-  Config, RegistryApi) and Fal (Config, State, UploadMode, FalApi, FalInfo, FalTask,
-  FalModelInfo, LocalFile, RetryHint, FalProviderError, FalContext, EstimateInput,
-  EstimateRequest, RegistryApi); Fal.RetryableProviderError,
-  Fal.TerminalProviderError, Fal.FlaggedProviderError
-- sfxPlugin, spritePlugin (plugin instances); type namespaces Sfx (SfxRequest,
-  SfxResult, SfxHandler, SfxApi, SfxContext, Config, RegistryApi) and Sprite
-  (SpriteFile, SpriteRequest, SpriteResult, SpriteHandler, SpriteProcessOptions,
-  ProcessedSprite, TrimBox, SpriteApi, SpriteContext, Config, RegistryApi).
-  processSprite is not on the package root
+  ArkApi, ArkInfo, ArkRegion, EstimateRequest, error class types)
+- Type namespaces Music (MusicChunk, MusicRequest, MusicResult, MusicJobPoll,
+  MusicHandler, MusicApi, MusicContext, Config, RegistryApi) and Fal (Config, State,
+  UploadMode, FalApi, FalInfo, FalTask, FalModelInfo, LocalFile, RetryHint,
+  FalProviderError, FalContext, EstimateInput, EstimateRequest, RegistryApi, error
+  class types)
+- Type namespaces Image (ImageFile, ImageHandler, ImageOutput, ImageRequest,
+  ImageResult, Config, ImageApi, ImageContext, RegistryApi) and Video (EstimateInput,
+  EstimateRequest, VideoFile, VideoHandler, VideoJobPoll, VideoRequest, VideoResult,
+  Config, VideoApi, VideoContext, RegistryApi)
+- Type namespaces Codex (Config, State, CodexInfo, CodexPromptMeta, CodexApi,
+  CodexContext, RegistryApi, error class types) and Claude (Config, Reasoning, Effort,
+  ClaudePromptMeta, ClaudeInfo, ClaudeApi, ClaudeContext, RegistryApi, error class types)
+- Type namespaces Sfx (SfxRequest, SfxResult, SfxHandler, SfxApi, SfxContext, Config,
+  RegistryApi) and Sprite (SpriteFile, SpriteRequest, SpriteResult, SpriteHandler,
+  SpriteProcessOptions, ProcessedSprite, TrimBox, SpriteApi, SpriteContext, Config,
+  RegistryApi). processSprite is not on the package root
 - promptGen values: PromptGenUnavailableError (reason "missing" | "auth" | "limit" |
   "unsupported"), isPromptGenUnavailable, ToolArgumentsError (toolName, raw), and
   runToolLoop (the journaled tool loop; a library function, not a plugin — see §4.6)
 - PromptGen namespace types: ContentPart, ChatMessage, ToolCall, ToolDefinition,
   PromptGenUsage, ToolSpec, ToolOutput, LoopEvent, RunToolLoopOptions, RunToolLoopResult
+- apimodelsPlugin (plugin instance); type namespace Apimodels (Config, State,
+  ApimodelsInfo, ApimodelsApi, ApimodelsProviderError, error class types)
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
-- Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen,
-  Elevenlabs, Openai, Compose, Cli
+- Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image,
+  Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose,
+  Cli
 (registry is Nano tier and ships no types.ts — its 4-method surface is declared once as
 `RegistryApi` in `src/plugins/registry/index.ts`, and each dependent's types.ts
 re-exports it: `export type { RegistryApi } from "../registry"`.)
 
 Package entry: ESM + CJS with bundled .d.ts. Bin: `"moku": "./dist/bin.mjs"`.
-Dependencies: @moku-labs/common 0.3.0, @moku-labs/core 1.5.0, better-sqlite3, openai,
-yaml, zod.
+Dependencies: @moku-labs/common 0.3.2, @moku-labs/core 1.6.0, better-sqlite3 12.11.1,
+openai ^6.45.0, yaml ^2.9.0, zod ^4.4.3.
 
 ================================================================================
 3. CORE PLUGINS
@@ -164,8 +205,22 @@ export type State = {
 export type RunStatus = "active" | "done" | "failed" | "paused" | "budget-stopped";
 export type ItemStatus = "queued" | "dispatching" | "done" | "failed" | "flagged";
 export type ErrorClass =
-  | "http-5xx" | "http-429" | "timeout" | "network" | "http-4xx" | "content-policy" | "unknown";
-export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged";
+  | "http-5xx" | "http-429" | "timeout" | "network" | "http-4xx" | "content-policy"
+  | "invalid-request" | "local-failure" | "unknown";
+export type AttemptOutcome = "done" | "retryable-error" | "terminal-error" | "flagged" | "aborted";
+export type JobState = "submitted" | "done" | "failed" | "expired";
+export type LiveJob = {
+  externalId: string;                   // provider job id
+  jobState: "submitted" | "expired";    // expired = a runner stopped waiting for it
+  attemptId: number;                    // the attempt row the job was found on
+};
+export type DoneOutput = { contentHash: string; mimeType: string }; // one output of a multi-output item
+export type DoneResult = {
+  actualCostUsd: number; artifactKey: string;
+  contentHash: string; mimeType?: string;  // the (first) artifact
+  outputs?: DoneOutput[];                  // every output in order; absent for a single artifact
+};
+export type DoneArtifact = { contentHash: string; mimeType: string | null; outputs?: DoneOutput[] };
 
 export type RunRow = {
   id: string;
@@ -183,12 +238,19 @@ export type ItemIntent = {
   provider: string;
   packVersion: string | null;
   estimatedCostUsd: number;
+  label: string;               // build item `id`, or `<NN>-<task>`; export file name
+  buildName: string;           // the build file's `name`; export folder
+  artifactKey: string;         // artifact identity, written at insert
 };
 
-export type ItemRow = ItemIntent & {
+export type ItemRow = Omit<ItemIntent, "artifactKey" | "label" | "buildName"> & {
   id: string;
   runId: string;
   status: ItemStatus;
+  label: string | null;        // null only on rows written before labels existed
+  buildName: string | null;    // null only on rows written before labels existed
+  mimeType: string | null;     // of the committed artifact, when known
+  outputs: DoneOutput[] | null; // multi-output item, in order; null for a single artifact
   artifactKey: string | null;
   contentHash: string | null;
   actualCostUsd: number | null;
@@ -211,22 +273,30 @@ export type AttemptEnd = {
 };
 export type RunSnapshot = { run: RunRow; totals: RunTotals; recentItems: ItemRow[] };
 export type ItemFilter = { status?: ItemStatus; limit?: number; afterUpdatedAt?: number };
+export type ProviderRecord = {         // one provider_records row; metadata only, never a body or key
+  provider: string;                    // owning plugin, e.g. "apimodels"
+  account: string;                     // non-reversible account fingerprint
+  kind: string;                        // e.g. "asset" | "asset-group"
+  key: string;                         // lookup key inside the kind, e.g. sha256 of the input bytes
+  value: string;                       // opaque provider id, e.g. "asset://asset-1"
+};
+export type ProviderRecordQuery = Omit<ProviderRecord, "value">;
 
 export type JournalApi = {
   openRun(opts: { glob: string; maxCostUsd?: number }): RunRow;
   getRun(runId: string): RunRow | undefined;
-  latestResumableRun(): RunRow | undefined;   // latest "active" | "paused" | "budget-stopped"
+  latestResumableRun(opts?: { exclude?: readonly string[] }): RunRow | undefined;
+    // newest "active" | "paused" | "budget-stopped" run whose id is not in exclude
   insertItems(runId: string, items: ItemIntent[]): ItemRow[];  // idempotent per (runId, planningKey)
   requeueDispatching(runId: string): number;  // crash-resume: dispatching → queued, returns count
   gateToDispatching(itemId: string): GateResult; // THE atomic budget+dedup gate (one transaction)
   recordAttempt(itemId: string, attempt: AttemptStart): number;
   finishAttempt(attemptId: number, end: AttemptEnd): void;
-  commitDone(itemId: string,
-    result: { actualCostUsd: number; artifactKey: string; contentHash: string; mimeType?: string }): void;
-  findDoneArtifact(artifactKey: string): { contentHash: string; mimeType: string | null } | undefined;
-  reuseDone(itemId: string, artifact: { contentHash: string; mimeType: string | null }): void;
-  setAttemptJob(attemptId: number, job: { externalId?: string; jobState: "submitted" | "done" | "failed" | "expired" }): void;
-  findLiveJob(artifactKey: string): { externalId: string } | undefined;
+  commitDone(itemId: string, result: DoneResult): void;
+  findDoneArtifact(artifactKey: string): DoneArtifact | undefined; // from any run
+  reuseDone(itemId: string, artifact: DoneArtifact): void;
+  setAttemptJob(attemptId: number, job: { externalId?: string; jobState: JobState }): void;
+  findLiveJob(artifactKey: string): LiveJob | undefined;
   latestRun(): RunRow | undefined;
   getItem(runId: string, planningKey: string): ItemRow | undefined;
   markFailed(itemId: string, result: { errorClass: ErrorClass; terminal: boolean }): void;
@@ -236,11 +306,15 @@ export type JournalApi = {
   totals(runId: string): RunTotals;
   listItems(runId: string, filter?: ItemFilter): ItemRow[]; // oldest-updated first
   readSnapshot(runId: string): RunSnapshot;   // own short-lived connection — safe from a 2nd process
+  isOpen(): boolean;                          // true between onStart and onStop; the only method that never throws when closed
+  findProviderRecord(q: ProviderRecordQuery): string | undefined; // the stored value, or undefined
+  putProviderRecords(records: ProviderRecord[]): void; // upsert in ONE BEGIN IMMEDIATE transaction; [] is a no-op
+  deleteProviderRecord(q: ProviderRecordQuery): void;  // missing is a no-op
 };
 ```
 
 Schema (schema.ts): tables `runs`, `items` (UNIQUE (run_id, planning_key); index
-(run_id, status)), `attempts`. Created idempotently on onStart.
+(run_id, status)), `attempts`, `provider_records`. Created idempotently on onStart.
 
 --------------------------------------------------------------------------------
 3.2 store — ctx.store (Standard tier)
@@ -450,16 +524,22 @@ export type EstimateLine = { task: string; provider: string; items: number; usd:
 export type EstimateResult = { lines: EstimateLine[]; totalUsd: number };
 export type RunStatusReport = { runId: string; status: string; totals: RunTotals; updatedAt: number };
 
-export type RunEvent =
-  | { type: "item:queued"; itemId: string; task: string; provider: string }
-  | { type: "item:dispatching"; itemId: string }
-  | { type: "item:done"; itemId: string; costUsd: number; contentHash: string }
-  | { type: "item:retry"; itemId: string; errorClass: ErrorClass; attempt: number }
-  | { type: "item:failed"; itemId: string; errorClass: ErrorClass }
-  | { type: "item:flagged"; itemId: string }
-  | { type: "overflow"; dropped: number }
-  | { type: "progress"; totals: RunTotals }
-  | { type: "terminal"; status: RunResultStatus; totals: RunTotals };
+export type RunEvent =                     // every record carries runId
+  | { type: "item:queued"; runId: string; itemId: string; task: string; provider: string }
+  | { type: "item:dispatching"; runId: string; itemId: string }
+  | { type: "item:done"; runId: string; itemId: string; costUsd: number;
+      contentHash: string;                  // the item's (first) artifact
+      contentHashes?: string[] }            // every output in order; multi-output items only
+  | { type: "item:retry"; runId: string; itemId: string; errorClass: ErrorClass; attempt: number }
+  | { type: "item:failed"; runId: string; itemId: string;
+      label: string | null;                 // ItemRow.label; null only on rows written before labels existed
+      errorClass: ErrorClass;
+      message?: string }                    // first two lines (max 300 chars) of the handler's
+                                            // publicMessage, else of our own [ai] error; else absent
+  | { type: "item:flagged"; runId: string; itemId: string; message?: string } // same message rule
+  | { type: "overflow"; runId: string; dropped: number }
+  | { type: "progress"; runId: string; totals: RunTotals }
+  | { type: "terminal"; runId: string; status: RunResultStatus; totals: RunTotals };
 
 export type RunnerEvents = {
   "run:progress": { runId: string; total: number; done: number; failed: number;
@@ -474,7 +554,9 @@ export type HandlerRequest = Record<string, unknown>; // { ...item.input, params
 export type ResolvedFile = { path: string; mimeType: string; hash: string };
 export type HandlerResult = {
   body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
-  mimeType?: string; costUsd: number; meta?: Record<string, unknown>;
+  mimeType?: string;
+  images?: { image: Uint8Array; mimeType: string }[]; // every image of a multi-image result, in order; each one stored
+  costUsd: number; meta?: Record<string, unknown>;
 };
 export type JobPoll =
   | { state: "pending" }
@@ -492,9 +574,18 @@ export type ExportResult = {
 };
 export type ProviderErrorHint = {
   status?: number;
-  kind?: "timeout" | "network" | "content-policy"; // overrides status-based inference
-  retryAfterMs?: number;
+  kind?:
+    | "timeout" | "network" | "content-policy" // override status-based inference
+    | "resubmit"          // keeps the status class; keeps the failure off the lane breaker
+    | "invalid-request"   // the handler refuses the request: failed after one attempt, no breaker outcome
+    | "local-failure";    // the handler's own machine failed: same as invalid-request
+  retryAfterMs?: number;  // honored when larger than the computed backoff
+  publicMessage?: string; // safe-to-show text; item:failed / runner:item:failed carry its first
+                          // two lines (max 300 chars); never journaled
 };
+// A poll error with no hint, or kind "invalid-request" / "local-failure", marks the job
+// expired so the next run adopts it. A "resubmit" verdict must be returned from poll as
+// { state: "failed", error }; a thrown one is read as pending.
 
 export type State = {
   active: Map<string, ActiveRun>;
@@ -515,6 +606,13 @@ export type RunnerApi = {
     // { runId }: that run only; no runId: every run until none is active. Every record carries runId.
     // per-consumer bounded queue; oldest ITEM records drop into one {type:"overflow"};
     // "progress" coalesces (latest wins); "terminal" is ALWAYS delivered last.
+  export(opts?: { runId?: string; outDir?: string; flat?: boolean }): Promise<ExportResult>;
+    // runId default: newest run; outDir default "out"; flat default false.
+    // Writes <outDir>/<build name>/<label>.<ext>, or <outDir>/<label>.<ext> with flat: true
+    // (no build folder; the build name is not checked). label = item id, else <NN>-<task>.
+    // A multi-output item adds <label>-2.<ext> … <label>-N.<ext> (cost on the first file).
+    // An unsafe label, or a target this export already wrote (with flat: the same label in
+    // two builds), is skipped and listed in `skipped`; the first file is kept.
 };
 ```
 
@@ -751,7 +849,7 @@ export function runToolLoop(options: RunToolLoopOptions): Promise<RunToolLoopRes
 --------------------------------------------------------------------------------
 Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
 ("voiceover", "elevenlabs") → createVoiceoverHandler(ctx) and ("sfx", "elevenlabs") →
-createSfxHandler(ctx) (§4.15). POST
+createSfxHandler(ctx) (§4.16). POST
 /v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
 ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
 are key-free). estimate = text.length × per-character price for the resolved model
@@ -771,7 +869,7 @@ export type ElevenlabsApi = {
   info(): { provider: "elevenlabs"; configured: boolean; models: string[] }; // never throws
 };
 
-// Error classes (exported values under the Elevenlabs namespace):
+// Error classes (values in ElevenlabsErrors; types under Elevenlabs):
 export class RetryableProviderError extends Error {
   readonly status: number | undefined;                 // 5xx or 429
   readonly kind: "timeout" | "network" | undefined;
@@ -826,7 +924,7 @@ export type OpenaiApi = {
 // OpenaiClient is a STRUCTURAL alias covering exactly the two SDK calls used
 // (audio.speech.create, chat.completions.create) — survives .d.ts bundling, trivially mockable.
 
-// Error classes (exported values under the Openai namespace) — same taxonomy shape:
+// Error classes (values in OpenaiErrors; types under Openai) — same taxonomy shape:
 export class RetryableProviderError extends Error {
   readonly status: number | undefined;
   readonly kind: "timeout" | "network" | undefined;
@@ -881,7 +979,9 @@ Exhaustion error: `[ai] Compose could not produce a valid build file after <n> a
 --------------------------------------------------------------------------------
 4.10 cli — app.cli (Complex tier; depends: [runnerPlugin, buildfilePlugin, composePlugin])
 --------------------------------------------------------------------------------
-The `moku` command surface. No lifecycle, no state (ratified OQ1). argv parsed with
+The `moku` command surface: 7 commands (new, validate, estimate, run, export, status,
+compose). No lifecycle, no state (ratified OQ1). `--config` is read and stripped by the
+bin (see §1), never by dispatch. argv parsed with
 node:util parseArgs (strict; kebab flags → camelCase keys; boolean flags recorded as
 the literal "true"). All rendering through @moku-labs/common/cli's BrandConsole (MC1);
 plain mode when config.plain || !TTY || NO_COLOR (via ctx.env). dispatch() NEVER calls
@@ -913,8 +1013,13 @@ Commands:
   jsonSchema() at the modeline path; refuses overwrite (exit 1).
 - moku validate [glob] — loadGlob; exit 0 all valid, 2 on first invalid/empty match.
 - moku estimate [glob] — runner.estimate breakdown box; exit 0.
-- moku run [glob] [--max-cost <usd>] [--dry-run] — runner.run + events() progress;
-  exits: done→0, failed→1, paused→4, budget-stopped→5, bad --max-cost→3.
+- moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>] [--flat] — runner.run +
+  events() progress, then runner.export({ runId, outDir: --out ?? "out", flat }) (not on
+  --dry-run); exits: done→0, failed→1, paused→4, budget-stopped→5, bad --max-cost→3.
+- moku export [runId] [--out <dir>] [--flat] — runner.export of the given (or newest) run
+  to <out>/<build>/<label>.<ext>, or <out>/<label>.<ext> with --flat (default out "out");
+  a skipped label is listed as "skipped: unsafe name or duplicate target". Exit 0, 1 when
+  the export throws.
 - moku status [runId] [--follow] — status snapshot; --follow polls
   journal.readSnapshot every 1s (short-lived reads — WAL checkpoint-starvation
   mitigation) until terminal. Exit 0.
@@ -1009,7 +1114,8 @@ JSON with assetId, provider, account, groupId, registeredAt.`
 4.12 ark — app.ark (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Seedance straight from ByteDance. One instance = one region + one account. onInit
-registers ("video","ark") and ("asset","ark"); both are submit + poll (no execute).
+registers ("video","ark"), ("asset","ark") and ("image","ark"). Video and asset are
+submit + poll (no execute); image is execute only (Seedream, POST {dataPlane}/images/generations).
 Registered AFTER fal in src/index.ts, so registry.providers("video")[0] === "fal" and
 fal stays the default video provider. Imports contract modules (asset/contract,
 video/contract) only — no import from fal. fetch + node:crypto, no package.
@@ -1040,6 +1146,7 @@ export type Config = {
   groupId: string | null;          // default null = create one per process and log it
   groupName: string;               // default "moku-ai"
   timeoutMs: number;               // default 60_000
+  downloadTimeoutMs: number;       // default 300_000 (one clip or image download)
   priceOverrides: Record<string, number>; // USD per 1M output tokens by model id
   cnyPerUsd: number;               // default 7.1
 };
@@ -1055,7 +1162,7 @@ export type ArkInfo = {
   models: string[];                // the region's ids
 };
 export type ArkApi = { info(): ArkInfo };  // no network call
-// Error classes (values under the Ark namespace), same structural shape as fal's:
+// Error classes (values in ArkErrors; types under Ark), same structural shape as fal's:
 // RetryableProviderError { status?, kind?: "timeout"|"network", retryAfterMs? },
 // TerminalProviderError { status, code? }, FlaggedProviderError { kind: "content-policy" }.
 ```
@@ -1254,6 +1361,11 @@ registers six handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
 - image: estimate + execute + submit + poll over the queue. Aliases nano-banana-pro,
   seedream-4.5-edit, gpt-image-2.5 (default: imageDefaultModel). A request with refs
   goes to the edit endpoint. params.resolution 1K / 2K / 4K / 1080; params.quality (gpt).
+  gpt-image-2.5 only: params.background "auto" | "transparent" | "opaque" (other values
+  are not sent). transparent with no known params.output_format (jpeg, png, webp) → png;
+  transparent + output_format "jpeg" → TerminalProviderError 400 before the key is read
+  or any ref is uploaded. Without background the default output_format stays jpeg.
+  nano-banana-pro and seedream-4.5-edit never send background.
 - prompt-gen: estimate + execute, one sync POST to
   `<runUrl>/openrouter/router/openai/v1/chat/completions`. `model` is an OpenRouter id;
   undefined or "default" → llmDefaultModel. Listed: anthropic/claude-opus-5.5 (default),
@@ -1325,7 +1437,7 @@ export type Config = {
   pollIntervalMs: number;
   /** The in-process wait gives up after this many ms (retryable `timeout`); the fal job keeps running and stays adoptable through `poll`. Default: 900_000. */
   jobTimeoutMs: number;
-  /** JSONL request log path, relative to the working directory: one line per billable request of every task. Off when undefined. Default: undefined. */
+  /** JSONL request log path, relative to the working directory: one line per billable request of every task. "" = off. Default: "". */
   requestLog: string;
 };
 
@@ -1338,6 +1450,11 @@ export type State = {
    * the process: `app.stop()` does not clear it.
    */
   uploads: Map<string, string>;
+  /**
+   * Whether the request log already warned `fal:request-log:failed`. Set by the first failed
+   * write, shared by every task's log, so a broken path warns once per plugin instance.
+   */
+  requestLogWarned: boolean;
 };
 
 export type FalInfo = {
@@ -1368,7 +1485,7 @@ export type FalApi = {
   info(): FalInfo;                          // key present (never throws) + the video aliases
   models(task: FalTask): FalModelInfo[];    // no network, no key; throws `[ai] Unknown fal task "x".`
 };
-// Error classes (values under the Fal namespace): RetryableProviderError { status?,
+// Error classes (values in FalErrors; types under Fal): RetryableProviderError { status?,
 // kind?: "timeout"|"network", retryAfterMs? }, TerminalProviderError { status },
 // FlaggedProviderError { kind: "content-policy" }; type FalProviderError = their union.
 ```
@@ -1391,7 +1508,62 @@ fal:poll:retry, fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallb
 fal:request-log:failed.
 
 --------------------------------------------------------------------------------
-4.15 sfx — app.sfx (Standard tier; depends: [registryPlugin]; stateless)
+4.15 apimodels — app.apimodels (Complex tier; depends: [registryPlugin])
+--------------------------------------------------------------------------------
+Video provider over the apimodels.app task API: Seedance 2.5 and Seedance 2.0 official,
+which accept real faces. onInit registers ("video","apimodels"), submit + poll (no
+execute; app.video.generate() drives the same loop). Registered after fal and before ark,
+so fal stays the default video provider. Emits no events. The job id is JSON
+{ taskId, model, assetUsd }, journaled by the runner before it waits: a resume polls the
+same task, never pays twice. Lane video/apimodels: 2 concurrent, 20 rpm (framework
+default; apimodels documents no limits).
+
+Models (input.model; same aliases as fal's Seedance rows, so an item switches provider
+only; any other value → terminal 400). Every alias needs input.image.
+- seedance-2.5 (480p, 720p; 4–30 s; USD/s 0.12 / 0.27): image → first_frame_url,
+  endImage → last_frame_url, refs refused.
+- seedance-2.5-ref (same model, prices): image → reference_image_urls[0]; refs by MIME:
+  images (30 with the image), audio (10), video (10); endImage refused.
+- seedance-2.0 (API seedance-2.0-official; 480p, 720p, 1080p; 4–15 s; USD/s 0.092 /
+  0.197 / 0.492): first and last frame, refs refused.
+- seedance-2.0-ref: as 2.5-ref, 9 images with the image.
+Defaults seconds 5, aspect "9:16", audio false, resolution 720p. negative is dropped
+(debug log apimodels:negative:ignored). input.fromDraft is refused (use ark).
+
+params.assets: the inputs to send as asset://<id> ("image", "endImage", "refs.<n>");
+without it every input is an https upload and apimodels registers a refused face by
+itself. Lookup per named input: state cache → journal provider record → register
+(upload → group "assetGroup", created once per account → POST /assets). Account =
+sha256("moku-ai:" + apiKey), first 12 hex. A registration costs `asset` (0.01 USD).
+
+```ts
+export type Config = {
+  apiKeyEnv: string;      // default "APIMODELS_API_KEY" (read via ctx.env at submit/poll; estimates are key-free)
+  baseUrl: string;        // default "https://api.apimodels.app/v1"
+  assetGroup: string;     // default "moku-ai"
+  timeoutMs: number;      // default 60_000 (one HTTP request)
+  priceOverrides: Record<string, number>; // "<alias>@<resolution>" (USD/s) or "asset"; default {}
+};
+export type ApimodelsInfo = { provider: "apimodels"; configured: boolean; models: string[] };
+export type ApimodelsApi = { info(): ApimodelsInfo };  // no network call
+// Error classes (values in ApimodelsErrors; types under Apimodels): RetryableProviderError,
+// TerminalProviderError, FlaggedProviderError; type ApimodelsProviderError = their union.
+```
+
+Poll: pending/processing → pending; completed → download resultUrls[0] (lives 7 days)
+→ done video, cost = settled USD credits from GET /records/<taskId> + assetUsd, else the
+table price + assetUsd; CONTENT_MODERATION → flagged; a dead result or a stale asset id
+→ retryable 503 kind "resubmit" (the runner submits anew); other failures → retryable
+503 or terminal 400 per the README table.
+Missing key: `[ai] apimodels needs an API key.\n  Set APIMODELS_API_KEY (or the env var
+named by apimodels.apiKeyEnv).`
+Logs (redacted): apimodels:video:submitted/done/failed, apimodels:asset:registered,
+apimodels:asset:stale, apimodels:asset-group:stale, apimodels:journal:closed,
+apimodels:negative:ignored, apimodels:poll:unknown-state, apimodels:records:unavailable,
+apimodels:result:unreadable. Full reference: src/plugins/apimodels/README.md.
+
+--------------------------------------------------------------------------------
+4.16 sfx — app.sfx (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "sfx" task contract: short sound effects from a text prompt, always mp3. A
 handler has `estimate` + `execute`; there is no job form. `model` is REQUIRED (the
@@ -1428,7 +1600,7 @@ export type SfxApi = {
 Errors: `[ai] No sfx provider named "<name>" is registered.\n  Available: <list or "none">.`
 
 --------------------------------------------------------------------------------
-4.16 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
+4.17 sprite — app.sprite (Standard tier; depends: [registryPlugin]; stateless)
 --------------------------------------------------------------------------------
 Owns the "sprite" task contract: cut an existing image into a transparent RGBA PNG
 (matte, trim to alpha bounds, resize, padding). A sprite item `$ref`s an image item;
@@ -1512,10 +1684,10 @@ Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, a
 |-------------------|----------------------------------------|------|
 | item:queued       | itemId, task, provider                 | item enters the pipeline |
 | item:dispatching  | itemId                                 | passed the atomic gate |
-| item:done         | itemId, costUsd, contentHash           | artifact stored + committed |
+| item:done         | itemId, costUsd, contentHash, contentHashes? | artifact stored + committed |
 | item:retry        | itemId, errorClass, attempt            | retryable failure; re-queued with backoff |
-| item:failed       | itemId, errorClass                     | terminal failure |
-| item:flagged      | itemId                                 | content policy (terminal) |
+| item:failed       | itemId, label, errorClass, message?    | terminal failure |
+| item:flagged      | itemId, message?                       | content policy (terminal) |
 | overflow          | dropped                                | buffer overflowed; oldest item records coalesced |
 | progress          | totals                                 | coalesced totals (latest unconsumed wins) |
 | terminal          | status, totals                         | ALWAYS the last record delivered |
@@ -1527,14 +1699,16 @@ openai:prompt-gen:done/failed, ark:video:submitted/done/failed, ark:asset:group-
 fal:video|image|music:submitted/done/failed, fal:sfx|sprite:submitted/done,
 fal:llm:done/partial/retry, fal:poll:retry,
 fal:poll:unknown-status, fal:result:unreadable, fal:upload:fallback,
-fal:request-log:failed.
+fal:request-log:failed, apimodels:video:submitted/done/failed, apimodels:asset:registered
+(see §4.15 for the rest).
 
 ================================================================================
 6. CONFIG SCHEMA — EVERY FIELD
 ================================================================================
 
 Global framework Config: {} (empty, ratified). Per-plugin (defaults shipped in each
-plugin's index.ts; override REGULAR plugins via createApp({ pluginConfigs })):
+plugin's index.ts; override REGULAR plugins via createApp({ pluginConfigs }) or, for the
+`moku` bin, a moku.config.ts `export default defineConfig({ pluginConfigs })`):
 
 journal (core — createCore-level only):
   path: string = ".moku/journal.db"            — journal DB file; parents created on start
@@ -1550,7 +1724,10 @@ limits (core — createCore-level only):
   defaults.concurrency: number = 4             — in-flight ceiling per lane
   defaults.breakerThreshold: number = 5        — consecutive retryable failures to open
   defaults.breakerCooldownMs: number = 30_000  — open duration before half-open probe
-  lanes: Record<string, Partial<LaneConfig>> = {} — exact-lane or "{task}/{provider}" prefix overrides
+  lanes: Record<string, Partial<LaneConfig>> = {} — exact-lane or "{task}/{provider}" prefix overrides.
+    The framework sets { "video/apimodels": { concurrency: 2, rpm: 20 },
+    "video/ark": { concurrency: 3, rpm: 180 } } in createCore; a lanes override replaces
+    the whole map.
 
 registry: no config.
 
@@ -1562,6 +1739,9 @@ runner:
   maxAttempts: number = 3                      — per-item retry ceiling (build defaults.maxAttempts overrides)
   retryBaseMs: number = 1000                   — backoff base (exponential, jittered 50–100%)
   eventBufferSize: number = 10_000             — events() per-consumer buffer
+  pollIntervalMs: number = 5000                — delay between two polls of an async provider job
+  jobTimeoutMs: number = 1_800_000             — a job still pending after this is expired; the next
+                                                 attempt polls it again before it submits
   maxActiveRuns: number = 1                    — runs driven at once in this process
 
 voiceover:
@@ -1573,6 +1753,14 @@ translate:
 
 promptGen:
   defaultProvider: string = "openai"
+  fallback: string[] = []                      — providers tried in order when the chosen one is unavailable
+
+image:
+  defaultProvider: string = "codex"
+
+video:
+  defaultProvider: string = "fal"
+  pollIntervalMs: number = 5000                — facade poll cadence (the runner uses runner.pollIntervalMs)
 
 elevenlabs:
   apiKeyEnv: string = "ELEVENLABS_API_KEY"
@@ -1587,6 +1775,23 @@ openai:
   models: { tts: string; chat: string } = { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }
   timeoutMs: number = 60_000
   priceOverrides: Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }> = {}
+
+codex:
+  bin: string = "codex"                        — bare name looked up on PATH, or a path
+  model: string = "gpt-6-astra"                — image model when a request names none
+  reasoningEffort: string = "low"              — sent as -c model_reasoning_effort="<effort>"
+  timeoutMs: number = 600_000                  — kill the CLI after this long
+  workDir: string = ".moku/tmp"                — per-call temp dirs, against the cwd; "" = os.tmpdir()
+  priceOverrides: Record<string, number> = {}  — USD per image by model, merged over the bundled table
+  textModel: string = ""                       — prompt-gen model when none maps; "" leaves -m out
+  modelMap: Record<string, string> = {}        — exact request-model id → codex model, checked first
+
+claude:
+  bin: string = "claude"                       — bare name looked up on PATH, or a path
+  textModel: string = ""                       — model when mapping gives none; "" = no --model
+  modelMap: Record<string, string> = {}        — exact request-model id → claude model, checked first
+  timeoutMs: number = 600_000                  — kill the CLI (SIGTERM) after this long
+  workDir: string = ""                         — per-call temp dirs; "" = os.tmpdir() (outside the repo)
 
 music:
   defaultProvider: string = "fal"
@@ -1616,6 +1821,13 @@ asset:
   defaultProvider: string = "ark"
   pollIntervalMs: number = 3000                — facade poll cadence (Ark GetAsset guidance)
 
+apimodels:
+  apiKeyEnv: string = "APIMODELS_API_KEY"
+  baseUrl: string = "https://api.apimodels.app/v1"
+  assetGroup: string = "moku-ai"               — asset group created once per account
+  timeoutMs: number = 60_000                   — one HTTP request
+  priceOverrides: Record<string, number> = {}  — "<alias>@<resolution>" (USD/s) or "asset"
+
 ark:
   region: "intl" | "cn" = "intl"               — BytePlus ModelArk or Volcengine Ark
   apiKeyEnv: string = "ARK_API_KEY"            — Bearer key, video tasks
@@ -1626,6 +1838,7 @@ ark:
   groupId: string | null = null                — null = create one per process, log its id (max 50 per account)
   groupName: string = "moku-ai"
   timeoutMs: number = 60_000
+  downloadTimeoutMs: number = 300_000          — one clip or image download
   priceOverrides: Record<string, number> = {}  — USD per 1M output tokens by model id
   cnyPerUsd: number = 7.1
 
@@ -1636,9 +1849,10 @@ compose:
 cli:
   plain: boolean = false                       — auto-true when !TTY or NO_COLOR (via ctx.env)
 
-Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY, FAL_KEY, ARK_API_KEY, ARK_ACCESS_KEY,
-ARK_SECRET_KEY (names configurable via apiKeyEnv / accessKeyEnv / secretKeyEnv; read via
-ctx.env at execute time only), NO_COLOR (CLI plain mode).
+Environment variables: ELEVENLABS_API_KEY, OPENAI_API_KEY, FAL_KEY, APIMODELS_API_KEY,
+ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY (names configurable via apiKeyEnv / accessKeyEnv /
+secretKeyEnv; read via ctx.env at execute time only), PATH (codex / claude find their CLI),
+NO_COLOR (CLI plain mode). Sources: the shell first, then .env.local in the cwd.
 
 ================================================================================
 7. COMPLETE USAGE EXAMPLES
@@ -1806,6 +2020,30 @@ if (code !== Cli.EXIT_CODES.ok) { /* handle */ }
 await app.stop();
 ```
 
+7.8 Project config for the `moku` bin, and a flat export:
+
+```ts
+// moku.config.ts in the project root (or pass --config <path> on any command)
+import { defineConfig } from "@moku-labs/ai";
+import { myProvider } from "./plugins/my-provider";
+
+export default defineConfig({
+  plugins: [myProvider],
+  pluginConfigs: { ark: { region: "cn" }, fal: { upload: "data-uri" } }
+});
+```
+
+```sh
+moku run --config configs/cn.ts --max-cost 5   # --config is stripped before dispatch
+moku export --out assets/icons --flat          # assets/icons/<label>.<ext>, no <build>/ folder
+```
+
+```ts
+const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
+// icons.files[0].path: "/repo/assets/icons/sword.png"
+// a second build with a "sword" label: icons.skipped is ["sword"], the first file is kept
+```
+
 ================================================================================
 8. ERROR HANDLING PATTERNS
 ================================================================================
@@ -1814,18 +2052,19 @@ All framework errors are plain Error subclasses at M0 (no custom error hierarchy
 beyond the provider classes). Messages follow the pinned two-line format:
 "[ai] <what happened>.\n  <how to fix it>."
 
-Pattern 1 — provider error taxonomy (instanceof, per provider namespace):
+Pattern 1 — provider error taxonomy (instanceof, per provider `<Provider>Errors` value
+namespace; the `Elevenlabs.*` names are types only and cannot be used with instanceof):
 
 ```ts
-import { Elevenlabs } from "@moku-labs/ai";
+import { ElevenlabsErrors } from "@moku-labs/ai";
 try {
   await app.voiceover.generate({ text: "Hi", voice: "21m00Tcm4TlvDq8ikWAM" });
 } catch (error) {
-  if (error instanceof Elevenlabs.RetryableProviderError) {
+  if (error instanceof ElevenlabsErrors.RetryableProviderError) {
     // transient: 5xx / 429 / timeout / network — error.status, error.kind, error.retryAfterMs
-  } else if (error instanceof Elevenlabs.FlaggedProviderError) {
+  } else if (error instanceof ElevenlabsErrors.FlaggedProviderError) {
     // content policy — do not re-queue
-  } else if (error instanceof Elevenlabs.TerminalProviderError) {
+  } else if (error instanceof ElevenlabsErrors.TerminalProviderError) {
     // deterministic 4xx — error.status
   } else throw error;
 }
@@ -1833,7 +2072,7 @@ try {
 
 Pattern 2 — structural classification (how the runner does it; no class imports).
 Provider errors carry ProviderErrorHint fields read by shape: `status?: number`,
-`kind?: "timeout" | "network" | "content-policy"` (kind overrides status),
+`kind?: "timeout" | "network" | "content-policy" | "resubmit" | "invalid-request" | "local-failure"`, `publicMessage?: string` (kind overrides status),
 `retryAfterMs?: number`. An error with no hint classifies as "unknown" (terminal: a
 programming error never re-runs a paid job); tag real transport failures kind "network".
 Custom providers steer retry behavior by attaching these fields to thrown errors.
@@ -1886,6 +2125,10 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] ark CreateAsset needs a public https url.\n  Pass input.url with the same bytes as input.image.
 - [ai] Tool call "<name>" has arguments that are not JSON.\n  The model sent: <first 200 chars>.  (ToolArgumentsError)
 - [ai] <Claude|Codex|OpenAI> prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.  (PromptGenUnavailableError "unsupported")
+- [ai] fal image model "gpt-image-2.5" cannot write a transparent jpeg.\n  Use output_format "png" or "webp".  (TerminalProviderError 400)
+- [ai] apimodels needs an API key.\n  Set APIMODELS_API_KEY (or the env var named by apimodels.apiKeyEnv).
+- [ai] Could not load <path>.\n  <reason>  (moku bin, exit 3)
+- [ai] --config needs a file path.\n  Pass --config <path> or --config=<path>.  (moku bin, exit 3)
 
 ================================================================================
 9. DEPENDENCY GRAPH + INITIALIZATION ORDER
@@ -1903,18 +2146,33 @@ everything it depends on):
   4. voiceover     (deps: registry)                      Standard
   5. translate     (deps: registry)                      Standard
   6. promptGen     (deps: registry)                      Standard
-  7. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs")   Complex
-  8. openai        (deps: registry) — onInit registers ("voiceover","openai"),
+  7. image         (deps: registry)                      Standard
+  8. video         (deps: registry)                      Standard
+  9. music         (deps: registry)                      Standard
+ 10. sfx           (deps: registry)                      Standard
+ 11. sprite        (deps: registry)                      Standard
+ 12. asset         (deps: registry)                      Standard
+ 13. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs"),
+                    ("sfx","elevenlabs")                                             Complex
+ 14. openai        (deps: registry) — onInit registers ("voiceover","openai"),
                     ("translate","openai"), ("prompt-gen","openai")                  Complex
-  9. compose       (deps: buildfile, promptGen)          Standard
- 10. cli           (deps: runner, buildfile, compose)    Complex
+ 15. codex         (deps: registry) — ("image","codex"), ("prompt-gen","codex")     Complex
+ 16. claude        (deps: registry) — ("prompt-gen","claude")                       Complex
+ 17. fal           (deps: registry) — ("video","fal"), ("image","fal"),
+                    ("prompt-gen","fal"), ("music","fal"), ("sfx","fal"),
+                    ("sprite","fal")                                                 Complex
+ 18. apimodels     (deps: registry) — ("video","apimodels")                         Complex
+ 19. ark           (deps: registry) — ("video","ark"), ("asset","ark"),
+                    ("image","ark")                                                  Complex
+ 20. compose       (deps: buildfile, promptGen)          Standard
+ 21. cli           (deps: runner, buildfile, compose)    Complex
 
 ASCII graph (A --> B means A depends on B):
 
-  runner ----> registry        voiceover --> registry     elevenlabs --> registry
-  runner ----> buildfile       translate --> registry     openai -----> registry
-  compose ---> buildfile       promptGen --> registry
-  compose ---> promptGen
+  runner ----> registry        runner ----> buildfile
+  voiceover, translate, promptGen, image, video, music, sfx, sprite, asset -> registry
+  elevenlabs, openai, codex, claude, fal, apimodels, ark ---------------> registry
+  compose ---> buildfile       compose ---> promptGen
   cli -------> runner          cli --------> buildfile    cli --------> compose
 
 Provider registration happens in onInit, so by the time app.start() resolves every
@@ -1925,7 +2183,8 @@ promptGen · W3 elevenlabs+openai+compose · W4 cli.
 
 Later waves add image, video, codex and fal, then W5 asset (registered after video)
 and W6 ark (registered after fal, before compose — fal stays the first, default video
-provider; ark is the only asset provider). music is registered after video and before
+provider; ark is the only asset provider). claude registers after codex; apimodels
+registers after fal and before ark (a second video provider; fal stays the default). music is registered after video and before
 asset; fal registers ("music","fal"), so fal is the default (and only) music provider.
 sfx and sprite are registered right after music. elevenlabs registers ("sfx","elevenlabs")
 before fal registers ("sfx","fal"), so elevenlabs is the default sfx provider; fal is the
@@ -2051,4 +2310,4 @@ plain object types — fake object literals satisfy them); assemble a private fr
 with createCore(coreConfig, { plugins: [...], pluginConfigs: { journal: { path: tmp },
 store: { dir: tmp } } }) to pin core-plugin paths into a temp dir. Plugin tests live in
 src/plugins/<name>/__tests__/{unit,integration}; root tests/ is framework-level only.
-522 tests, 90% coverage threshold. Run: bun run test.
+2858 tests in 195 files, 90% coverage threshold. Run: bun run test.

@@ -77,6 +77,42 @@ describe("runRunCommand — flag parsing", () => {
   });
 });
 
+/**
+ * Runs `moku run` with the given flags and returns what reached `runner.export`.
+ *
+ * @param flags - Parsed command flags.
+ * @returns The options `runner.export` was called with.
+ */
+async function exportOptionsFor(flags: Record<string, string>): Promise<unknown[]> {
+  const calls: unknown[] = [];
+  const { context } = createFakeCommandContext({
+    runner: {
+      run: () => Promise.resolve({ runId: "run-1", status: "done", totals: ZERO_TOTALS }),
+      export: opts => {
+        calls.push(opts);
+        return Promise.resolve({ runId: "run-1", outDir: "/out", files: [], skipped: [] });
+      }
+    }
+  });
+
+  await runRunCommand(context, flags, []);
+  return calls;
+}
+
+describe("runRunCommand — export after the run", () => {
+  it("passes --flat to runner.export as flat: true", async () => {
+    const calls = await exportOptionsFor({ out: "assets", flat: "true" });
+
+    expect(calls).toEqual([{ runId: "run-1", outDir: "assets", flat: true }]);
+  });
+
+  it("passes flat: false and out/ when neither flag is given", async () => {
+    const calls = await exportOptionsFor({});
+
+    expect(calls).toEqual([{ runId: "run-1", outDir: "out", flat: false }]);
+  });
+});
+
 describe("runRunCommand — progress rendering", () => {
   it("renders progress and terminal events from runner.events()", async () => {
     const events: RunEvent[] = [

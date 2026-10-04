@@ -34,11 +34,11 @@ describe("runExportCommand", () => {
     const code = await runExportCommand(context, { out: "renders" }, ["run-7"]);
 
     expect(code).toBe(EXIT_CODES.ok);
-    expect(calls).toEqual([{ runId: "run-7", outDir: "renders" }]);
+    expect(calls).toEqual([{ runId: "run-7", outDir: "renders", flat: false }]);
     const output = lines.join("\n");
     expect(output).toContain("e01.s01.h3");
     expect(output).toContain("$0.3000");
-    expect(output).toContain("skipped: unsafe name");
+    expect(output).toContain("skipped: unsafe name or duplicate target");
   });
 
   it("defaults to the newest run and out/", async () => {
@@ -55,8 +55,24 @@ describe("runExportCommand", () => {
     const code = await runExportCommand(context, {}, []);
 
     expect(code).toBe(EXIT_CODES.ok);
-    expect(calls).toEqual([{ outDir: "out" }]);
+    expect(calls).toEqual([{ outDir: "out", flat: false }]);
     expect(lines.join("\n")).toContain("no done artifacts to export");
+  });
+
+  it("passes --flat to runner.export as flat: true", async () => {
+    const calls: unknown[] = [];
+    const { context } = createFakeCommandContext({
+      runner: {
+        export: opts => {
+          calls.push(opts);
+          return Promise.resolve(RESULT);
+        }
+      }
+    });
+
+    await runExportCommand(context, { out: "assets", flat: "true" }, []);
+
+    expect(calls).toEqual([{ outDir: "assets", flat: true }]);
   });
 
   it("returns the failure exit code when the run does not exist", async () => {

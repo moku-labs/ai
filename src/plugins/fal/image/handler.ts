@@ -25,6 +25,7 @@ import type { FalContext, LocalFile } from "../types";
 import type { ResolvedImageModel } from "./models";
 import {
   checkImageAspect,
+  checkImageBackground,
   DEFAULT_IMAGE_ASPECT,
   imageResolution,
   promptWithNegative,
@@ -83,7 +84,7 @@ export type ImagePlan = {
 };
 
 /** Params the body builders map themselves; never passed through. */
-const CONSUMED_PARAMS: readonly string[] = ["resolution", "quality"];
+const CONSUMED_PARAMS: readonly string[] = ["resolution", "quality", "background"];
 
 /** Log event for a failed image job. */
 const FAILED_EVENT = "fal:image:failed";
@@ -119,12 +120,12 @@ function stringParameter(value: unknown): string | undefined {
 /**
  * Plans a request without I/O: model (default `config.imageDefaultModel`),
  * ref count against the model's limit (refs may still be `$ref`s), resolution,
- * aspect and cost.
+ * aspect, background and cost.
  *
  * @param ctx - Plugin context (config, price table).
  * @param request - The image request.
  * @returns The plan.
- * @throws {TerminalProviderError} A 400 for an unknown model, too many refs, a bad resolution or aspect, or a missing price.
+ * @throws {TerminalProviderError} A 400 for an unknown model, too many refs, a bad resolution or aspect, a transparent jpeg, or a missing price.
  */
 export function planImage(ctx: FalContext, request: ImageRequest): ImagePlan {
   const model = resolveImageModel(request.model ?? ctx.config.imageDefaultModel);
@@ -142,6 +143,10 @@ export function planImage(ctx: FalContext, request: ImageRequest): ImagePlan {
   const resolution = imageResolution(model, request.params?.resolution);
   const aspect = request.aspect ?? DEFAULT_IMAGE_ASPECT;
   checkImageAspect(model, aspect, resolution);
+
+  // A transparent background cannot be written as jpeg.
+  const background = stringParameter(request.params?.background);
+  checkImageBackground(model, background, stringParameter(request.params?.output_format));
 
   // GPT Image costs more at xhigh and max.
   const quality = stringParameter(request.params?.quality);
@@ -217,7 +222,8 @@ function imageBody(
       resolution: plan.resolution,
       imageUrls,
       quality: stringParameter(request.params?.quality),
-      outputFormat: stringParameter(request.params?.output_format)
+      outputFormat: stringParameter(request.params?.output_format),
+      background: stringParameter(request.params?.background)
     })
   };
 }

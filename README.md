@@ -59,10 +59,11 @@ bun add @moku-labs/ai
 > `@moku-labs/common`, `better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `ARK_API_KEY` (plus
-> `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a `.env.local`
-> file in the working directory (the shell wins over the file), before executing (estimates and
-> validation never need a key).
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
+> `ARK_API_KEY` (plus `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a
+> `.env.local` file in the working directory (the shell wins over the file), before executing
+> (estimates and validation never need a key). `codex` and `claude` find their CLI on `PATH`;
+> `NO_COLOR` turns on plain CLI output.
 
 ## Quick start
 
@@ -180,20 +181,52 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 ## The `moku` CLI
 
 The package `bin` (`"moku"`) is a plain Layer-3 consumer:
-`createApp({})` → `start()` → `app.cli.dispatch(process.argv.slice(2))` → `stop()` → exit.
+load the [project config](#project-config-mokuconfigts) → `createApp(options)` → `start()` →
+`app.cli.dispatch(argv)` → `stop()` → exit.
 
 | Command | What it does |
 |---|---|
 | `moku new [name]` | Write a starter build file + its JSON Schema (editor autocomplete via modeline). |
 | `moku validate [glob]` | Compile every matched build file through the zod IR; offline, no providers needed. |
 | `moku estimate [glob]` | Per-task/provider cost breakdown + total — the same math the budget gate uses. |
-| `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>]` | Execute matched build files with live progress; SIGINT drains to a clean pause. Done artifacts are exported to `<out>/<build>/<label>.<ext>` (default `out/`). |
-| `moku export [runId] [--out <dir>]` | Copy a run's done artifacts (default: the newest run) to named files. |
+| `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>] [--flat]` | Execute matched build files with live progress; SIGINT drains to a clean pause. Done artifacts are exported to `<out>/<build>/<label>.<ext>` (default `out/`), or `<out>/<label>.<ext>` with `--flat`. |
+| `moku export [runId] [--out <dir>] [--flat]` | Copy a run's done artifacts (default: the newest run) to named files. `--flat` drops the `<build>/` folder; a label already written by this export is skipped and listed. |
 | `moku status [runId] [--follow]` | Snapshot (or 1s-poll) a run's totals — safe from a second process. |
 | `moku compose "<prompt>" [--emit build\|script] [--out <path>]` | Generate a build file from natural language. |
 
 Exit codes (`Cli.EXIT_CODES`): `0` ok · `1` failure · `2` validation · `3` usage ·
 `4` paused (SIGINT drain) · `5` budget stop.
+
+### Project config (`moku.config.ts`)
+
+Every command reads one project config. The bin looks in the working directory for
+`moku.config.ts`, `.mts`, `.js`, `.mjs`, in that order; the first file wins. `--config <path>`
+(or `--config=<path>`) on any command wins over the search; the path resolves against the
+working directory, and the flag is removed before the command sees argv. No file: today's defaults.
+
+```ts
+// moku.config.ts
+import { defineConfig } from "@moku-labs/ai";
+import { myProvider } from "./plugins/my-provider";
+
+export default defineConfig({
+  plugins: [myProvider],
+  pluginConfigs: { ark: { region: "cn" }, fal: { upload: "data-uri" } }
+});
+```
+
+The default export goes to `createApp` as is. Only `plugins` and `pluginConfigs` are allowed.
+`defineConfig` returns its argument; it types `pluginConfigs`, also for the custom plugins in
+`plugins`, so an unknown key or a wrong value is an editor error. Core plugins (`journal`,
+`store`, `limits`) are not typed there. Node 24 strips the types of a `.ts` file; Bun loads it.
+
+A config that does not load prints `[ai] Could not load <path>.` and the reason, and exits `3`
+before any app is created: a `--config` file that does not exist, a module that throws, or a
+default export that is not an object. `--config` without a path also exits `3`.
+
+```sh
+moku run --config configs/cn.ts --max-cost 5
+```
 
 ## Usage
 
@@ -470,12 +503,18 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `pollIntervalMs` | `number` | `2000` |
 | | `jobTimeoutMs` | `number` | `900_000` |
 | | `requestLog` | `string` | `""` (off) |
+| `apimodels` | `apiKeyEnv` | `string` | `"APIMODELS_API_KEY"` |
+| | `baseUrl` | `string` | `"https://api.apimodels.app/v1"` |
+| | `assetGroup` | `string` | `"moku-ai"` |
+| | `timeoutMs` | `number` | `60_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` |
 | `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
 | | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
 | | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |
 | | `groupId` | `string \| null` | `null` (create one per process, log its id) |
 | | `groupName` | `string` | `"moku-ai"` |
 | | `timeoutMs` | `number` | `60_000` |
+| | `downloadTimeoutMs` | `number` | `300_000` (one clip or image download) |
 | | `priceOverrides` | `Record<string, number>` | `{}` (USD per 1M output tokens) |
 | | `cnyPerUsd` | `number` | `7.1` |
 | `compose` | `provider` | `string` | `"openai"` |
@@ -545,7 +584,9 @@ await app.runner.run(
 
 ```mermaid
 flowchart LR
-  subgraph CORE["core plugins — injected as ctx.*"]
+  subgraph CORE["core plugins (src/config.ts), injected as ctx.*"]
+    LOG["log"]
+    ENV["env"]
     J["journal"]
     S["store"]
     L["limits"]
@@ -554,11 +595,26 @@ flowchart LR
   BF["buildfile"]
   RN["runner"] --> REG
   RN --> BF
-  VO["voiceover"] --> REG
-  TR["translate"] --> REG
-  PG["promptGen"] --> REG
-  EL["elevenlabs"] --> REG
-  OA["openai"] --> REG
+  subgraph TASKS["task plugins"]
+    VO["voiceover"]
+    TR["translate"]
+    PG["promptGen"]
+    IM["image"]
+    VI["video"]
+    MU["music"]
+    AS["asset"]
+  end
+  subgraph PROV["provider plugins"]
+    EL["elevenlabs"]
+    OA["openai"]
+    CX["codex"]
+    CL["claude"]
+    FAL["fal"]
+    AM["apimodels"]
+    ARK["ark"]
+  end
+  TASKS --> REG
+  PROV --> REG
   CO["compose"] --> BF
   CO --> PG
   CLI["cli"] --> RN
@@ -566,20 +622,26 @@ flowchart LR
   CLI --> CO
   classDef core fill:#0b7285,stroke:#08525f,color:#fff;
   classDef reg fill:#1864ab,stroke:#0d3d6e,color:#fff;
-  class J,S,L core
-  class REG,BF,RN,VO,TR,PG,EL,OA,CO,CLI reg
+  class LOG,ENV,J,S,L core
+  class REG,BF,RN,VO,TR,PG,IM,VI,MU,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
 ```
 
-Registration order in `src/index.ts` puts every plugin after its dependencies:
-`registry → buildfile → runner → voiceover → translate → promptGen → elevenlabs →
-openai → compose → cli`. Provider plugins register their handlers in `onInit`, so by
+An arrow from a group means every plugin in it has that `depends` edge: each task and
+provider plugin depends on `registry` only.
+
+The five core plugins come first, from `src/config.ts`: `log → env → journal → store →
+limits`. They have no `depends`. The 19 regular plugins follow in `src/index.ts`, every
+plugin after its dependencies:
+`registry → buildfile → runner → voiceover → translate → promptGen → image → video →
+music → asset → elevenlabs → openai → codex → claude → fal → apimodels → ark → compose →
+cli`. Provider plugins register their handlers in `onInit`, so by
 the time `app.start()` resolves, every task facade sees its providers — and the
 *first*-registered provider is each task's implicit default.
 
 The factory chain is the standard three-layer Moku shape: `src/config.ts` builds
 `coreConfig` (`createCoreConfig("ai", …)` with the five core plugins), `src/index.ts`
 assembles the framework (`createCore`) and exports `createApp` + `createPlugin` for
-Layer-3 consumers, plus the helpers `defineBuild`, `ASSET_MIME`, `encodeAssetRecord`,
+Layer-3 consumers, plus the helpers `defineBuild`, `defineConfig` (with the `ProjectConfig` type), `ASSET_MIME`, `encodeAssetRecord`,
 `parseAssetRecord`, `PromptGenUnavailableError`, `isPromptGenUnavailable`,
 `ToolArgumentsError` and `runToolLoop`.
 
@@ -588,7 +650,7 @@ Layer-3 consumers, plus the helpers `defineBuild`, `ASSET_MIME`, `encodeAssetRec
 - Plugins live in `src/plugins/<name>/` — `index.ts` (definition), `types.ts`,
   `api.ts`, plus colocated `__tests__/unit/` and `__tests__/integration/`. Root
   `tests/` is for framework-level integration only.
-- 812 tests across unit + integration projects, 90% coverage threshold.
+- 2858 tests in 195 files across unit + integration projects, 90% coverage threshold.
 - Follow the family conventions: branded CLI output via `@moku-labs/common/cli`,
   `ctx.log` (never `console.*`), `ctx.env` (never `process.env`).
 
@@ -632,7 +694,10 @@ bun run test:coverage      # unit + integration with coverage
   [sprite](./src/plugins/sprite/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·
   [openai](./src/plugins/openai/README.md) ·
+  [codex](./src/plugins/codex/README.md) ·
+  [claude](./src/plugins/claude/README.md) ·
   [fal](./src/plugins/fal/README.md) ·
+  [apimodels](./src/plugins/apimodels/README.md) ·
   [asset](./src/plugins/asset/README.md) ·
   [ark](./src/plugins/ark/README.md) ·
   [compose](./src/plugins/compose/README.md) ·

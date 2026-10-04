@@ -272,9 +272,13 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 
 Bodies: nano `{ prompt, aspect_ratio, resolution, num_images: 1, output_format: "png", enable_web_search: false, sync_mode: false, image_urls? }`;
 seedream `{ prompt, image_size, num_images: 1, max_images: 1, sync_mode: false, image_urls? }`;
-gpt `{ prompt, image_size, quality, num_images: 1, output_format, image_urls? }`. `params.quality` (gpt only) is
+gpt `{ prompt, image_size, quality, num_images: 1, output_format, background?, image_urls? }`. `params.quality` (gpt only) is
 `auto`, `low`, `medium`, `high`, `xhigh` or `max`, else `high`. `params.output_format` (gpt only) is `jpeg`, `png`
-or `webp`, else `jpeg`. Nano always sends `png`. The prompt sent is `<prompt>\n\nAvoid: <negative>` when `negative` is set.
+or `webp`, else `png` with a transparent background, else `jpeg`. Nano always sends `png`.
+`params.background` (gpt only) is `auto`, `transparent` or `opaque`; any other value is not sent. Nano and Seedream
+never send it. `transparent` with `output_format: "jpeg"` is a terminal 400, thrown before the key is read or a ref
+is uploaded: `[ai] fal image model "gpt-image-2.5" cannot write a transparent jpeg.` Without `params.background`
+the body is unchanged. The prompt sent is `<prompt>\n\nAvoid: <negative>` when `negative` is set.
 Every other param passes through, but the mapped fields win: a param never raises `num_images` or changes the size.
 
 Refs must be resolved `{ path, mimeType, hash }` files at `submit`; `estimate` only counts them.

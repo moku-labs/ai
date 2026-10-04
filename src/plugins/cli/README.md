@@ -13,8 +13,10 @@ spinner animations anywhere in the plugin.
 By ratified design (OQ1) the plugin has **no lifecycle** — no `onInit`, `onStart`, `onStop`, and
 no state. Dispatch is an ordinary post-start API method: the package `bin` entry (`src/bin.ts`, a
 Layer-3 consumer shipped as `dist/bin.mjs` under the `"moku"` bin name) runs
-`createApp({})` → `await app.start()` → `await app.cli.dispatch(process.argv.slice(2))` →
-`await app.stop()` → `process.exit(code)`. `dispatch()` itself **never calls `process.exit`** —
+`loadProjectConfig(argv, cwd)` → `createApp(options)` → `await app.start()` →
+`await app.cli.dispatch(argv)` → `await app.stop()` → `process.exit(code)`. The bin reads the
+project config and removes `--config` from argv; `dispatch()` never sees it (see the
+[root README](../../../README.md#project-config-mokuconfigts)). `dispatch()` itself **never calls `process.exit`** —
 it returns the code, and the caller owns the process.
 
 ## Exit-code contract
@@ -93,16 +95,18 @@ moku estimate
 
 Exit: `0`.
 
-### `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>]`
+### `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>] [--flat]`
 
 Runs matched build files via `runner.run` with a SIGINT-wired `AbortSignal`, then exports every
-done artifact to `<out>/<build>/<label>.<ext>` and prints one line per file (`label  $cost  path`).
+done artifact to `<out>/<build>/<label>.<ext>` (`<out>/<label>.<ext>` with `--flat`) and prints one
+line per file (`label  $cost  path`).
 
 | Flag | Type | Description |
 |------|------|-------------|
 | `--max-cost <usd>` | string | Maximum spend in USD before the run stops. A non-numeric or negative value is a usage error (exit `3`). |
 | `--dry-run` | boolean | Estimate without executing. |
 | `--out <dir>` | string | Export directory. Default `out`. |
+| `--flat` | boolean | Write files to `--out` directly, without the `<build>/` folder. Passed to `runner.export` as `flat`. |
 
 Progress is rendered by draining `runner.events()` — the event stream is opened synchronously
 right after `runner.run()` is called, which is required to observe the run's active subscription
@@ -148,14 +152,24 @@ moku run --dry-run
 Exit: the run's terminal status mapped to the contract — `done`→`0`, `failed`→`1`, `paused`→`4`,
 `budget-stopped`→`5`; bad `--max-cost`→`3`.
 
-### `moku export [runId] [--out <dir>]`
+### `moku export [runId] [--out <dir>] [--flat]`
 
 Copies a run's done artifacts (default: the newest run) to `<out>/<build>/<label>.<ext>` via
 `runner.export`. The label is the build item's `id`, else `<NN>-<task>`; the extension comes from
 the stored mime type.
 
+| Flag | Type | Description |
+|------|------|-------------|
+| `--out <dir>` | string | Export directory. Default `out`. |
+| `--flat` | boolean | Write `<out>/<label>.<ext>`, without the `<build>/` folder. |
+
+A label that would escape `--out`, or a file this export already wrote, is skipped and listed as
+`skipped: unsafe name or duplicate target`. With `--flat`, the same label in two builds is such a
+duplicate: the first file is kept.
+
 ```bash
 moku export --out out
+moku export --out assets/icons --flat
 ```
 
 Exit: `0`; `1` when the run does not exist.
@@ -329,9 +343,12 @@ with `spinnerFrameAt` supplying `run`'s progress spinner frames. Plain mode
 
 **Process ownership** — the `"moku"` bin (`package.json` `"bin": { "moku": "./dist/bin.mjs" }`,
 built from `src/bin.ts`) is the only place `process.exit` is called. It imports only the
-framework's public entry, making it a plain Layer-3 consumer of `app.cli.dispatch`.
+framework's public entry and this plugin's project-config loader (`project-config.ts`),
+making it a plain Layer-3 consumer of `app.cli.dispatch`. A config that does not load exits `3`
+before any app is created.
 
 **File layout** — `index.ts` (plugin definition), `types.ts` (types + `EXIT_CODES`), `api.ts`
 (registry, argv parsing, dispatch, `CommandContext` assembly), `render.ts` (branded-console
-composition), and one module per command under `commands/`. No `state.ts` — the plugin is
+composition), one module per command under `commands/`, and `project-config.ts` (the bin's
+`loadProjectConfig` + `renderLoadError`; not re-exported). No `state.ts` — the plugin is
 stateless.
