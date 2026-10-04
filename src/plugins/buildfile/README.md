@@ -100,7 +100,8 @@ Renders the starter build-file text for `moku new`.
   (`# yaml-language-server: $schema=<schemaPath>`) AND the `$schema:` key — both are emitted
   because the literal `$schema:` key alone does NOT activate editor autocomplete; only the
   modeline comment does — followed by a minimal valid spec and one commented example item per
-  M0 task (`voiceover`, `translate`, `prompt-gen`). The rendered text is itself a valid,
+  task (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, and an
+  `image` → `sprite` pair with a `{nine=l,t,r,b}` id hint). The rendered text is itself a valid,
   compilable build file.
 - **Throws:** nothing.
 

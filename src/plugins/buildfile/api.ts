@@ -270,8 +270,8 @@ function computeJsonSchema(): Record<string, unknown> {
  * yaml-language-server modeline and the `$schema:` key (only the modeline
  * comment activates editor autocomplete — the `$schema:` key alone does
  * not — so both are emitted from this one source), a minimal valid spec,
- * and one commented example item per M0 task (voiceover, translate,
- * prompt-gen).
+ * and one commented example item per task (voiceover, translate,
+ * prompt-gen, image, video, music, sfx, and an image -> sprite pair).
  *
  * @param name - The `name:` field of the generated build file.
  * @param schemaPath - Path the modeline and `$schema:` key should point at.
@@ -326,6 +326,27 @@ items: []
 #     model: "elevenlabs-music-v2.5"
 #     prompt: "Tense synth pulse, rising."
 #     lengthMs: 30000
+#
+# - task: sfx
+#   id: coin-pickup
+#   input:
+#     model: "eleven_text_to_sound_v2"
+#     prompt: "Coin pickup, bright 8-bit chime."
+#     durationMs: 600
+#
+# - task: image
+#   id: button-raw
+#   input:
+#     prompt: "Wooden game UI button, flat colour background."
+#     aspect: "1:1"
+#
+# - task: sprite
+#   id: "button{nine=12,12,12,12}"
+#   input:
+#     model: "birefnet"
+#     source: { $ref: button-raw }
+#     size: { width: 128, height: 64 }
+#     padding: 2
 `;
 }
 
