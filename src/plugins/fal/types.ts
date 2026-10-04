@@ -1,7 +1,7 @@
 /**
  * @file fal provider plugin — types (Config/State/API), type aliases of the
  * errors.ts provider error classes, and the domain context type shared by `api.ts`,
- * `client/`, `log.ts` and the four task handlers (video, image, prompt-gen, music).
+ * `client/`, `log.ts` and the six task handlers (video, image, prompt-gen, music, sfx, sprite).
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -55,7 +55,8 @@ export type Config = {
    * Price overrides, one table for every task. Video: `<alias>`, `<alias>@<resolution>`, `<alias>+audio`
    * (USD/s) or a `<alias>#ref*` surcharge key. Image: `image:<alias>` or `image:<alias>@<resolution>` (USD/image).
    * Music: `music:<alias>` (USD per started minute or per generation). prompt-gen: `llm:<id>#in` /
-   * `llm:<id>#out` (USD per M tokens). Default: {}.
+   * `llm:<id>#out` (USD per M tokens). sfx: `sfx:<alias>` (USD per started second). sprite:
+   * `sprite:<alias>` (USD per image). Default: {}.
    */
   priceOverrides: Record<string, number>;
   /**
@@ -159,14 +160,14 @@ export type FalInfo = {
 };
 
 /**
- * The four tasks this plugin serves, as `app.fal.models(task)` names them.
+ * The six tasks this plugin serves, as `app.fal.models(task)` names them.
  *
  * @example
  * ```ts
  * const task: FalTask = "prompt-gen";
  * ```
  */
-export type FalTask = "video" | "image" | "prompt-gen" | "music";
+export type FalTask = "video" | "image" | "prompt-gen" | "music" | "sfx" | "sprite";
 
 /**
  * One model of one task with its effective price. prompt-gen is priced per M tokens,
@@ -200,9 +201,9 @@ export type LocalFile = {
 
 /**
  * Public API surface of the `fal` plugin, exposed as `app.fal`. A thin
- * observability surface — the real capability surface is the four registered
+ * observability surface — the real capability surface is the six registered
  * handlers, consumed through `app.video`, `app.image`, `app.promptGen`,
- * `app.music` and `app.runner`.
+ * `app.music`, `app.sfx`, `app.sprite` and `app.runner`.
  *
  * @example
  * ```ts
@@ -226,9 +227,9 @@ export type FalApi = {
   /**
    * The models this plugin accepts for one task, with their effective price (bundled merged with
    * `priceOverrides`), in catalog order. No network, no key. Video and image list the price at the
-   * model's default resolution (video: audio off, no refs).
+   * model's default resolution (video: audio off, no refs); sfx per second, sprite per image.
    *
-   * @param task - One of the four fal tasks.
+   * @param task - One of the six fal tasks.
    * @returns One entry per model; the `price` shape follows the task's billing unit.
    * @throws {Error} `[ai] Unknown fal task "x".` for any other string at runtime.
    * @example
@@ -238,6 +239,8 @@ export type FalApi = {
    * app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
    * app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
    * app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
+   * app.fal.models("sfx"); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]
+   * app.fal.models("sprite"); // => [{ id: "birefnet", price: { usd: 0.002, per: "image" } }, { id: "none", price: { usd: 0, per: "image" } }]
    * ```
    */
   models(task: FalTask): FalModelInfo[];

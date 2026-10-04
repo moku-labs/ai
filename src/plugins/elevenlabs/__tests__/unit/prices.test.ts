@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bundledPrices, mergePrices, resolvePrices } from "../../prices";
+import { TerminalProviderError } from "../../errors";
+import { bundledPrices, isSfxPriceKey, mergePrices, resolvePrices, sfxPriceOf } from "../../prices";
 import { createTestCtx } from "./fixtures";
 
 describe("bundledPrices", () => {
@@ -56,5 +57,26 @@ describe("resolvePrices", () => {
     const second = resolvePrices(ctx);
 
     expect(second).toBe(first);
+  });
+});
+
+describe("sfx prices", () => {
+  it("bundles the #second and #auto prices for eleven_text_to_sound_v2", () => {
+    expect(bundledPrices["sfx:eleven_text_to_sound_v2#second"]).toBe(0.002);
+    expect(bundledPrices["sfx:eleven_text_to_sound_v2#auto"]).toBe(0.01);
+  });
+
+  it("sfxPriceOf reads the price for the model and unit", () => {
+    expect(sfxPriceOf(bundledPrices, "eleven_text_to_sound_v2", "second")).toBe(0.002);
+    expect(sfxPriceOf(bundledPrices, "eleven_text_to_sound_v2", "auto")).toBe(0.01);
+  });
+
+  it("sfxPriceOf throws a terminal 400 for a missing price", () => {
+    expect(() => sfxPriceOf({}, "eleven_text_to_sound_v2", "auto")).toThrow(TerminalProviderError);
+  });
+
+  it("isSfxPriceKey tells sfx keys from voice model keys", () => {
+    expect(isSfxPriceKey("sfx:eleven_text_to_sound_v2#auto")).toBe(true);
+    expect(isSfxPriceKey("eleven_multilingual_v2")).toBe(false);
   });
 });

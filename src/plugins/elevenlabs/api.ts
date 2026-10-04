@@ -1,7 +1,7 @@
 /**
  * @file elevenlabs provider plugin — API factory (`app.elevenlabs.info()`).
  */
-import { resolvePrices } from "./prices";
+import { isSfxPriceKey, resolvePrices } from "./prices";
 import type { ElevenlabsApi, ElevenlabsContext } from "./types";
 
 /**
@@ -31,7 +31,7 @@ export function createElevenlabsApi(ctx: ElevenlabsContext): ElevenlabsApi {
       return {
         provider: "elevenlabs",
         configured: ctx.env.has(ctx.config.apiKeyEnv),
-        models: Object.keys(prices)
+        models: Object.keys(prices).filter(key => !isSfxPriceKey(key))
       };
     }
   };
