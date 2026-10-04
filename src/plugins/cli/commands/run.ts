@@ -1,5 +1,5 @@
 /**
- * @file `moku run [glob] [--max-cost <usd>] [--dry-run]` — run command.
+ * @file `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>] [--flat]` — run command.
  */
 import { spinnerFrameAt } from "@moku-labs/common/cli";
 import type { RunEvent, RunOptions, RunResult, RunResultStatus } from "../../runner/types";
@@ -195,7 +195,7 @@ async function runAndRenderProgress(
  * status to the exit-code contract.
  *
  * @param context - CommandContext (branded console + required plugin APIs).
- * @param flags - Parsed command flags (`maxCost`, `dryRun`).
+ * @param flags - Parsed command flags (`maxCost`, `dryRun`, `out`, `flat`).
  * @param positionals - Positional args; `positionals[0]` is the glob pattern.
  * @returns The exit code mapped from the run's terminal status, or `EXIT_CODES.usage` for a bad `--max-cost`.
  * @example
@@ -230,10 +230,11 @@ export async function runRunCommand(
     return EXIT_BY_STATUS[result.status];
   }
 
-  // Named files for every done item: out/<build>/<label>.<ext>.
+  // Named files for every done item: out/<build>/<label>.<ext>, or out/<label>.<ext> with --flat.
   const exported = await context.runner.export({
     runId: result.runId,
-    outDir: flags.out ?? DEFAULT_OUT_DIR
+    outDir: flags.out ?? DEFAULT_OUT_DIR,
+    flat: flags.flat === "true"
   });
   renderExport(context, exported);
   return EXIT_BY_STATUS[result.status];

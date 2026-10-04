@@ -32,11 +32,12 @@ export type ImageSize = {
 
 /**
  * Everything a body builder needs, already planned: prompt with the
- * negative appended, aspect, resolution, uploaded ref URLs and quality.
+ * negative appended, aspect, resolution, uploaded ref URLs, quality,
+ * output format and background.
  *
  * @example
  * ```ts
- * const input: ImageBodyInput = { prompt: "hero", aspect: "9:16", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined };
+ * const input: ImageBodyInput = { prompt: "hero", aspect: "9:16", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined, background: "transparent" };
  * ```
  */
 export type ImageBodyInput = {
@@ -52,6 +53,8 @@ export type ImageBodyInput = {
   quality: string | undefined;
   /** `params.output_format` when it is a string: gpt-image maps it, nano keeps png, seedream gets it as a pass-through param. */
   outputFormat: string | undefined;
+  /** `params.background` when it is a string: gpt-image sends a known value, nano and seedream never send it. */
+  background: string | undefined;
 };
 
 /**
@@ -174,6 +177,15 @@ const GPT_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["jpeg", "png", "webp"])
 /** GPT Image output format when `params.output_format` is not one of {@link GPT_OUTPUT_FORMATS}. */
 const DEFAULT_GPT_OUTPUT_FORMAT = "jpeg";
 
+/** GPT Image backgrounds fal accepts (fal schema, checked 2026-10-04). */
+const GPT_BACKGROUNDS: ReadonlySet<string> = new Set(["auto", "transparent", "opaque"]);
+
+/** GPT Image output format for a transparent background when no known format is asked. */
+const TRANSPARENT_OUTPUT_FORMAT = "png";
+
+/** The one model whose body sends `background`. */
+const BACKGROUND_MODEL: ImageAlias = "gpt-image-2.5";
+
 /** GPT Image quality when `params.quality` is not one of {@link GPT_QUALITIES}. */
 const DEFAULT_GPT_QUALITY = "high";
 
@@ -201,7 +213,7 @@ function imageUrlsField(imageUrls: readonly string[]): { image_urls?: readonly s
  * @returns The mapped body.
  * @example
  * ```ts
- * nanoBananaBody({ prompt: "p", aspect: "9:16", resolution: "1K", imageUrls: [], quality: undefined, outputFormat: undefined }).resolution; // => "1K"
+ * nanoBananaBody({ prompt: "p", aspect: "9:16", resolution: "1K", imageUrls: [], quality: undefined, outputFormat: undefined, background: undefined }).resolution; // => "1K"
  * ```
  */
 function nanoBananaBody(input: ImageBodyInput): Record<string, unknown> {
@@ -244,7 +256,7 @@ function seedreamSize(
  * @returns The mapped body.
  * @example
  * ```ts
- * seedreamBody({ prompt: "p", aspect: "1:1", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined }).image_size; // => "auto_2K"
+ * seedreamBody({ prompt: "p", aspect: "1:1", resolution: "2K", imageUrls: [], quality: undefined, outputFormat: undefined, background: undefined }).image_size; // => "auto_2K"
  * ```
  */
 function seedreamBody(input: ImageBodyInput): Record<string, unknown> {
@@ -259,29 +271,60 @@ function seedreamBody(input: ImageBodyInput): Record<string, unknown> {
 }
 
 /**
+ * `background` when it is one of {@link GPT_BACKGROUNDS}, else nothing.
+ *
+ * @param background - `params.background`, if a string.
+ * @returns The field, or an empty object.
+ * @example
+ * ```ts
+ * gptBackgroundField("clear"); // => {}
+ * ```
+ */
+function gptBackgroundField(background: string | undefined): { background?: string } {
+  return background !== undefined && GPT_BACKGROUNDS.has(background) ? { background } : {};
+}
+
+/**
+ * GPT Image output format: the caller's known format; else PNG for a
+ * transparent background, else JPEG.
+ *
+ * @param input - Planned fields.
+ * @returns The format sent as `output_format`.
+ * @example
+ * ```ts
+ * gptOutputFormat({ prompt: "p", aspect: "1:1", resolution: undefined, imageUrls: [], quality: undefined, outputFormat: undefined, background: "transparent" }); // => "png"
+ * ```
+ */
+function gptOutputFormat(input: ImageBodyInput): string {
+  const { outputFormat } = input;
+  if (outputFormat !== undefined && GPT_OUTPUT_FORMATS.has(outputFormat)) return outputFormat;
+
+  return input.background === "transparent" ? TRANSPARENT_OUTPUT_FORMAT : DEFAULT_GPT_OUTPUT_FORMAT;
+}
+
+/**
  * GPT Image 2.5 body: the 2K size object or the preset name, quality, one
- * image in the caller's `output_format`, JPEG by default.
+ * image in the caller's `output_format` (PNG for a transparent background,
+ * JPEG otherwise), and a known `background`.
  *
  * @param input - Planned fields.
  * @returns The mapped body.
  * @example
  * ```ts
- * gptImageBody({ prompt: "p", aspect: "9:16", resolution: undefined, imageUrls: [], quality: "ultra", outputFormat: "png" }).output_format; // => "png"
+ * gptImageBody({ prompt: "p", aspect: "9:16", resolution: undefined, imageUrls: [], quality: "ultra", outputFormat: "png", background: undefined }).output_format; // => "png"
  * ```
  */
 function gptImageBody(input: ImageBodyInput): Record<string, unknown> {
   const sizes = input.resolution === "2K" ? GPT_2K_SIZES : PRESET_SIZES;
   const hasKnownQuality = input.quality !== undefined && GPT_QUALITIES.has(input.quality);
   const quality = hasKnownQuality ? input.quality : DEFAULT_GPT_QUALITY;
-  const hasKnownFormat =
-    input.outputFormat !== undefined && GPT_OUTPUT_FORMATS.has(input.outputFormat);
-  const outputFormat = hasKnownFormat ? input.outputFormat : DEFAULT_GPT_OUTPUT_FORMAT;
   return {
     prompt: input.prompt,
     image_size: sizes[input.aspect],
     quality,
     num_images: 1,
-    output_format: outputFormat,
+    output_format: gptOutputFormat(input),
+    ...gptBackgroundField(input.background),
     ...imageUrlsField(input.imageUrls)
   };
 }
@@ -427,6 +470,35 @@ export function checkImageAspect(
 
   throw new TerminalProviderError(
     `[ai] fal image model "${model.alias}" does not support aspect "${aspect}".\n  Use one of: ${aspects.join(", ")}.`,
+    BAD_REQUEST
+  );
+}
+
+/**
+ * Refuses a transparent background in JPEG, which has no alpha channel. Only
+ * {@link BACKGROUND_MODEL} sends `background`; other models pass.
+ *
+ * @param model - The resolved row.
+ * @param background - `params.background`, if a string.
+ * @param outputFormat - `params.output_format`, if a string.
+ * @returns {void} Nothing; a format that keeps the background passes.
+ * @throws {TerminalProviderError} A 400 for a transparent JPEG on gpt-image.
+ * @example
+ * ```ts
+ * checkImageBackground(resolveImageModel("gpt-image-2.5"), "transparent", "jpeg"); // throws: '[ai] fal image model "gpt-image-2.5" cannot write a transparent jpeg.\n  Use output_format "png" or "webp".'
+ * ```
+ */
+export function checkImageBackground(
+  model: ResolvedImageModel,
+  background: string | undefined,
+  outputFormat: string | undefined
+): void {
+  const sendsBackground = model.alias === BACKGROUND_MODEL;
+  const isTransparentJpeg = background === "transparent" && outputFormat === "jpeg";
+  if (!sendsBackground || !isTransparentJpeg) return;
+
+  throw new TerminalProviderError(
+    `[ai] fal image model "${model.alias}" cannot write a transparent jpeg.\n  Use output_format "png" or "webp".`,
     BAD_REQUEST
   );
 }

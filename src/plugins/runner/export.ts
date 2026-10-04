@@ -1,7 +1,8 @@
 /**
  * @file runner export — copies a run's `done` artifacts out of the
  * content-addressed store to named files: `<outDir>/<build>/<label>.<ext>` (D9),
- * and `<label>-<k>.<ext>` for output k ≥ 2 of a multi-output item.
+ * or `<outDir>/<label>.<ext>` with `flat`, and `<label>-<k>.<ext>` for output
+ * k ≥ 2 of a multi-output item.
  */
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -95,7 +96,7 @@ function exportEntriesOf(item: ItemRow & { contentHash: string }, label: string)
  * The file an entry is written to: `<buildDirectory>/<label>.<ext>`, the extension from its mime type.
  *
  * @param entry - What to write.
- * @param buildDirectory - Absolute folder of the item's build.
+ * @param buildDirectory - Absolute folder of the item's files: its build folder, or the export root with `flat`.
  * @returns The absolute target path.
  * @example
  * ```ts
@@ -128,31 +129,59 @@ async function exportEntry(
 }
 
 /**
+ * The folder an item's files go to: `<outputDirectory>/<build>`, or the
+ * export directory itself when `flat`.
+ *
+ * @param outputDirectory - Absolute export directory.
+ * @param buildName - The item's build name.
+ * @param flat - Whether to skip the build folder.
+ * @returns The absolute folder, or undefined when the build name is unsafe as a folder name.
+ * @example
+ * ```ts
+ * itemDirectoryOf("/repo/out", "ep01", false); // => "/repo/out/ep01"
+ * itemDirectoryOf("/repo/out", "ep01", true); // => "/repo/out"
+ * ```
+ */
+function itemDirectoryOf(
+  outputDirectory: string,
+  buildName: string,
+  flat: boolean
+): string | undefined {
+  if (flat) return outputDirectory;
+  if (!isSafeRelativeName(buildName)) return undefined;
+  return path.join(outputDirectory, buildName);
+}
+
+/** Where and how one export writes: its absolute folder and whether build folders are skipped. */
+type ExportTarget = { outputDirectory: string; flat: boolean };
+
+/**
  * Copies one done item's artifacts to their named files: one file, or one
  * per output of a multi-output item.
  *
  * @param ctx - Runner domain context.
  * @param item - A `done` item with a content hash.
- * @param outputDirectory - Absolute export directory.
+ * @param target - Absolute export directory and the `flat` switch.
  * @param taken - Target paths already written by this export; the item's targets are added.
  * @returns The written files, or undefined when the item's names are unsafe or one of its
- *   files would overwrite a file this export already wrote (a group's `x-2` next to an item `x-2`).
+ *   files would overwrite a file this export already wrote (a group's `x-2` next to an item
+ *   `x-2`, or with `flat` the same label in two builds).
  */
 async function exportItem(
   ctx: RunnerContext,
   item: ItemRow & { contentHash: string },
-  outputDirectory: string,
+  target: ExportTarget,
   taken: Set<string>
 ): Promise<ExportedFile[] | undefined> {
   const label = item.label ?? item.id;
   const buildName = item.buildName ?? UNNAMED_BUILD;
-  if (!isSafeRelativeName(label) || !isSafeRelativeName(buildName)) return undefined;
+  const itemDirectory = itemDirectoryOf(target.outputDirectory, buildName, target.flat);
+  if (itemDirectory === undefined || !isSafeRelativeName(label)) return undefined;
 
   // Never overwrite a file this export already wrote.
-  const buildDirectory = path.join(outputDirectory, buildName);
   const writes = exportEntriesOf(item, label).map(entry => ({
     entry,
-    target: targetOf(entry, buildDirectory)
+    target: targetOf(entry, itemDirectory)
   }));
   if (writes.some(write => taken.has(write.target))) return undefined;
   for (const write of writes) taken.add(write.target);
@@ -165,28 +194,30 @@ async function exportItem(
 
 /**
  * Copies every `done` artifact of a run to `<outDir>/<build>/<label>.<ext>`,
- * the extension coming from the stored mime type. A multi-output item adds
- * `<label>-2.<ext>` … `<label>-N.<ext>`. Files from earlier exports are
- * overwritten. Labels that would escape `outDir`, and items whose file this
- * export already wrote, are skipped and listed.
+ * or to `<outDir>/<label>.<ext>` with `flat`, the extension coming from the
+ * stored mime type. A multi-output item adds `<label>-2.<ext>` …
+ * `<label>-N.<ext>`. Files from earlier exports are overwritten. Labels that
+ * would escape `outDir`, and items whose file this export already wrote, are
+ * skipped and listed.
  *
  * @param ctx - Runner domain context.
- * @param opts - Optional run id (default: the newest run) and output directory (default "out").
+ * @param opts - Optional run id (default: the newest run), output directory (default "out") and `flat`.
  * @param opts.runId - Run to export.
  * @param opts.outDir - Export root, relative to the working directory or absolute.
+ * @param opts.flat - Write into `outDir` directly, without the `<build>/` folder. Default false.
  * @returns The files written and the labels skipped.
  * @throws {Error} When the run does not exist.
- * @example
- * ```ts
- * const result = await exportRun(ctx, { outDir: "out" });
- * ```
  */
 export async function exportRun(
   ctx: RunnerContext,
-  opts?: { runId?: string; outDir?: string }
+  opts?: { runId?: string; outDir?: string; flat?: boolean }
 ): Promise<ExportResult> {
+  // The run to export and where its files go.
   const run = pickRun(ctx, opts?.runId);
   const outputDirectory = path.resolve(opts?.outDir ?? DEFAULT_OUT_DIR);
+  const target: ExportTarget = { outputDirectory, flat: opts?.flat ?? false };
+
+  // Export each done item; an item that cannot be written is listed as skipped.
   const files: ExportedFile[] = [];
   const skipped: string[] = [];
   const taken = new Set<string>();
@@ -194,7 +225,7 @@ export async function exportRun(
   for (const item of ctx.journal.listItems(run.id, { status: "done" })) {
     if (item.contentHash === null) continue;
     const doneItem = { ...item, contentHash: item.contentHash };
-    const written = await exportItem(ctx, doneItem, outputDirectory, taken);
+    const written = await exportItem(ctx, doneItem, target, taken);
     if (written) files.push(...written);
     else skipped.push(item.label ?? item.id);
   }
