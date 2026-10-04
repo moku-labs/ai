@@ -224,6 +224,54 @@ describe("submit", () => {
     });
   });
 
+  it("sends a transparent background to gpt-image as png", async () => {
+    const fetchMock = stubFetch(submitResponse("req-10"));
+    const request: ImageRequest = { prompt: "logo", params: { background: "transparent" } };
+
+    await createImageHandler(createTestCtx()).submit(request, {});
+
+    expect(jsonBodyOf(callsOf(fetchMock)[0])).toEqual({
+      prompt: "logo",
+      image_size: "portrait_16_9",
+      quality: "high",
+      num_images: 1,
+      output_format: "png",
+      background: "transparent"
+    });
+  });
+
+  it("refuses a transparent jpeg before the key read and any upload", async () => {
+    const fetchMock = stubFetch();
+    const handler = createImageHandler(createTestCtx({ env: createFakeEnv({}) }));
+    const request: ImageRequest = {
+      prompt: "logo",
+      refs: [face],
+      params: { background: "transparent", output_format: "jpeg" }
+    };
+
+    const error = await rejectionOf(handler.submit(request, {}));
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({
+      status: 400,
+      message:
+        '[ai] fal image model "gpt-image-2.5" cannot write a transparent jpeg.\n  Use output_format "png" or "webp".'
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "nano-banana-pro",
+    "seedream-4.5-edit"
+  ])("never passes background through to %s", async model => {
+    const fetchMock = stubFetch(submitResponse("req-11"));
+    const request: ImageRequest = { prompt: "p", model, params: { background: "transparent" } };
+
+    await createImageHandler(createTestCtx()).submit(request, {});
+
+    expect(jsonBodyOf(callsOf(fetchMock)[0])).not.toHaveProperty("background");
+  });
+
   it("uploads refs and queues the edit endpoint with their URLs in order", async () => {
     const fetchMock = stubStorageFetch(submitResponse("req-2"));
     const request: ImageRequest = { prompt: "p", model: "nano-banana-pro", refs: [face, plate] };
