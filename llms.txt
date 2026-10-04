@@ -5,15 +5,23 @@
 ## Core Concepts
 
 ### Three-layer plugin architecture
-- Layer 1 (`src/config.ts`): `createCoreConfig("ai", ...)` registers the core plugins
+- Layer 1 (`src/config.ts`): `createCoreConfig("ai", ...)` registers the 5 core plugins
   `logPlugin` + `envPlugin` (from @moku-labs/common) + `journalPlugin` + `storePlugin` +
   `limitsPlugin`. Exports the framework-scoped `createPlugin` and `createCore`.
   Global `Config` and `Events` are both empty by ratified decision — all configuration
   is per-plugin; the runner declares its own events.
 - Layer 2 (`src/index.ts`): `createCore(coreConfig, { plugins: [...] })` assembles the
-  10 regular plugins in dependency order and exports the public surface.
+  19 regular plugins in dependency order and exports the public surface.
 - Layer 3 (consumer apps): `import { createApp, createPlugin } from "@moku-labs/ai"`.
   `createApp({ plugins?, pluginConfigs?, onReady?, ... })` → `await app.start()`.
+- The `moku` bin (`src/bin.ts`) is a Layer-3 consumer: `loadProjectConfig` (`src/plugins/cli/project-config.ts`)
+  → `createApp(options)` → start → `cli.dispatch(argv)` → stop → exit. Project config: the first of
+  `moku.config.ts`, `.mts`, `.js`, `.mjs` in the cwd, or `--config <path>` / `--config=<path>` on
+  any command (wins over the search, resolves against the cwd, removed from argv before dispatch).
+  Default export = `defineConfig({ plugins?, pluginConfigs? })` (identity; types `pluginConfigs`,
+  also for custom plugins in `plugins`; core keys journal/store/limits are not typed). No file →
+  `createApp({})`. Missing `--config` file, a throwing module, a non-object default export, or
+  `--config` with no path → `[ai] ...` message on stderr, exit 3, no app created.
 
 ### Core plugin APIs injected on every regular plugin's ctx
 - `ctx.journal` — durable SQLite WAL ledger (also the atomic budget+dedup gate).
@@ -25,7 +33,8 @@ Core APIs also mount on the app (`app.limits`, ...). Regular plugin APIs mount b
 
 IMPORTANT: `createApp`'s `pluginConfigs` is typed to REGULAR plugins only. Core-plugin
 config (journal/store/limits) is a `createCore`-level option — fixed by the framework
-for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concurrent).
+for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concurrent, plus the
+lanes `video/apimodels` 2 concurrent / 20 rpm and `video/ark` 3 concurrent / 180 rpm).
 
 ### Durability model (journal + store)
 - One `runs` row per invocation; one `items` row per asset; one `attempts` row per
@@ -55,8 +64,12 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 - `$ref: <item id>` (same build file) and `$file: <path>` (relative to the build file)
   inputs resolve to `{ path, mimeType, hash }`; references run first; a failed target
   leaves dependents queued and the run `paused`.
-- `runner.export({ runId?, outDir? })` copies done artifacts to
-  `<outDir>/<build name>/<label>.<ext>` (label = item id, else `<NN>-<task>`).
+- `runner.export({ runId?, outDir?, flat? })` copies done artifacts to
+  `<outDir>/<build name>/<label>.<ext>` (label = item id, else `<NN>-<task>`), or to
+  `<outDir>/<label>.<ext>` with `flat: true` (default false). A multi-output item adds
+  `<label>-2.<ext>` … `<label>-N.<ext>`. An unsafe label, or a target this export already wrote
+  (with `flat`: the same label in two builds), is skipped and listed in `skipped`; the first file
+  is kept. With `flat` the build name is not checked (no build folder).
 - The atomic gate (`journal.gateToDispatching`) verifies still-queued + projected spend
   within `maxCostUsd` + transitions to dispatching, in ONE transaction.
 
@@ -92,7 +105,7 @@ for Layer-3 consumers at M0 (`.moku/journal.db`, `.moku/store`, 60 rpm / 4 concu
 ## Quick Reference
 
 ```ts
-import { createApp, createPlugin, defineBuild, registryPlugin, runToolLoop } from "@moku-labs/ai";
+import { createApp, createPlugin, defineBuild, defineConfig, registryPlugin, runToolLoop } from "@moku-labs/ai";
 import type { Voiceover, Translate, PromptGen, Music, Fal, Buildfile, Cli } from "@moku-labs/ai";
 
 const app = createApp({
@@ -130,8 +143,12 @@ app.buildfile.jsonSchema(); app.buildfile.template({ name: "demo" });
 // NL → build file (LLM repair loop; never returns an invalid spec)
 await app.compose.compose({ prompt: "narrate a greeting", emit: "build" }); // { spec, text, costUsd }
 
-// CLI (also the `moku` bin): new | validate | estimate | run | status | compose
+// CLI (also the `moku` bin): new | validate | estimate | run | export | status | compose
 const code = await app.cli.dispatch(["run", "--dry-run"]);                  // exit-code contract 0..5
+await app.cli.dispatch(["export", "--out", "assets/icons", "--flat"]);      // out/<label>.<ext>, no <build>/ folder
+
+// Project config for the `moku` bin: moku.config.ts in the cwd (or --config <path>)
+export default defineConfig({ plugins: [myProvider], pluginConfigs: { ark: { region: "cn" }, fal: { upload: "data-uri" } } });
 
 // Custom provider plugin (Layer 3)
 const handler: Voiceover.VoiceoverHandler = {
@@ -176,7 +193,7 @@ itemsFrom: extra.ndjson # optional NDJSON, one BuildItem per line, appended at c
 ```
 
 CLI exit codes: 0 ok · 1 failure · 2 validation · 3 usage · 4 paused · 5 budget stop.
-Env vars: ELEVENLABS_API_KEY, OPENAI_API_KEY, FAL_KEY, ARK_API_KEY (+ ARK_ACCESS_KEY /
+Env vars: ELEVENLABS_API_KEY, OPENAI_API_KEY, FAL_KEY, APIMODELS_API_KEY, ARK_API_KEY (+ ARK_ACCESS_KEY /
 ARK_SECRET_KEY for Ark assets) (configurable via each plugin's apiKeyEnv / accessKeyEnv / secretKeyEnv;
 needed only at execute time — estimates/validation are key-free). NO_COLOR → plain CLI.
 
@@ -185,27 +202,31 @@ needed only at execute time — estimates/validation are key-free). NO_COLOR →
 ```
 src/
   config.ts               # Layer 1: createCoreConfig("ai") + core plugins; exports createPlugin/createCore
-  index.ts                # Layer 2: framework assembly; exports createApp, createPlugin, defineBuild, plugins, type namespaces
-  bin.ts                  # `moku` bin — Layer-3 consumer: createApp → start → cli.dispatch → stop → exit
+  index.ts                # Layer 2: framework assembly; exports createApp, createPlugin, defineConfig, ProjectConfig, defineBuild, helpers, plugins, type namespaces, <Provider>Errors
+  bin.ts                  # `moku` bin — Layer-3 consumer: loadProjectConfig → createApp → start → cli.dispatch → stop → exit
   plugins/
     index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image, Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose, Cli)
     journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, provider-records.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
     registry/             # index.ts only (Nano — no types.ts, by design)
-    buildfile/            # index.ts, types.ts, api.ts, schema.ts (zod), define.ts (defineBuild)
-    runner/               # index.ts, types.ts, api.ts, pipeline/plan/retry/stream modules
+    buildfile/            # index.ts, types.ts, api.ts, schema.ts (zod), define.ts (defineBuild), references.ts
+    runner/               # index.ts, types.ts, api.ts, state.ts, pipeline.ts, plan.ts, claim.ts, resolve.ts, keys.ts, retry.ts, failure.ts, stream.ts, export.ts
     voiceover/            # index.ts, types.ts, api.ts, contract.ts, packs/
     translate/            # index.ts, types.ts, api.ts, contract.ts
-    promptGen/            # index.ts, types.ts, api.ts, contract.ts, resolve.ts, fallback.ts, loop/ (runToolLoop: run, tools, history, types)
-    elevenlabs/           # index.ts, types.ts, api.ts, client.ts, prices.ts, state.ts, voiceover/handler.ts
-    openai/               # index.ts, types.ts, api.ts, client.ts, prices.ts, state.ts, tts/ translate/ prompt-gen/ handlers
+    promptGen/            # index.ts, types.ts, api.ts, contract.ts, resolve.ts, fallback.ts, loop/ (runToolLoop: run, tools, history, cache, types)
+    image/ video/         # index.ts, types.ts, api.ts, contract.ts
+    elevenlabs/           # index.ts, types.ts, api.ts, client.ts, errors.ts, prices.ts, state.ts, voiceover/handler.ts
+    openai/               # index.ts, types.ts, api.ts, client.ts, errors.ts, prices.ts, state.ts, tts/ translate/ prompt-gen/ handlers
+    codex/                # index.ts, types.ts, api.ts, cli.ts, errors.ts, message.ts, prices.ts, state.ts, workdir.ts, image/ prompt/ handlers
+    claude/               # index.ts, types.ts, api.ts, cli.ts, errors.ts, prompt/ handler
     compose/              # index.ts, types.ts, api.ts, emit.ts
     asset/                # index.ts, types.ts, api.ts, contract.ts (ASSET_MIME, AssetRequest/Record/Handler, encode/parse)
     music/                # index.ts, types.ts, api.ts, contract.ts (MusicChunk/Request/Result/JobPoll/Handler)
-    fal/                  # index.ts, types.ts, api.ts, state.ts, log.ts, prices.ts, client/ (http, queue, upload), video/ image/ llm/ music/ handlers
-    ark/                  # index.ts, types.ts, api.ts, state.ts, regions.ts, models.ts, prices.ts, account.ts, sign.ts, client.ts, image-check.ts, video/ asset/ handlers
-    cli/                  # index.ts, types.ts, api.ts, render.ts, commands/
+    fal/                  # index.ts, types.ts, api.ts, state.ts, errors.ts, log.ts, prices.ts, client/ (http, queue, upload), video/ image/ llm/ music/ handlers
+    apimodels/            # index.ts, types.ts, api.ts, state.ts, errors.ts, http.ts, client.ts, upload.ts, assets.ts, prices.ts, video/ handler
+    ark/                  # index.ts, types.ts, api.ts, state.ts, errors.ts, regions.ts, models.ts, prices.ts, account.ts, sign.ts, client.ts, image-check.ts, video/ asset/ image/ handlers
+    cli/                  # index.ts, types.ts, api.ts, render.ts, commands/, project-config.ts (loadProjectConfig + renderLoadError; bin-only, not re-exported)
     <name>/__tests__/     # colocated unit/ + integration/ per plugin
 tests/                    # framework-level unit/ + integration/ only
 ```
@@ -216,7 +237,7 @@ Runtime deps: @moku-labs/common, @moku-labs/core, better-sqlite3, openai, yaml, 
 ## Plugins
 
 Core (registered in createCoreConfig; no events, no depends; injected as ctx.*):
-- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot | events: none
+- journal: SQLite WAL run/item/attempt ledger + atomic budget/dedup gate | Complex | openRun, getRun, latestResumableRun, latestRun, insertItems, getItem, requeueDispatching, gateToDispatching, recordAttempt, finishAttempt, setAttemptJob, findLiveJob, commitDone, findDoneArtifact, reuseDone, markFailed, markFlagged, setRunStatus, totals, listItems, readSnapshot, isOpen, findProviderRecord, putProviderRecords, deleteProviderRecord | events: none
 - store: content-addressed artifact store (never lose a byte, never serve a wrong one) | Standard | put, has, pathOf, read, hashOf, gc | events: none
 - limits: per-lane token bucket + FIFO concurrency + circuit breaker (timer-free lazy math) | Standard | acquire, reportOutcome, laneConfig, snapshot, lanes | events: none
 
@@ -227,28 +248,29 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params | Standard | generate, estimate, providers | events: none
 - translate (deps: registry): owns "translate" contract + one-off facade | Standard | generate, estimate, providers | events: none
 - promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose; generate walks [provider, ...fallback] and switches only on PromptGenUnavailableError (missing/auth/limit) or HTTP 401/402/403/429 or a breaker-open lane, one limits lane "prompt-gen/<provider>/default" per attempt. Tool calling: request messages (ChatMessage[] of ContentPart text/image), tools (ToolDefinition: name, description, JSON-schema inputSchema), toolChoice, cacheSystem; result toolCalls, finishReason, usage (PromptGenUsage: promptTokens, completionTokens, cachedTokens, cacheWriteTokens; optional cachedReadTokens, cachedWriteTokens when the provider reports them) are REQUIRED, so external handlers must return them. claude/codex/openai throw PromptGenUnavailableError reason "unsupported" for messages/tools/toolChoice (generate falls back; fal serves them). Package root also exports ToolArgumentsError (tool arguments not JSON; toolName, raw) and runToolLoop (library function, not a plugin: model:<n> / tool:<callId> / tool:<callId>:start|:wait steps of the caller's journal; budget breaker before model calls and costed tools; finishAt + finishNote once; "Not run: <reason>." answers; ask, keepImages, maxSteps, cancel; cache "system" | "conversation" (default: system mark + up to two rolling cache: true marks on the newest stable user/tool message, max 4 breakpoints with caller marks) | "off"; stoppedBy done | budget | steps | cancel | asked) | Standard | generate, estimate, providers | events: none
-- elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs"); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
-- openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
 - video (deps: registry): owns "video" contract (execute, or submit + poll) + one-off facade | Standard | generate, estimate, providers | events: none
 - music (deps: registry): owns "music" contract (MusicRequest/MusicResult/MusicJobPoll/MusicHandler: estimate + execute, or submit + poll) + one-off facade; MusicRequest.model is REQUIRED (the runner hashes the input as written, so no provider default); generate prefers execute, else submits and polls every pollIntervalMs; audio/mpeg exports as .mp3; module export isMusicHandler | Standard | generate, estimate, providers | events: none
 - asset (deps: registry): owns "asset" contract (AssetRequest/AssetRecord/AssetHandler, submit + poll only) + one-off facade; register a portrait with a provider BEFORE any video item; the done artifact is the AssetRecord JSON under ASSET_MIME ("application/vnd.moku.asset+json", exported as .json); a video item `$ref`s it and gets a file with that MIME; re-register by bumping params.generation; package root also exports ASSET_MIME, encodeAssetRecord, parseAssetRecord | Standard | register, estimate, providers | events: none
+- elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs"); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
+- openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - codex (deps: registry): image and text provider over the local Codex CLI (`codex exec`, plan-billed, $0) — registers ("image","codex") and ("prompt-gen","codex"); params.images → --image, params.responseSchema in the prompt and validated with zod (never --output-schema: OpenAI strict mode rejects zod schemas), params.reasoning → model_reasoning_effort; openai/<id> mapped to -m | Complex | info | events: none
 - claude (deps: registry): text provider over the local Claude Code CLI (`claude -p --output-format json`, plan-billed, $0) — registers ("prompt-gen","claude"); images read with the Read tool under --restricted, params.responseSchema → --json-schema ($schema dropped), structured_output validated with zod, params.reasoning → --effort; anthropic/<id> mapped to --model | Complex | info | events: none
 - fal (deps: registry): every fal-hosted task over one client, one FAL_KEY, one upload cache (state.uploads, keyed storage:<mime>:<sha256>) and one merged price table — registers four handlers in onInit:
   ("video","fal") submit + poll (no execute); models seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref; per-second prices (keys <alias>, <alias>@<resolution>, <alias>+audio).
-  ("image","fal") estimate + execute + submit + poll over the queue; models nano-banana-pro, seedream-4.5-edit, gpt-image-2.5 (default imageDefaultModel); refs → edit endpoint; price keys image:<alias>[@<resolution>].
+  ("image","fal") estimate + execute + submit + poll over the queue; models nano-banana-pro, seedream-4.5-edit, gpt-image-2.5 (default imageDefaultModel); refs → edit endpoint; price keys image:<alias>[@<resolution>]. gpt-image-2.5 only: params.background "auto" | "transparent" | "opaque" (other values not sent); transparent and no known output_format → png; transparent + output_format "jpeg" → TerminalProviderError 400 from the plan, before the key read and any upload; without background the default stays jpeg. nano and seedream never send background.
   ("prompt-gen","fal") estimate + execute, one sync POST to <runUrl>/openrouter/router/openai/v1/chat/completions; model = OpenRouter id, undefined or "default" → llmDefaultModel; price keys llm:<id>#in / llm:<id>#out (USD per M tokens); 401/403/402/429 → PromptGenUnavailableError. messages/tools/toolChoice → OpenAI chat messages, tools, tool_choice; cacheSystem and text parts with cache: true → cache_control ephemeral; tool_calls → toolCalls (arguments not JSON → ToolArgumentsError); typed usage incl. cached and cache-write tokens.
   ("music","fal") estimate + execute + submit + poll; models elevenlabs-music-v2.5 (0.80 USD per started minute, chunks → composition_plan) and stable-audio-2.5 (0.20 USD per generation); price keys music:<alias>; params never reach the body.
   execute (image, music) waits in process every pollIntervalMs, at most jobTimeoutMs (then retryable timeout; the job stays adoptable through poll). A request is validated and priced before the key is read or anything is uploaded; a missing price throws. requestLog (off by default) writes one JSONL line per billable request, never the key or the prompt. Errors: RetryableProviderError, TerminalProviderError, FlaggedProviderError | Complex | info, models(task) | events: none
-- ark (deps: registry): Seedance straight from ByteDance — region "intl" (BytePlus ModelArk) or "cn" (Volcengine Ark), one account per instance; registers ("video","ark") (submit + poll, asset refs sent as asset://<id>, asset preflight: provider + account fingerprint + GetAsset Active before any paid POST) and ("asset","ark") (signed OpenAPI: CreateAssetGroup once per process unless groupId set, CreateAsset from a public https input.url, GetAsset poll; estimate $0); registered after fal so fal stays the default video provider; models dreamina-seedance-2-0-260128, dreamina-seedance-2-5-260628 (intl), doubao-seedance-2-0-260128, doubao-seedance-2-5-260628 (cn); price per 1M output tokens; params allowlist refUrls (video/audio refs by public https URL), watermark, seed, return_last_frame, execution_expires_after, priority; a face refusal on a plain image says "Make it an asset item and $ref it." — no raw-photo fallback | Complex | info | events: none
+- apimodels (deps: registry): video provider over the apimodels.app task API — registers ("video","apimodels") submit + poll (no execute); Seedance 2.5 and 2.0 official, which accept real faces; models seedance-2.5, seedance-2.5-ref, seedance-2.0, seedance-2.0-ref (same aliases as fal, switch provider only); a refused face is registered as an asset and retried, or params.assets names inputs registered first and sent as asset://<id> (cached in the journal); price keys <alias>@<resolution> (USD/s) and asset | Complex | info | events: none
+- ark (deps: registry): Seedance and Seedream straight from ByteDance — region "intl" (BytePlus ModelArk) or "cn" (Volcengine Ark), one account per instance; registers ("video","ark") (submit + poll, asset refs sent as asset://<id>, asset preflight: provider + account fingerprint + GetAsset Active before any paid POST) and ("asset","ark") (signed OpenAPI: CreateAssetGroup once per process unless groupId set, CreateAsset from a public https input.url, GetAsset poll; estimate $0) and ("image","ark") (Seedream seedream-5-0-lite-260128, intl only, one call, text- and image-to-image, params.images: N for a group of up to 15); registered after fal and apimodels so fal stays the default video provider; video models dreamina-seedance-2-0-260128, dreamina-seedance-2-0-fast-260128, dreamina-seedance-2-0-mini-260615, dreamina-seedance-2-5-260628 (intl), doubao-seedance-2-0-260128, doubao-seedance-2-5-260628 (cn); price per 1M output tokens; params allowlist refUrls (video/audio refs by public https URL), watermark, seed, return_last_frame, execution_expires_after, priority; a face refusal on a plain image says "Make it an asset item and $ref it." — no raw-photo fallback | Complex | info | events: none
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
-- cli (deps: runner, buildfile, compose): the `moku` command surface (new, validate, estimate, run, export, status, compose); branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
+- cli (deps: runner, buildfile, compose): the `moku` command surface (7 commands: new, validate, estimate, run, export, status, compose); run and export take --out <dir> and --flat (out/<label>.<ext>, no <build>/ folder); --config is read and stripped by the bin, never by dispatch; branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
 
-Config defaults (per plugin, override via createApp pluginConfigs; core-plugin keys work at runtime, typed in moku-labs/core#28):
+Config defaults (per plugin, override via createApp pluginConfigs or a moku.config.ts defineConfig; core-plugin keys journal/store/limits are NOT typed in pluginConfigs: they work at runtime, typing tracked in moku-labs/core#28):
 - journal: path=".moku/journal.db", checkpointIntervalMs=30000, busyTimeoutMs=5000
 - store: dir=".moku/store", algo="sha256"
-- limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={}
+- limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={"video/apimodels":{concurrency:2, rpm:20}, "video/ark":{concurrency:3, rpm:180}} (set by the framework in createCore; the plugin default is {}; a lanes override replaces the whole map)
 - buildfile: defaultGlob="**/*.moku.yaml", schemaPath=".moku/build.schema.json"
 - runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000, maxActiveRuns=1
 - voiceover: defaultProvider="elevenlabs", defaultFormat="mp3"
@@ -263,7 +285,8 @@ Config defaults (per plugin, override via createApp pluginConfigs; core-plugin k
 - codex: bin="codex", model="gpt-6-astra", reasoningEffort="low", timeoutMs=600000, workDir=".moku/tmp" ("" = OS temp dir), priceOverrides={}, textModel="", modelMap={}
 - claude: bin="claude", textModel="", modelMap={}, timeoutMs=600000, workDir="" (OS temp dir)
 - fal: apiKeyEnv="FAL_KEY", queueUrl="https://queue.fal.run", uploadUrl="https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3", upload="storage", timeoutMs=60000, priceOverrides={} (video <alias>, image:<alias>, music:<alias>, llm:<id>#in|#out), runUrl="https://fal.run", imageDefaultModel="gpt-image-2.5", llmDefaultModel="anthropic/claude-opus-5.5", pollIntervalMs=2000, jobTimeoutMs=900000, requestLog="" (off)
-- ark: region="intl", apiKeyEnv="ARK_API_KEY", accessKeyEnv="ARK_ACCESS_KEY", secretKeyEnv="ARK_SECRET_KEY", baseUrl=null, controlUrl=null, groupId=null, groupName="moku-ai", timeoutMs=60000, priceOverrides={}, cnyPerUsd=7.1
+- apimodels: apiKeyEnv="APIMODELS_API_KEY", baseUrl="https://api.apimodels.app/v1", assetGroup="moku-ai", timeoutMs=60000, priceOverrides={}
+- ark: region="intl", apiKeyEnv="ARK_API_KEY", accessKeyEnv="ARK_ACCESS_KEY", secretKeyEnv="ARK_SECRET_KEY", baseUrl=null, controlUrl=null, groupId=null, groupName="moku-ai", timeoutMs=60000, downloadTimeoutMs=300000, priceOverrides={}, cnyPerUsd=7.1
 - compose: provider="openai", maxRepairAttempts=2
 - cli: plain=false
 - env (core, from @moku-labs/common): providers=[processEnv(), dotenv(".env.local")] — provider keys come from the shell first, then .env.local in the cwd
