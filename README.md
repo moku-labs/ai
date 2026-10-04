@@ -59,10 +59,11 @@ bun add @moku-labs/ai
 > `@moku-labs/common`, `better-sqlite3`, `openai`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `ARK_API_KEY` (plus
-> `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a `.env.local`
-> file in the working directory (the shell wins over the file), before executing (estimates and
-> validation never need a key).
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
+> `ARK_API_KEY` (plus `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a
+> `.env.local` file in the working directory (the shell wins over the file), before executing
+> (estimates and validation never need a key). `codex` and `claude` find their CLI on `PATH`;
+> `NO_COLOR` turns on plain CLI output.
 
 ## Quick start
 
@@ -469,12 +470,18 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `pollIntervalMs` | `number` | `2000` |
 | | `jobTimeoutMs` | `number` | `900_000` |
 | | `requestLog` | `string` | `""` (off) |
+| `apimodels` | `apiKeyEnv` | `string` | `"APIMODELS_API_KEY"` |
+| | `baseUrl` | `string` | `"https://api.apimodels.app/v1"` |
+| | `assetGroup` | `string` | `"moku-ai"` |
+| | `timeoutMs` | `number` | `60_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` |
 | `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
 | | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
 | | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |
 | | `groupId` | `string \| null` | `null` (create one per process, log its id) |
 | | `groupName` | `string` | `"moku-ai"` |
 | | `timeoutMs` | `number` | `60_000` |
+| | `downloadTimeoutMs` | `number` | `300_000` (one clip or image download) |
 | | `priceOverrides` | `Record<string, number>` | `{}` (USD per 1M output tokens) |
 | | `cnyPerUsd` | `number` | `7.1` |
 | `compose` | `provider` | `string` | `"openai"` |
@@ -544,7 +551,9 @@ await app.runner.run(
 
 ```mermaid
 flowchart LR
-  subgraph CORE["core plugins — injected as ctx.*"]
+  subgraph CORE["core plugins (src/config.ts), injected as ctx.*"]
+    LOG["log"]
+    ENV["env"]
     J["journal"]
     S["store"]
     L["limits"]
@@ -553,11 +562,26 @@ flowchart LR
   BF["buildfile"]
   RN["runner"] --> REG
   RN --> BF
-  VO["voiceover"] --> REG
-  TR["translate"] --> REG
-  PG["promptGen"] --> REG
-  EL["elevenlabs"] --> REG
-  OA["openai"] --> REG
+  subgraph TASKS["task plugins"]
+    VO["voiceover"]
+    TR["translate"]
+    PG["promptGen"]
+    IM["image"]
+    VI["video"]
+    MU["music"]
+    AS["asset"]
+  end
+  subgraph PROV["provider plugins"]
+    EL["elevenlabs"]
+    OA["openai"]
+    CX["codex"]
+    CL["claude"]
+    FAL["fal"]
+    AM["apimodels"]
+    ARK["ark"]
+  end
+  TASKS --> REG
+  PROV --> REG
   CO["compose"] --> BF
   CO --> PG
   CLI["cli"] --> RN
@@ -565,13 +589,19 @@ flowchart LR
   CLI --> CO
   classDef core fill:#0b7285,stroke:#08525f,color:#fff;
   classDef reg fill:#1864ab,stroke:#0d3d6e,color:#fff;
-  class J,S,L core
-  class REG,BF,RN,VO,TR,PG,EL,OA,CO,CLI reg
+  class LOG,ENV,J,S,L core
+  class REG,BF,RN,VO,TR,PG,IM,VI,MU,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
 ```
 
-Registration order in `src/index.ts` puts every plugin after its dependencies:
-`registry → buildfile → runner → voiceover → translate → promptGen → elevenlabs →
-openai → compose → cli`. Provider plugins register their handlers in `onInit`, so by
+An arrow from a group means every plugin in it has that `depends` edge: each task and
+provider plugin depends on `registry` only.
+
+The five core plugins come first, from `src/config.ts`: `log → env → journal → store →
+limits`. They have no `depends`. The 19 regular plugins follow in `src/index.ts`, every
+plugin after its dependencies:
+`registry → buildfile → runner → voiceover → translate → promptGen → image → video →
+music → asset → elevenlabs → openai → codex → claude → fal → apimodels → ark → compose →
+cli`. Provider plugins register their handlers in `onInit`, so by
 the time `app.start()` resolves, every task facade sees its providers — and the
 *first*-registered provider is each task's implicit default.
 
@@ -587,7 +617,7 @@ Layer-3 consumers, plus the helpers `defineBuild`, `defineConfig` (with the `Pro
 - Plugins live in `src/plugins/<name>/` — `index.ts` (definition), `types.ts`,
   `api.ts`, plus colocated `__tests__/unit/` and `__tests__/integration/`. Root
   `tests/` is for framework-level integration only.
-- 812 tests across unit + integration projects, 90% coverage threshold.
+- 2858 tests in 195 files across unit + integration projects, 90% coverage threshold.
 - Follow the family conventions: branded CLI output via `@moku-labs/common/cli`,
   `ctx.log` (never `console.*`), `ctx.env` (never `process.env`).
 
@@ -629,7 +659,10 @@ bun run test:coverage      # unit + integration with coverage
   [music](./src/plugins/music/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·
   [openai](./src/plugins/openai/README.md) ·
+  [codex](./src/plugins/codex/README.md) ·
+  [claude](./src/plugins/claude/README.md) ·
   [fal](./src/plugins/fal/README.md) ·
+  [apimodels](./src/plugins/apimodels/README.md) ·
   [asset](./src/plugins/asset/README.md) ·
   [ark](./src/plugins/ark/README.md) ·
   [compose](./src/plugins/compose/README.md) ·
