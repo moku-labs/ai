@@ -28,6 +28,19 @@ describe("createFalApi().models()", () => {
     ]);
   });
 
+  it("lists the sfx model per second", () => {
+    expect(createFalApi(createTestCtx()).models("sfx")).toEqual([
+      { id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }
+    ]);
+  });
+
+  it("lists the sprite models per image, none at 0", () => {
+    expect(createFalApi(createTestCtx()).models("sprite")).toEqual([
+      { id: "birefnet", price: { usd: 0.002, per: "image" } },
+      { id: "none", price: { usd: 0, per: "image" } }
+    ]);
+  });
+
   it("lists the three image models at their default resolution", () => {
     expect(createFalApi(createTestCtx()).models("image")).toEqual([
       { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } },
@@ -61,7 +74,9 @@ describe("createFalApi().models()", () => {
           "seedance-2.5@720p": 0.5,
           "image:gpt-image-2.5": 0.07,
           "music:stable-audio-2.5": 0.3,
-          "llm:anthropic/claude-opus-5.5#out": 25
+          "llm:anthropic/claude-opus-5.5#out": 25,
+          "sfx:elevenlabs-sfx-v2": 0.003,
+          "sprite:birefnet": 0.004
         }
       }
     });
@@ -70,6 +85,8 @@ describe("createFalApi().models()", () => {
     expect(api.models("image")[2]?.price).toEqual({ usd: 0.07, per: "image" });
     expect(api.models("music")[1]?.price).toEqual({ usd: 0.3, per: "generation" });
     expect(api.models("prompt-gen")[0]?.price).toEqual({ inputPerM: 4, outputPerM: 25 });
+    expect(api.models("sfx")[0]?.price).toEqual({ usd: 0.003, per: "second" });
+    expect(api.models("sprite")[0]?.price).toEqual({ usd: 0.004, per: "image" });
   });
 
   it("needs no key", () => {
@@ -81,7 +98,7 @@ describe("createFalApi().models()", () => {
     const api = createFalApi(createTestCtx());
     // @ts-expect-error — "audio" is not a fal task
     expect(() => api.models("audio")).toThrow(
-      '[ai] Unknown fal task "audio".\n  Use one of: video, image, prompt-gen, music.'
+      '[ai] Unknown fal task "audio".\n  Use one of: video, image, prompt-gen, music, sfx, sprite.'
     );
   });
 

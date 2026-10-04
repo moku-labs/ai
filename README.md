@@ -35,7 +35,7 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `asset`); provider plugins
+  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, `sprite`, `asset`); provider plugins
   (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `apimodels`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
@@ -56,7 +56,7 @@ bun add @moku-labs/ai
 
 > [!NOTE]
 > **Status: `0.x` — early.** Runtime dependencies (`@moku-labs/core`,
-> `@moku-labs/common`, `better-sqlite3`, `openai`, `yaml`, `zod`) install with the
+> `@moku-labs/common`, `better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
 > export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
@@ -148,7 +148,7 @@ one twice.
 ## Plugins
 
 Three core plugins are injected on every plugin's `ctx` (plus `ctx.log` / `ctx.env`
-inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); nineteen regular
+inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); twenty-one regular
 plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 
 | Plugin | Tier | Kind | Responsibility |
@@ -162,16 +162,18 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
 | [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
-| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`; price table, retry-taxonomy errors. |
+| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")` and `("sfx", "elevenlabs")`; price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
 | [`music`](./src/plugins/music/README.md) | Standard | regular (`app.music`) | Owns the `"music"` task contract (`execute` or `submit` + `poll`) + one-off facade. `MusicRequest.model` is required. |
+| [`sfx`](./src/plugins/sfx/README.md) | Standard | regular (`app.sfx`) | Owns the `"sfx"` task contract (`execute` only, always mp3) + one-off facade. `SfxRequest.model` is required. |
+| [`sprite`](./src/plugins/sprite/README.md) | Standard | regular (`app.sprite`) | Owns the `"sprite"` task contract — cut a `$ref`'d image into a trimmed, transparent PNG — + one-off facade and the pixel step `processSprite`. |
 | [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
 | [`codex`](./src/plugins/codex/README.md) | Complex | regular (`app.codex`) | Image and prompt-gen provider over the local Codex CLI (`codex exec`), plan-billed. |
 | [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
-| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Four tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. `app.fal.models(task)` lists each task's models with prices. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Six tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. Sfx: ElevenLabs SFX v2. Sprite: BiRefNet matte. `app.fal.models(task)` lists each task's models with prices. |
 | [`apimodels`](./src/plugins/apimodels/README.md) | Complex | regular (`app.apimodels`) | Video provider over apimodels.app: Seedance 2.5 and 2.0 official, which accept real faces; optional `asset://` registration via item `params.assets`, cached in the journal. |
 | [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0, 2.0 fast, 2.0 mini and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video, image (Seedream 5.0 lite, text- and image-to-image) and asset providers, 2.5 draft → 1080p final, trusted Seedream faces and `asset://` portraits, per-token prices. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
@@ -352,6 +354,35 @@ const track = await app.music.generate({
 await Bun.write("teaser.mp3", track.audio);
 ```
 
+### Game assets: sound effects and sprites
+
+`sfx` items make a short mp3 from a prompt. `model` is required, as for music:
+
+```yaml
+  - id: coin-pickup
+    task: sfx
+    provider: elevenlabs
+    input: { model: eleven_text_to_sound_v2, prompt: "coin pickup, bright 8-bit chime", durationMs: 600 }
+```
+
+A sprite takes two items: an `image` item makes the raw picture, and a `sprite` item
+`$ref`s it, removes the background, trims, pads and resizes it into a transparent PNG.
+An id may end with a nine-slice hint `{nine=l,t,r,b}`; it stays in the file name:
+
+```yaml
+  - id: button-raw
+    task: image
+    provider: fal
+    input: { model: nano-banana-pro, prompt: "wooden game UI button, flat colour background", aspect: "1:1" }
+  - id: "button{nine=12,12,12,12}"
+    task: sprite
+    provider: fal
+    input: { source: { $ref: button-raw }, model: birefnet, size: { width: 128, height: 64 }, padding: 2 }
+```
+
+Export writes `out/<name>/coin-pickup.mp3` and `out/<name>/button{nine=12,12,12,12}.png`. Changing the sprite
+options re-cuts the stored image and never regenerates it.
+
 ### Faces: Seedream first, or register a portrait
 
 Seedance on Ark refuses a real face in an image from outside. It trusts a face that
@@ -443,6 +474,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `pollIntervalMs` | `number` | `5000` |
 | `music` | `defaultProvider` | `string` | `"fal"` |
 | | `pollIntervalMs` | `number` | `5000` |
+| `sfx` | `defaultProvider` | `string` | `"elevenlabs"` |
+| `sprite` | `defaultProvider` | `string` | `"fal"` |
 | `asset` | `defaultProvider` | `string` | `"ark"` |
 | | `pollIntervalMs` | `number` | `3000` |
 | `codex` | `bin` | `string` | `"codex"` |
@@ -463,7 +496,7 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `uploadUrl` | `string` | fal storage initiate URL |
 | | `upload` | `"storage" \| "data-uri"` | `"storage"` |
 | | `timeoutMs` | `number` | `60_000` |
-| | `priceOverrides` | `Record<string, number>` | `{}` (video `<alias>`; `image:<alias>`, `music:<alias>`, `llm:<id>#in` / `#out`) |
+| | `priceOverrides` | `Record<string, number>` | `{}` (video `<alias>`; `image:<alias>`, `music:<alias>`, `sfx:<alias>`, `sprite:<alias>`, `llm:<id>#in` / `#out`) |
 | | `runUrl` | `string` | `"https://fal.run"` |
 | | `imageDefaultModel` | `string` | `"gpt-image-2.5"` |
 | | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` |
@@ -657,6 +690,8 @@ bun run test:coverage      # unit + integration with coverage
   [image](./src/plugins/image/README.md) ·
   [video](./src/plugins/video/README.md) ·
   [music](./src/plugins/music/README.md) ·
+  [sfx](./src/plugins/sfx/README.md) ·
+  [sprite](./src/plugins/sprite/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·
   [openai](./src/plugins/openai/README.md) ·
   [codex](./src/plugins/codex/README.md) ·

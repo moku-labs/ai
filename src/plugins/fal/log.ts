@@ -1,7 +1,7 @@
 /**
  * @file fal request log — one opt-in JSONL line per billable request, every
  * task: `{ at, task, model, endpoint, requestId | error, prompt, body }`. The
- * body drops the prompt-bearing field (`prompt`, or the chat `messages`), cuts
+ * body drops the prompt-bearing field (`prompt`, sfx `text`, or the chat `messages`), cuts
  * every string (URLs to host + last segment, data URIs to MIME + length) and
  * names ref URLs by their files. Never the key or a header. A failed write
  * warns once per plugin instance and never fails the request.
@@ -72,7 +72,7 @@ type LoggedValue =
 const WRITE_FAILED_EVENT = "fal:request-log:failed";
 
 /** Body fields that carry the prompt; the line has the prompt once, on its own. */
-const PROMPT_FIELDS: ReadonlySet<string> = new Set(["prompt", "messages"]);
+const PROMPT_FIELDS: ReadonlySet<string> = new Set(["prompt", "text", "messages"]);
 
 /** Body field holding the ref URLs of an image request. */
 const IMAGE_URLS = "image_urls";

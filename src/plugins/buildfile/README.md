@@ -100,7 +100,8 @@ Renders the starter build-file text for `moku new`.
   (`# yaml-language-server: $schema=<schemaPath>`) AND the `$schema:` key — both are emitted
   because the literal `$schema:` key alone does NOT activate editor autocomplete; only the
   modeline comment does — followed by a minimal valid spec and one commented example item per
-  M0 task (`voiceover`, `translate`, `prompt-gen`). The rendered text is itself a valid,
+  task (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, and an
+  `image` → `sprite` pair with a `{nine=l,t,r,b}` id hint). The rendered text is itself a valid,
   compilable build file.
 - **Throws:** nothing.
 
@@ -151,7 +152,7 @@ emits) are stripped by zod, not rejected.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `task` | `string` | yes | Task name — `"voiceover"`, `"translate"`, `"prompt-gen"`, or any registered task (open set; existence is checked by the runner, not here). |
-| `id` | `string` | no | Human label (export file name) and `$ref` target. Unique within a build file. Not identity. |
+| `id` | `string` | no | Human label (export file name) and `$ref` target. Unique within a build file. Not identity. Braces are allowed only as one trailing label hint (see below). |
 | `provider` | `string` | no | Provider override; the runner falls back to `defaults.provider`, else the task's first registered provider. |
 | `input` | `Record<string, unknown>` | yes | Task-specific request payload, handed to the provider flat (`{ ...input, params }`). May hold `$ref` / `$file` values. A `params` key inside `input` is refused. Put params next to input. |
 | `params` | `Record<string, unknown>` | no | Output-relevant parameters — part of the runner's planning key. Goes next to `input`, never inside it. |
@@ -181,6 +182,31 @@ items:
   - id: s01.clip
     task: video
     input: { model: minimax-h3, prompt: "slow push-in", image: { $ref: s01.key } }
+```
+
+### Label hints
+
+An item `id` may end with one nine-slice hint: `<label>{nine=l,t,r,b}`.
+The four values are whole-pixel insets: left, top, right, bottom.
+The hint stays in the exported file name, for example `button{nine=12,12,12,12}.png`.
+The game engine reads it there.
+
+Any other use of `{` or `}` in an `id` is refused: a malformed hint, a non-integer inset,
+a brace in the middle, or an unknown key. The error reads
+`items.1.id: only a trailing {nine=l,t,r,b} hint with whole-pixel insets is allowed.`
+An `id` without braces is unchanged.
+
+A sprite takes two items. An `image` item makes the raw picture. A `sprite` item takes it by
+`$ref` and cuts it, so re-cutting never regenerates the image.
+
+```yaml
+items:
+  - id: btn-raw
+    task: image
+    input: { prompt: "wooden game UI button, flat colour background", aspect: "1:1" }
+  - id: "button{nine=12,12,12,12}"
+    task: sprite
+    input: { source: { $ref: btn-raw }, size: { width: 128, height: 64 }, padding: 2 }
 ```
 
 ### Annotated example

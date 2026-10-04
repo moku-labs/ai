@@ -1,7 +1,7 @@
 /**
  * Complex tier — fal provider: every fal-hosted task over one client, one key,
  * one upload cache and one price table. Registers `video`, `image`,
- * `prompt-gen` and `music` handlers in onInit. Emits no events.
+ * `prompt-gen`, `music`, `sfx` and `sprite` handlers in onInit. Emits no events.
  *
  * @see README.md
  */
@@ -11,6 +11,8 @@ import { createFalApi } from "./api";
 import { createImageHandler } from "./image/handler";
 import { createPromptGenHandler } from "./llm/handler";
 import { createMusicHandler } from "./music/handler";
+import { createSfxHandler } from "./sfx/handler";
+import { createSpriteHandler } from "./sprite/handler";
 import { createFalState } from "./state";
 import type { Config } from "./types";
 import { createVideoHandler } from "./video/handler";
@@ -31,7 +33,7 @@ const defaultConfig: Config = {
 };
 
 /**
- * fal — Complex tier provider plugin. Registers the four fal-hosted tasks in
+ * fal — Complex tier provider plugin. Registers the six fal-hosted tasks in
  * onInit over one client, key, upload cache and price table. Depends on
  * registry only; the task contracts are module imports. The upload cache
  * lives for the process.
@@ -44,10 +46,10 @@ export const falPlugin = createPlugin("fal", {
   createState: createFalState,
   api: createFalApi,
   /**
-   * Registers the fal handlers (video, image, prompt-gen, music) with the registry.
+   * Registers the fal handlers (video, image, prompt-gen, music, sfx, sprite) with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @returns {void} Nothing; the four handlers are registered.
+   * @returns {void} Nothing; the six handlers are registered.
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);
@@ -55,5 +57,7 @@ export const falPlugin = createPlugin("fal", {
     registry.register("image", "fal", createImageHandler(ctx));
     registry.register("prompt-gen", "fal", createPromptGenHandler(ctx));
     registry.register("music", "fal", createMusicHandler(ctx));
+    registry.register("sfx", "fal", createSfxHandler(ctx));
+    registry.register("sprite", "fal", createSpriteHandler(ctx));
   }
 });

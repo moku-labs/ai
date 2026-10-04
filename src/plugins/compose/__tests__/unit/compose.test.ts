@@ -298,6 +298,28 @@ describe("createComposeApi", () => {
   });
 
   // -------------------------------------------------------------------------
+  // system prompt: per-task input docs
+  // -------------------------------------------------------------------------
+
+  describe("compose: system prompt task docs", () => {
+    it("documents the sfx and sprite inputs, with the nine-slice id hint", async () => {
+      const { api: promptGen, calls } = createFakePromptGen([{ text: VALID_YAML, costUsd: 0 }]);
+      const { ctx } = createTestCtx(promptGen);
+      const api = createComposeApi(ctx);
+
+      await api.compose({ prompt: "a coin sound and a button sprite", emit: "build" });
+      const system = calls[0]?.system ?? "";
+
+      expect(system).toContain("- sfx: { prompt: string, model:");
+      expect(system).toContain("eleven_text_to_sound_v2");
+      expect(system).toContain("elevenlabs-sfx-v2");
+      expect(system).toContain("- sprite: { source: { $ref:");
+      expect(system).toContain('"birefnet" | "none"');
+      expect(system).toContain("{nine=l,t,r,b}");
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // types: ComposeApi
   // -------------------------------------------------------------------------
 

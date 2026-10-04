@@ -10,6 +10,10 @@ import { llmPriceOf } from "./llm/prices";
 import { musicAliases, musicModels } from "./music/models";
 import { musicRate } from "./music/prices";
 import { resolvePrices } from "./prices";
+import { sfxAliases } from "./sfx/models";
+import { sfxRate } from "./sfx/prices";
+import { spriteAliases } from "./sprite/models";
+import { spritePriceOf } from "./sprite/prices";
 import type { FalApi, FalContext, FalInfo, FalModelInfo, FalTask } from "./types";
 import { falAliases, modelResolution, resolveFalModel } from "./video/models";
 import { lookupPrice } from "./video/prices";
@@ -90,19 +94,55 @@ function musicModelInfos(prices: Readonly<Record<string, number>>): FalModelInfo
   }));
 }
 
+/**
+ * sfx models per started second.
+ *
+ * @param prices - The merged price table.
+ * @returns One entry per sfx alias, in catalog order.
+ * @example
+ * ```ts
+ * sfxModelInfos(mergePrices({})); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]
+ * ```
+ */
+function sfxModelInfos(prices: Readonly<Record<string, number>>): FalModelInfo[] {
+  return sfxAliases().map(alias => ({
+    id: alias,
+    price: { usd: sfxRate(prices, alias), per: "second" }
+  }));
+}
+
+/**
+ * Sprite models per image; `none` makes no call and costs 0.
+ *
+ * @param prices - The merged price table.
+ * @returns One entry per sprite alias, in catalog order.
+ * @example
+ * ```ts
+ * spriteModelInfos(mergePrices({}))[1]; // => { id: "none", price: { usd: 0, per: "image" } }
+ * ```
+ */
+function spriteModelInfos(prices: Readonly<Record<string, number>>): FalModelInfo[] {
+  return spriteAliases().map(alias => ({
+    id: alias,
+    price: { usd: spritePriceOf(prices, alias), per: "image" }
+  }));
+}
+
 /** The lister of each task. */
 const MODEL_LISTERS: Readonly<Record<FalTask, ModelLister>> = {
   video: videoModels,
   image: imageModelInfos,
   "prompt-gen": promptGenModels,
-  music: musicModelInfos
+  music: musicModelInfos,
+  sfx: sfxModelInfos,
+  sprite: spriteModelInfos
 };
 
 /**
- * Whether a runtime string is one of the four fal tasks.
+ * Whether a runtime string is one of the six fal tasks.
  *
  * @param task - Any string.
- * @returns True for video, image, prompt-gen or music.
+ * @returns True for video, image, prompt-gen, music, sfx or sprite.
  * @example
  * ```ts
  * isFalTask("audio"); // => false

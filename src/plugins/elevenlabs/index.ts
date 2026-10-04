@@ -1,12 +1,13 @@
 /**
  * Complex tier — ElevenLabs provider: owns all ElevenLabs capabilities
- * (M0: voiceover via thin fetch client). Registers handlers in onInit.
+ * (voiceover and sfx via a thin fetch client). Registers handlers in onInit.
  *
  * @see README.md
  */
 import { createPlugin } from "../../config";
 import { registryPlugin } from "../registry";
 import { createElevenlabsApi } from "./api";
+import { createSfxHandler } from "./sfx/handler";
 import { createElevenlabsState } from "./state";
 import type { Config } from "./types";
 import { createVoiceoverHandler } from "./voiceover/handler";
@@ -30,15 +31,14 @@ export const elevenlabsPlugin = createPlugin("elevenlabs", {
   createState: createElevenlabsState,
   api: createElevenlabsApi,
   /**
-   * Registers the ElevenLabs voiceover handler with the registry.
+   * Registers the ElevenLabs voiceover and sfx handlers with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.voiceover.providers(); // ["elevenlabs", ...]
-   * ```
+   * @returns {void} Nothing; both handlers are registered.
    */
   onInit: ctx => {
-    ctx.require(registryPlugin).register("voiceover", "elevenlabs", createVoiceoverHandler(ctx));
+    const registry = ctx.require(registryPlugin);
+    registry.register("voiceover", "elevenlabs", createVoiceoverHandler(ctx));
+    registry.register("sfx", "elevenlabs", createSfxHandler(ctx));
   }
 });

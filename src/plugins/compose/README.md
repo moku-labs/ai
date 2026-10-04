@@ -76,7 +76,7 @@ compose(opts: {
 **Pipeline**
 
 1. Build a system prompt embedding `buildfile.jsonSchema()` plus per-task input documentation
-   (`voiceover`, `translate`, `prompt-gen` input shapes).
+   (`voiceover`, `translate`, `prompt-gen`, `sfx`, `sprite` input shapes).
 2. Call `promptGen.generate({ prompt, system }, { provider, signal })`.
 3. Strip a defensive markdown code fence (` ```yaml ... ``` `) from the model output, if present.
 4. Validate through `buildfile.compile({ text, lang: "yaml" })` (the zod IR).
