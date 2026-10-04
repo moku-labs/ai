@@ -7,7 +7,14 @@
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import type { ElevenlabsContext } from "./types";
 
-/** Loggable fields extracted from a thrown error — status code + error class only, never request text. */
+/**
+ * Loggable fields extracted from a thrown error — status code + error class only, never request text.
+ *
+ * @example
+ * ```ts
+ * const failure: RedactedFailure = { errorType: "terminal", status: 400 };
+ * ```
+ */
 export type RedactedFailure = {
   /** Which provider error class was thrown, or "unknown". */
   errorType: string;

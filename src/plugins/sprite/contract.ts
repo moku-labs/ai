@@ -45,7 +45,7 @@ export type SpriteRequest = {
   trim?: boolean;
   /** Transparent border around the trimmed box, px. With `size`, it sits inside `size`. Default 0. */
   padding?: number;
-  /** Target size. Omitted means the size after trim. */
+  /** Output size, px: the output is exactly this, and `padding` sits inside it. Omitted means the size after trim and padding. */
   size?: { width: number; height: number };
   /** How the trimmed image fits `size`. Default "contain" (transparent letterbox). */
   fit?: "contain" | "cover" | "fill";
@@ -53,6 +53,7 @@ export type SpriteRequest = {
   pixelArt?: boolean;
   /** Alpha at or below this value counts as empty when trimming, 0..255. Default 8. */
   alphaThreshold?: number;
+  // Open record: keys are provider-scoped and documented per provider README (same as music).
   /** Provider params; each provider documents which keys it reads. */
   params?: Record<string, unknown>;
 };
@@ -73,6 +74,7 @@ export type SpriteResult = {
   mimeType: "image/png";
   /** Actual cost of this cut, in US dollars. */
   costUsd: number;
+  // Open record: keys are provider-scoped and documented per provider README (same as music).
   /** width, height, trimBox {left, top, width, height}, model. Metadata only, never a payload echo. */
   meta?: Record<string, unknown>;
 };

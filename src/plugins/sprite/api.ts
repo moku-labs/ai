@@ -4,7 +4,7 @@
  * Owns the single narrowing site for the "sprite" task: registry transports
  * providers' `SpriteHandler` values as `unknown` (spec/09 R9's "genuine
  * dynamic boundary"), and this file narrows them back behind a runtime
- * shape guard, with no cast. Sprite handlers are execute-only.
+ * shape guard, with no cast. Sprite handlers are estimate + execute (no submit/poll).
  */
 import { registryPlugin } from "../registry";
 import type { SpriteApi, SpriteContext, SpriteHandler } from "./types";

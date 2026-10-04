@@ -26,11 +26,6 @@ import { sfxPriceOf } from "./prices";
 
 /**
  * Everything checked before any I/O: the model, the request, the body and the cost.
- *
- * @example
- * ```ts
- * planSfx(ctx, { prompt: "coin", model: "elevenlabs-sfx-v2", durationMs: 2500 }).costUsd; // => 0.006
- * ```
  */
 export type SfxPlan = {
   /** The resolved catalog row. */

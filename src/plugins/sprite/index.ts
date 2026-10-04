@@ -1,5 +1,5 @@
 /**
- * Standard tier — owns the sprite capability contract (execute-only) + typed
+ * Standard tier — owns the sprite capability contract (estimate + execute (no submit/poll)) + typed
  * one-off facade app.sprite.* + the pure pixel step `processSprite`. Emits no events.
  *
  * @see README.md

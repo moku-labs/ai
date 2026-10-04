@@ -34,7 +34,7 @@ export type SpriteProcessOptions = {
   trim?: boolean;
   /** Transparent border around the trimmed box, px. With `size`, it sits inside `size`. Default 0. */
   padding?: number;
-  /** Target size. Omitted means the size after trim and padding. */
+  /** Output size, px: the output is exactly this, and `padding` sits inside it. Omitted means the size after trim and padding. */
   size?: { width: number; height: number };
   /** How the image fits `size`. Default "contain" (transparent letterbox). */
   fit?: "contain" | "cover" | "fill";
@@ -77,6 +77,15 @@ const DEFAULT_ALPHA_THRESHOLD = 8;
 
 /** Bytes per RGBA pixel. */
 const CHANNELS = 4;
+
+/** Index of the alpha byte inside one RGBA pixel. */
+const ALPHA_OFFSET = CHANNELS - 1;
+
+/** The largest alpha value of an 8-bit channel. */
+const MAX_ALPHA = 255;
+
+/** zlib level for the PNG encode: smallest file, lossless. */
+const PNG_COMPRESSION_LEVEL = 9;
 
 /** Fully transparent black: the letterbox and padding colour. */
 const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
@@ -130,6 +139,62 @@ function leavesRoom(size: Size, padding: number): boolean {
 }
 
 /**
+ * Whether both sides of `size` are whole pixels of at least 1.
+ *
+ * @param size - The output size.
+ * @returns True when `width` and `height` are integers `>= 1`.
+ * @example
+ * ```ts
+ * hasValidSize({ width: 16, height: 0 }); // => false
+ * ```
+ */
+function hasValidSize(size: Size): boolean {
+  return isWholeAtLeast(size.width, 1) && isWholeAtLeast(size.height, 1);
+}
+
+/**
+ * Whether `padding` is a whole number of pixels of 0 or more.
+ *
+ * @param padding - Transparent border, px.
+ * @returns True for an integer `>= 0`.
+ * @example
+ * ```ts
+ * isValidPadding(-1); // => false
+ * ```
+ */
+function isValidPadding(padding: number): boolean {
+  return isWholeAtLeast(padding, 0);
+}
+
+/**
+ * Whether `threshold` is an alpha value from 0 to {@link MAX_ALPHA}.
+ *
+ * @param threshold - Alpha at or below this value counts as empty.
+ * @returns True for `0 <= threshold <= 255`; false for NaN.
+ * @example
+ * ```ts
+ * isValidAlphaThreshold(256); // => false
+ * ```
+ */
+function isValidAlphaThreshold(threshold: number): boolean {
+  return threshold >= 0 && threshold <= MAX_ALPHA;
+}
+
+/**
+ * Whether `fit` is one of the fits a sprite accepts.
+ *
+ * @param fit - The requested fit.
+ * @returns True for "contain", "cover" or "fill".
+ * @example
+ * ```ts
+ * isKnownFit("stretch"); // => false
+ * ```
+ */
+function isKnownFit(fit: string): boolean {
+  return FITS.has(fit);
+}
+
+/**
  * Throws for an invalid size, padding, alpha threshold or fit, before any pixel work.
  *
  * @param options - The pixel options.
@@ -142,31 +207,40 @@ function leavesRoom(size: Size, padding: number): boolean {
 function assertOptions(options: SpriteProcessOptions): void {
   const { size, padding, alphaThreshold, fit } = options;
 
-  if (size !== undefined && !(isWholeAtLeast(size.width, 1) && isWholeAtLeast(size.height, 1))) {
+  // Size: both sides whole pixels of at least 1.
+  if (size !== undefined && !hasValidSize(size)) {
     throw spriteError(
       `Sprite size must be whole pixels of at least 1, got ${size.width}x${size.height}`,
       "Set size.width and size.height to integers of 1 or more"
     );
   }
-  if (padding !== undefined && !isWholeAtLeast(padding, 0)) {
+
+  // Padding: whole pixels, never negative.
+  if (padding !== undefined && !isValidPadding(padding)) {
     throw spriteError(
       `Sprite padding must be a whole number of pixels of 0 or more, got ${padding}`,
       "Set padding to an integer of 0 or more"
     );
   }
+
+  // Padding inside size: at least 1 px of content must remain.
   if (size !== undefined && padding !== undefined && !leavesRoom(size, padding)) {
     throw spriteError(
       `Sprite padding ${padding} leaves no room inside ${size.width}x${size.height}`,
       "Lower padding or raise size"
     );
   }
-  if (alphaThreshold !== undefined && !(alphaThreshold >= 0 && alphaThreshold <= 255)) {
+
+  // Alpha threshold: an 8-bit alpha value.
+  if (alphaThreshold !== undefined && !isValidAlphaThreshold(alphaThreshold)) {
     throw spriteError(
       `Sprite alphaThreshold must be between 0 and 255, got ${alphaThreshold}`,
       "Set alphaThreshold to a value from 0 to 255"
     );
   }
-  if (fit !== undefined && !FITS.has(fit)) {
+
+  // Fit: one of the sharp fits a sprite supports.
+  if (fit !== undefined && !isKnownFit(fit)) {
     throw spriteError(
       `Sprite fit must be "contain", "cover" or "fill", got "${String(fit)}"`,
       "Set fit to one of those values"
@@ -194,7 +268,7 @@ function alphaBounds(raw: RawImage, threshold: number): TrimBox | undefined {
 
   for (let y = 0; y < raw.height; y += 1) {
     for (let x = 0; x < raw.width; x += 1) {
-      const alpha = raw.data[(y * raw.width + x) * CHANNELS + 3] ?? 0;
+      const alpha = raw.data[(y * raw.width + x) * CHANNELS + ALPHA_OFFSET] ?? 0;
       if (alpha <= threshold) continue;
 
       left = Math.min(left, x);
@@ -354,7 +428,7 @@ export async function processSprite(
 
   // Pad last, so the border is exactly `padding` px, then encode.
   const { data, info } = await padded(content, padding)
-    .png({ compressionLevel: 9 })
+    .png({ compressionLevel: PNG_COMPRESSION_LEVEL })
     .toBuffer({ resolveWithObject: true });
 
   const image = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);

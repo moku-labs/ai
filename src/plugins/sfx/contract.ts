@@ -29,6 +29,7 @@ export type SfxRequest = {
   promptInfluence?: number;
   /** Ask for a seamless loop, when the model supports it. */
   loop?: boolean;
+  // Open record: keys are provider-scoped and documented per provider README (same as music).
   /** Provider params; each provider documents the keys it reads. */
   params?: Record<string, unknown>;
 };
@@ -50,6 +51,7 @@ export type SfxResult = {
   mimeType: "audio/mpeg";
   /** Actual cost of this generation, in US dollars. */
   costUsd: number;
+  // Open record: keys are provider-scoped and documented per provider README (same as music).
   /** Metadata only, never a payload echo (e.g. model, endpoint, requestId, durationMs). */
   meta?: Record<string, unknown>;
 };

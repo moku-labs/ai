@@ -34,11 +34,7 @@ export const elevenlabsPlugin = createPlugin("elevenlabs", {
    * Registers the ElevenLabs voiceover and sfx handlers with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.voiceover.providers(); // ["elevenlabs", ...]
-   * app.sfx.providers(); // ["elevenlabs", ...]
-   * ```
+   * @returns {void} Nothing; both handlers are registered.
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);

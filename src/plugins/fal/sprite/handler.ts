@@ -26,11 +26,6 @@ import { spritePriceOf } from "./prices";
 /**
  * Everything checked before any I/O for a matte model: the row, the source,
  * the matte params, the request and the cost.
- *
- * @example
- * ```ts
- * const plan: MattePlan = { model: { ...matteModels.birefnet, alias: "birefnet" }, source: file, params: {}, request, costUsd: 0.002 };
- * ```
  */
 export type MattePlan = {
   /** The matte catalog row with its alias. */

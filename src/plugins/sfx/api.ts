@@ -4,7 +4,7 @@
  * Owns the single narrowing site for the "sfx" task: registry transports
  * providers' `SfxHandler` values as `unknown` (spec/09 R9's "genuine
  * dynamic boundary"), and this file narrows them back behind a runtime
- * shape guard, with no cast. An sfx handler is one-call only (`execute`).
+ * shape guard, with no cast. An sfx handler is estimate + execute (no submit/poll).
  */
 import { registryPlugin } from "../registry";
 import type { SfxApi, SfxContext, SfxHandler } from "./types";
