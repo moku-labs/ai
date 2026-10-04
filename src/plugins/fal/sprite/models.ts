@@ -10,6 +10,9 @@ import type { SpriteRequest } from "../../sprite/contract";
 import { TerminalProviderError } from "../errors";
 import type { LocalFile } from "../types";
 
+/** Outbound JSON payload; each model builds its own keys. */
+type JsonBody = Record<string, unknown>;
+
 /**
  * The BiRefNet v2 variants fal documents for its `model` field
  * (fal.ai/models/fal-ai/birefnet/v2, checked 2026-10-04).
@@ -87,7 +90,7 @@ export type MatteModel = {
   /** fal endpoint id. */
   endpoint: string;
   /** Builds the posted body from the uploaded source URL and the matte params. */
-  body: (imageUrl: string, params: MatteParameters) => Record<string, unknown>;
+  body: (imageUrl: string, params: MatteParameters) => JsonBody;
 };
 
 /**
@@ -160,7 +163,7 @@ const requestSchema = z.object({
  * birefnetBody("https://cdn/raw.png", {}).model; // => "General Use (Light)"
  * ```
  */
-function birefnetBody(imageUrl: string, params: MatteParameters): Record<string, unknown> {
+function birefnetBody(imageUrl: string, params: MatteParameters): JsonBody {
   return {
     image_url: imageUrl,
     model: params.model ?? DEFAULT_VARIANT,

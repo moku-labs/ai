@@ -24,6 +24,9 @@ import type { ResolvedSfxModel } from "./models";
 import { checkSfxRequest } from "./models";
 import { sfxPriceOf } from "./prices";
 
+/** Outbound JSON payload; each model builds its own keys. */
+type JsonBody = Record<string, unknown>;
+
 /**
  * Everything checked before any I/O: the model, the request, the body and the cost.
  */
@@ -33,7 +36,7 @@ export type SfxPlan = {
   /** The validated request. */
   request: SfxRequest;
   /** The posted body. */
-  body: Record<string, unknown>;
+  body: JsonBody;
   /** USD for this clip; the model's longest clip when the request has no duration. */
   costUsd: number;
 };

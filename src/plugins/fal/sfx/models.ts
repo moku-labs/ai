@@ -8,6 +8,9 @@ import { z } from "zod";
 import type { SfxRequest } from "../../sfx/contract";
 import { TerminalProviderError } from "../errors";
 
+/** Outbound JSON payload; each model builds its own keys. */
+type JsonBody = Record<string, unknown>;
+
 /**
  * sfx model aliases this plugin accepts in `SfxRequest.model`.
  *
@@ -34,7 +37,7 @@ export type SfxModel = {
   /** Longest clip, ms. A request without a duration is billed at this length. */
   maxMs: number;
   /** Builds the posted body; `params` never reach it. */
-  body: (request: SfxRequest) => Record<string, unknown>;
+  body: (request: SfxRequest) => JsonBody;
 };
 
 /**
@@ -80,7 +83,7 @@ const requestSchema = z.object({
  * elevenlabsSfxBody({ prompt: "coin", model: "elevenlabs-sfx-v2", durationMs: 600 }); // => { text: "coin", duration_seconds: 0.6, output_format: "mp3_44100_128" }
  * ```
  */
-function elevenlabsSfxBody(request: SfxRequest): Record<string, unknown> {
+function elevenlabsSfxBody(request: SfxRequest): JsonBody {
   const { durationMs, promptInfluence, loop } = request;
   return {
     text: request.prompt,

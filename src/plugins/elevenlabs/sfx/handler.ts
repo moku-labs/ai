@@ -13,6 +13,9 @@ import { resolvePrices, sfxPriceOf } from "../prices";
 import { redactedFailureOf, resolveApiKey } from "../support";
 import type { ElevenlabsContext } from "../types";
 
+/** Outbound JSON payload; each model builds its own keys. */
+type JsonBody = Record<string, unknown>;
+
 /** The only model the sound-generation endpoint serves. */
 const SFX_MODEL = "eleven_text_to_sound_v2";
 
@@ -42,7 +45,7 @@ type SfxPlan = {
   /** The `output_format` query value, always an mp3 format. */
   outputFormat: string;
   /** The JSON request body. */
-  body: Record<string, unknown>;
+  body: JsonBody;
   /** USD for this generation. */
   costUsd: number;
 };
@@ -157,7 +160,7 @@ function outputFormatOf(request: SfxRequest): string {
  * // => { text: "hit", model_id: "eleven_text_to_sound_v2", duration_seconds: 0.8 }
  * ```
  */
-function buildBody(request: SfxRequest): Record<string, unknown> {
+function buildBody(request: SfxRequest): JsonBody {
   return {
     text: request.prompt,
     model_id: request.model,
