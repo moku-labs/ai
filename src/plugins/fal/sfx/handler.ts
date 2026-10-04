@@ -124,6 +124,8 @@ async function submitSfx(
 
   // Once the POST is sent fal may bill it: an abort now would lose the job id, so it runs to the end.
   signal?.throwIfAborted();
+
+  // Journal the request around the queue POST.
   const { model, request, body } = plan;
   const entry = {
     task: "sfx" as const,

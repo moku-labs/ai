@@ -132,6 +132,9 @@ const DEFAULT_RESOLUTION = "1024x1024";
 /** Status of a request refused before any upload or charge. */
 const BAD_REQUEST = 400;
 
+/** Highest `alphaThreshold` accepted: alpha is an 8-bit channel. */
+const MAX_ALPHA_THRESHOLD = 255;
+
 /** A resolved source file. */
 const sourceSchema = z.object({
   path: z.string().min(1),
@@ -147,7 +150,7 @@ const requestSchema = z.object({
   size: z.object({ width: z.number().int().min(1), height: z.number().int().min(1) }).optional(),
   fit: z.enum(["contain", "cover", "fill"]).optional(),
   pixelArt: z.boolean().optional(),
-  alphaThreshold: z.number().min(0).max(255).optional(),
+  alphaThreshold: z.number().min(0).max(MAX_ALPHA_THRESHOLD).optional(),
   params: z.record(z.string(), z.unknown()).optional()
 });
 

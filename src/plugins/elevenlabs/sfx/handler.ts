@@ -126,6 +126,21 @@ function checkSentFields(request: SfxRequest): void {
 }
 
 /**
+ * Tells whether a `params.output_format` value is an mp3 format string.
+ *
+ * @param value - The raw `params.output_format` value.
+ * @returns True when the value is a string starting with `mp3_`.
+ * @example
+ * ```ts
+ * isMp3Format("mp3_22050_32"); // => true
+ * isMp3Format("pcm_16000"); // => false
+ * ```
+ */
+function isMp3Format(value: unknown): value is string {
+  return typeof value === "string" && value.startsWith(MP3_FORMAT_PREFIX);
+}
+
+/**
  * Resolves the `output_format` query value from `params.output_format`.
  * Anything that is not an mp3 format is refused: sfx is mp3 only (D1).
  *
@@ -140,7 +155,7 @@ function checkSentFields(request: SfxRequest): void {
 function outputFormatOf(request: SfxRequest): string {
   const requested = request.params?.output_format;
   if (requested === undefined) return DEFAULT_OUTPUT_FORMAT;
-  if (typeof requested === "string" && requested.startsWith(MP3_FORMAT_PREFIX)) return requested;
+  if (isMp3Format(requested)) return requested;
 
   const shown = typeof requested === "string" ? `"${requested}"` : `of type ${typeof requested}`;
   throw invalidRequest(
@@ -239,10 +254,12 @@ export function createSfxHandler(ctx: ElevenlabsContext): SfxHandler {
      * @throws {Error} When the configured API key env var is unset.
      */
     async execute(request: SfxRequest, opts: { signal?: AbortSignal }): Promise<SfxResult> {
+      // Check and price the request, then read the key: nothing is sent before both pass.
       const plan = planSfx(ctx, request);
       const apiKey = resolveApiKey(ctx);
       const model = request.model;
 
+      // Generate the audio; a failure is logged redacted and rethrown unchanged.
       try {
         const audio = await elevenlabsRequest({
           baseUrl: ctx.config.baseUrl,
@@ -252,6 +269,8 @@ export function createSfxHandler(ctx: ElevenlabsContext): SfxHandler {
           timeoutMs: ctx.config.timeoutMs,
           ...(opts.signal === undefined ? {} : { signal: opts.signal })
         });
+
+        // Log the success and assemble the mp3 result with its metadata.
         ctx.log.info("elevenlabs:sfx:done", { model, outputFormat: plan.outputFormat });
         return {
           audio,
