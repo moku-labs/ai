@@ -7,6 +7,22 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **`moku` bin: project config.** The bin loads `moku.config.ts`, `.mts`, `.js` or `.mjs` from the
+  working directory, first hit wins, and passes the default export to `createApp`. `--config <path>`
+  (or `--config=<path>`) on any command wins and is removed from argv. A config that does not load
+  prints `[ai] Could not load <path>.` and exits `3` before the app is created. No file keeps the
+  old behaviour.
+- **`defineConfig` and `ProjectConfig`.** Typed authoring of `moku.config.ts`: `plugins` and
+  `pluginConfigs` only. An unknown `pluginConfigs` key or a wrong value is a type error, also for
+  the custom plugins in `plugins`. Core plugins (`journal`, `store`, `limits`) are not typed there.
+- **runner: `export({ flat })`.** `flat: true` writes `<outDir>/<label>.<ext>`, without the
+  `<build>/` folder. The same label in two builds keeps the first file; the second is skipped and
+  listed. Default `false`: unchanged.
+- **cli: `--flat` on `moku run` and `moku export`.** Passed to `runner.export` as `flat`.
+- **fal: `params.background` on `gpt-image-2.5`.** `auto`, `transparent` or `opaque`; other values
+  are not sent. `transparent` without a known `output_format` sends `png`. `transparent` with
+  `output_format: "jpeg"` is a terminal 400 before the key is read or a ref is uploaded. Without
+  `background` the body is unchanged (`jpeg`). Nano Banana Pro and Seedream never send it.
 - **promptGen: `runToolLoop` conversation prompt cache.** New option
   `cache?: "system" | "conversation" | "off"`, default `"conversation"`. The loop marks the newest
   stable message of each request, and the one of the request before, as cache breakpoints next to
@@ -34,6 +50,7 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Changed
 
+- **cli: export skip line.** A skipped item now reads `skipped: unsafe name or duplicate target`.
 - **runToolLoop: default request shape.** With the default `cache: "conversation"` up to two
   text parts of each request carry `cache: true`; a marked string content is sent as one text part.
   Pass `cache: "system"` for the 0.12.0 request.
@@ -45,6 +62,9 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Fixed
 
+- **llms.txt: stale facts.** 19 regular plugins (was 10) and 5 core plugins; 7 CLI commands (was
+  6, `export` was missing); `apimodels` added; plugin order matches `createCore`; `ark` image
+  handler and models; framework `limits` lanes; `ark.downloadTimeoutMs`; journal API; file tree.
 - **runner: `item:flagged` keeps the failure message.** A content-policy rejection now carries
   `message` like `item:failed`: the handler's `publicMessage`, else our own `[ai]` error text,
   first two lines, max 300 chars, absent otherwise. A dedupe follower of a flagged leader

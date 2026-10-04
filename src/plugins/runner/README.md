@@ -419,16 +419,24 @@ flat plus `params`. `$ref` / `$file` values arrive as `{ path, mimeType, hash }`
 ### `export(opts?): Promise<ExportResult>`
 
 Copies every `done` artifact of a run (default: the newest run) to
-`<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`). The extension comes from the
+`<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`), or to `<outDir>/<label>.<ext>`
+with `flat: true` (default `false`). The extension comes from the
 stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`. A
 multi-output item writes one file per output: `<label>.<ext>`, `<label>-2.<ext>` …
 `<label>-N.<ext>`; the extra files have `label` `<label>-<k>` and `costUsd` 0. An item whose file
 this export already wrote is skipped and listed in `skipped`: one export never overwrites its own file.
+With `flat`, the same label in two builds is such a file: the first one is kept, the second is skipped.
+`flat` writes no build folder, so the build name is not checked.
 
 ```ts
 const { files } = await app.runner.export({ outDir: "out" });
 // [{ label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }]
 // a group of 3 keyframes: e01.keys.jpg, e01.keys-2.jpg, e01.keys-3.jpg
+
+// Straight into the game's asset folder, no build folder.
+const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
+// icons.files[0].path: "/repo/assets/icons/sword.png"
+// a second build with a "sword" label: icons.skipped is ["sword"]
 ```
 
 ## Usage

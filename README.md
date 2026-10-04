@@ -178,20 +178,52 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 ## The `moku` CLI
 
 The package `bin` (`"moku"`) is a plain Layer-3 consumer:
-`createApp({})` → `start()` → `app.cli.dispatch(process.argv.slice(2))` → `stop()` → exit.
+load the [project config](#project-config-mokuconfigts) → `createApp(options)` → `start()` →
+`app.cli.dispatch(argv)` → `stop()` → exit.
 
 | Command | What it does |
 |---|---|
 | `moku new [name]` | Write a starter build file + its JSON Schema (editor autocomplete via modeline). |
 | `moku validate [glob]` | Compile every matched build file through the zod IR; offline, no providers needed. |
 | `moku estimate [glob]` | Per-task/provider cost breakdown + total — the same math the budget gate uses. |
-| `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>]` | Execute matched build files with live progress; SIGINT drains to a clean pause. Done artifacts are exported to `<out>/<build>/<label>.<ext>` (default `out/`). |
-| `moku export [runId] [--out <dir>]` | Copy a run's done artifacts (default: the newest run) to named files. |
+| `moku run [glob] [--max-cost <usd>] [--dry-run] [--out <dir>] [--flat]` | Execute matched build files with live progress; SIGINT drains to a clean pause. Done artifacts are exported to `<out>/<build>/<label>.<ext>` (default `out/`), or `<out>/<label>.<ext>` with `--flat`. |
+| `moku export [runId] [--out <dir>] [--flat]` | Copy a run's done artifacts (default: the newest run) to named files. `--flat` drops the `<build>/` folder; a label already written by this export is skipped and listed. |
 | `moku status [runId] [--follow]` | Snapshot (or 1s-poll) a run's totals — safe from a second process. |
 | `moku compose "<prompt>" [--emit build\|script] [--out <path>]` | Generate a build file from natural language. |
 
 Exit codes (`Cli.EXIT_CODES`): `0` ok · `1` failure · `2` validation · `3` usage ·
 `4` paused (SIGINT drain) · `5` budget stop.
+
+### Project config (`moku.config.ts`)
+
+Every command reads one project config. The bin looks in the working directory for
+`moku.config.ts`, `.mts`, `.js`, `.mjs`, in that order; the first file wins. `--config <path>`
+(or `--config=<path>`) on any command wins over the search; the path resolves against the
+working directory, and the flag is removed before the command sees argv. No file: today's defaults.
+
+```ts
+// moku.config.ts
+import { defineConfig } from "@moku-labs/ai";
+import { myProvider } from "./plugins/my-provider";
+
+export default defineConfig({
+  plugins: [myProvider],
+  pluginConfigs: { ark: { region: "cn" }, fal: { upload: "data-uri" } }
+});
+```
+
+The default export goes to `createApp` as is. Only `plugins` and `pluginConfigs` are allowed.
+`defineConfig` returns its argument; it types `pluginConfigs`, also for the custom plugins in
+`plugins`, so an unknown key or a wrong value is an editor error. Core plugins (`journal`,
+`store`, `limits`) are not typed there. Node 24 strips the types of a `.ts` file; Bun loads it.
+
+A config that does not load prints `[ai] Could not load <path>.` and the reason, and exits `3`
+before any app is created: a `--config` file that does not exist, a module that throws, or a
+default export that is not an object. `--config` without a path also exits `3`.
+
+```sh
+moku run --config configs/cn.ts --max-cost 5
+```
 
 ## Usage
 
@@ -546,7 +578,7 @@ the time `app.start()` resolves, every task facade sees its providers — and th
 The factory chain is the standard three-layer Moku shape: `src/config.ts` builds
 `coreConfig` (`createCoreConfig("ai", …)` with the five core plugins), `src/index.ts`
 assembles the framework (`createCore`) and exports `createApp` + `createPlugin` for
-Layer-3 consumers, plus the helpers `defineBuild`, `ASSET_MIME`, `encodeAssetRecord`,
+Layer-3 consumers, plus the helpers `defineBuild`, `defineConfig` (with the `ProjectConfig` type), `ASSET_MIME`, `encodeAssetRecord`,
 `parseAssetRecord`, `PromptGenUnavailableError`, `isPromptGenUnavailable`,
 `ToolArgumentsError` and `runToolLoop`.
 
