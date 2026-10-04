@@ -112,8 +112,8 @@ Delegates to the resolved handler's `estimate()`. Same provider resolution and s
 
 ### `providers(): string[]`
 
-Registered image providers. `config.defaultProvider` comes first when registered, then the rest
-in registration order.
+Registered image providers, in registration order. Delegates to `registry.providers("image")`.
+`config.defaultProvider` does not change the order.
 
 ## Events
 
@@ -134,7 +134,7 @@ const { image, costUsd } = await app.image.generate({
 await Bun.write("patisserie.png", image);
 
 app.image.estimate({ prompt: "a patisserie at night" }, { provider: "fal" });
-app.image.providers(); // => ["codex", "fal"]
+app.image.providers(); // => ["codex", "fal", "ark"]
 
 await app.stop();
 ```
@@ -147,7 +147,7 @@ await app.stop();
 in `generate()`/`estimate()` and `providers("image")` in `providers()`. `RegistryApi` is imported
 from `registry/index.ts` (declared once there) and re-exported from `types.ts`.
 
-### Provider plugins (codex, fal)
+### Provider plugins (codex, fal, ark)
 
 Providers build an `ImageHandler` in `onInit` and call
 `ctx.require(registryPlugin).register("image", "<name>", handler)`. This plugin never imports a

@@ -177,7 +177,7 @@ const { usd } = app.video.estimate({ model: "minimax-h3", prompt: "push-in", sec
 Registered video providers, in registration order. Delegates to `registry.providers("video")`.
 
 ```ts
-app.video.providers(); // => ["fal", "apimodels"]
+app.video.providers(); // => ["fal", "apimodels", "ark"]
 ```
 
 ### Module-level export (not on `app.video`)
@@ -196,7 +196,7 @@ None.
 `providers("video")`. `RegistryApi` is imported from `registry/index.ts` (declared once there) and
 re-exported from `types.ts`.
 
-### Provider plugins (fal)
+### Provider plugins (fal, apimodels, ark)
 
 Providers register a `VideoHandler` in their `onInit`. A Layer-3 custom provider works the same
 way:
