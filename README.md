@@ -51,12 +51,13 @@ the three-layer Moku model).
 ## Install
 
 ```sh
-bun add @moku-labs/ai
+bun add @moku-labs/ai @moku-labs/core @moku-labs/common
 ```
 
 > [!NOTE]
-> **Status: `0.x` — early.** Runtime dependencies (`@moku-labs/core`,
-> `@moku-labs/common`, `better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
+> **Status: `0.x` — early.** `@moku-labs/core` (`^1.7.1`) and `@moku-labs/common` (`^0.3.4`)
+> are peer dependencies: install them next to the package, one copy per project. The other
+> runtime dependencies (`better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
 > export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
@@ -218,7 +219,7 @@ export default defineConfig({
 The default export goes to `createApp` as is. Only `plugins` and `pluginConfigs` are allowed.
 `defineConfig` returns its argument; it types `pluginConfigs`, also for the custom plugins in
 `plugins`, so an unknown key or a wrong value is an editor error. Core plugins (`journal`,
-`store`, `limits`) are not typed there. Node 24 strips the types of a `.ts` file; Bun loads it.
+`store`, `limits`) are typed there too. Node 24 strips the types of a `.ts` file; Bun loads it.
 
 A config that does not load prints `[ai] Could not load <path>.` and the reason, and exits `3`
 before any app is created: a `--config` file that does not exist, a module that throws, or a

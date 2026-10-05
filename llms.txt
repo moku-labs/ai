@@ -19,7 +19,7 @@
   `moku.config.ts`, `.mts`, `.js`, `.mjs` in the cwd, or `--config <path>` / `--config=<path>` on
   any command (wins over the search, resolves against the cwd, removed from argv before dispatch).
   Default export = `defineConfig({ plugins?, pluginConfigs? })` (identity; types `pluginConfigs`,
-  also for custom plugins in `plugins`; core keys journal/store/limits are not typed). No file →
+  also for custom plugins in `plugins` and for the core keys journal/store/limits). No file →
   `createApp({})`. Missing `--config` file, a throwing module, a non-object default export, or
   `--config` with no path → `[ai] ...` message on stderr, exit 3, no app created.
 
@@ -236,7 +236,8 @@ tests/                    # framework-level unit/ + integration/ only
 ```
 
 Package exports: `@moku-labs/ai` (ESM + CJS, types included). Bin: `moku`.
-Runtime deps: @moku-labs/common, @moku-labs/core, better-sqlite3, openai, sharp, yaml, zod.
+Peer deps (install next to the package): @moku-labs/core ^1.7.1, @moku-labs/common ^0.3.4.
+Runtime deps: better-sqlite3, openai, sharp, yaml, zod.
 
 ## Plugins
 
@@ -275,7 +276,7 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - compose (deps: buildfile, promptGen): natural language → validated build file; system prompt embeds jsonSchema(); repair loop bounded by maxRepairAttempts; emits YAML or defineBuild() script; never writes files | Standard | compose | events: none
 - cli (deps: runner, buildfile, compose): the `moku` command surface (7 commands: new, validate, estimate, run, export, status, compose); run and export take --out <dir> and --flat (out/<label>.<ext>, no <build>/ folder); --config is read and stripped by the bin, never by dispatch; branded rendering via @moku-labs/common/cli; no lifecycle; dispatch never calls process.exit | Complex | dispatch, commands (+ EXIT_CODES) | events: none
 
-Config defaults (per plugin, override via createApp pluginConfigs or a moku.config.ts defineConfig; core-plugin keys journal/store/limits are NOT typed in pluginConfigs: they work at runtime, typing tracked in moku-labs/core#28):
+Config defaults (per plugin, override via createApp pluginConfigs or a moku.config.ts defineConfig; core-plugin keys journal/store/limits are typed in pluginConfigs too, core >= 1.7.1):
 - journal: path=".moku/journal.db", checkpointIntervalMs=30000, busyTimeoutMs=5000
 - store: dir=".moku/store", algo="sha256"
 - limits: defaults={rpm:60, concurrency:4, breakerThreshold:5, breakerCooldownMs:30000}, lanes={"video/apimodels":{concurrency:2, rpm:20}, "video/ark":{concurrency:3, rpm:180}} (set by the framework in createCore; the plugin default is {}; a lanes override replaces the whole map)

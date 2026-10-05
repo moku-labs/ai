@@ -3,7 +3,7 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.14.2 - 2026-10-04
 
 ### Added
 
@@ -14,7 +14,7 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
   old behaviour.
 - **`defineConfig` and `ProjectConfig`.** Typed authoring of `moku.config.ts`: `plugins` and
   `pluginConfigs` only. An unknown `pluginConfigs` key or a wrong value is a type error, also for
-  the custom plugins in `plugins`. Core plugins (`journal`, `store`, `limits`) are not typed there.
+  the custom plugins in `plugins` and for the core plugins (`journal`, `store`, `limits`).
 - **runner: `export({ flat })`.** `flat: true` writes `<outDir>/<label>.<ext>`, without the
   `<build>/` folder. The same label in two builds keeps the first file; the second is skipped and
   listed. Default `false`: unchanged.
@@ -50,6 +50,10 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Changed
 
+- **`@moku-labs/core` and `@moku-labs/common` are peer dependencies.** `^1.7.1` and `^0.3.4`,
+  one copy per project; install them next to the package
+  (`bun add @moku-labs/ai @moku-labs/core @moku-labs/common`). Before they were exact
+  `dependencies` installed with the package.
 - **cli: export skip line.** A skipped item now reads `skipped: unsafe name or duplicate target`.
 - **runToolLoop: default request shape.** With the default `cache: "conversation"` up to two
   text parts of each request carry `cache: true`; a marked string content is sent as one text part.
