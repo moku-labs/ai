@@ -104,6 +104,12 @@ export type ArkErrorInfo = {
  * ```
  */
 export type OpenApiBodies = {
+  /** Lists a numbered page of AIGC asset groups by name. */
+  ListAssetGroups: {
+    Filter: { GroupType: "AIGC"; Name: string };
+    PageNumber: number;
+    PageSize: number;
+  };
   /** Creates an AIGC asset group. */
   CreateAssetGroup: { GroupType: "AIGC"; Name: string };
   /** Registers one image from a public URL into a group. */

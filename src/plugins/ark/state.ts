@@ -8,11 +8,14 @@ import type { State } from "./types";
  * yet, no asset seen Active, and no one-time warning logged yet.
  *
  * @returns Initial ark state.
+ * @example
+ * ```ts
+ * createArkState().group.size; // => 0
+ * ```
  */
 export function createArkState(): State {
   return {
-    // eslint-disable-next-line unicorn/no-null -- State.group is `X | null`: null is "not created yet"
-    group: null,
+    group: new Map(),
     // eslint-disable-next-line unicorn/no-null -- State.account is `X | null`: null is "not computed yet"
     account: null,
     activeAssets: new Set(),

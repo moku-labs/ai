@@ -4,7 +4,7 @@ import { createArkState } from "../../state";
 describe("createArkState", () => {
   it("starts with no group, no account, no active assets and no warning", () => {
     const state = createArkState();
-    expect(state.group).toBeNull();
+    expect(state.group).toEqual(new Map());
     expect(state.account).toBeNull();
     expect(state.activeAssets).toEqual(new Set());
     expect(state.negativeWarned).toBe(false);

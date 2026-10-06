@@ -72,6 +72,8 @@ export type AssetRequest = {
   group?: AssetGroupKind;
   /** Display name sent to the provider (max 64 chars). Default: the file's base name. */
   name?: string;
+  /** Asset group name (1–64 characters). Default: the provider's configured group name. */
+  groupName?: string;
   /**
    * Free provider params. `generation` (number) is the documented re-register
    * knob: bumping it changes the artifact key.

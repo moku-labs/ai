@@ -1,5 +1,17 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import {
+  CREATE_ASSET_RESPONSE,
+  callsOf,
+  createTestCtx as createArkTestCtx,
+  createTempFiles,
+  GET_ASSET_ACTIVE,
+  jsonBodyOf,
+  jsonResponse,
+  pngHeader,
+  stubFetch
+} from "../../../ark/__tests__/fixtures";
+import { createAssetHandler } from "../../../ark/asset/handler";
 import { registryPlugin } from "../../../registry";
 import { createAssetApi, isAssetHandler } from "../../api";
 import { ASSET_MIME, encodeAssetRecord } from "../../contract";
@@ -103,6 +115,7 @@ function createJobHandler(answers: AssetJobPoll[]) {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("standard tier: asset plugin", () => {
@@ -135,6 +148,35 @@ describe("standard tier: asset plugin", () => {
   });
 
   describe("register", () => {
+    it("passes AssetRequest.groupName through register to the Ark handler", async () => {
+      const temp = createTempFiles();
+      const fetchMock = stubFetch(
+        jsonResponse(200, { Result: { Items: [{ Id: "portraits-id", Name: "portraits" }] } }),
+        jsonResponse(200, CREATE_ASSET_RESPONSE),
+        jsonResponse(200, GET_ASSET_ACTIVE)
+      );
+      const api = apiWith(createAssetHandler(createArkTestCtx()));
+      const named: AssetRequest = {
+        ...request,
+        image: temp.file("portrait.png", pngHeader(1024, 1024), "image/png"),
+        groupName: "portraits"
+      };
+
+      try {
+        expectTypeOf<AssetRequest["groupName"]>().toEqualTypeOf<string | undefined>();
+        expectTypeOf<{ image: AssetRequest["image"] }>().toExtend<AssetRequest>();
+        expect(await api.register(named)).toMatchObject({ groupId: "portraits-id" });
+        expect(jsonBodyOf(callsOf(fetchMock)[0])).toEqual({
+          Filter: { GroupType: "AIGC", Name: "portraits" },
+          PageNumber: 1,
+          PageSize: 100
+        });
+        expect(jsonBodyOf(callsOf(fetchMock)[1])).toMatchObject({ GroupId: "portraits-id" });
+      } finally {
+        temp.cleanup();
+      }
+    });
+
     it("submits once, polls until done, and returns the parsed record", async () => {
       const { handler, submit, poll } = createJobHandler([
         { state: "pending" },

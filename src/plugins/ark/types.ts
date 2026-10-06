@@ -71,8 +71,8 @@ export type Config = {
  * Nothing here needs releasing on stop.
  */
 export type State = {
-  /** Single-flight AIGC group id for this process: config.groupId, or created once. */
-  group: Promise<string> | null;
+  /** Single-flight AIGC group ids by name; failed lookups are forgotten. */
+  group: Map<string, Promise<string>>;
   /** Account fingerprint, computed once from region + access key. */
   account: string | null;
   /** Per-process GetAsset preflight cache: assetId → Active, so one run checks each asset once. */

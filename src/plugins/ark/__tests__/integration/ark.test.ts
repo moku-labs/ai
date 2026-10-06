@@ -118,6 +118,8 @@ function stubArk(getAsset: AssetAnswer): ReturnType<typeof vi.fn> {
   let getAssetCalls = 0;
   let tasks = 0;
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === intlActionUrl("ListAssetGroups"))
+      return jsonResponse(200, { Result: { Items: [] } });
     if (url === intlActionUrl("CreateAssetGroup"))
       return jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE);
     if (url === intlActionUrl("CreateAsset")) return jsonResponse(200, CREATE_ASSET_RESPONSE);
@@ -262,6 +264,9 @@ describe("ark: through the full framework", () => {
     const assets = callsTo(fetchMock, intlActionUrl("CreateAsset"));
     const getAssets = callsTo(fetchMock, intlActionUrl("GetAsset"));
     expect(groups.map(call => jsonBodyOf(call))).toEqual([CREATE_ASSET_GROUP_REQUEST]);
+    expect(
+      callsTo(fetchMock, intlActionUrl("ListAssetGroups")).map(call => jsonBodyOf(call))
+    ).toEqual([{ Filter: { GroupType: "AIGC", Name: "moku-ai" }, PageNumber: 1, PageSize: 100 }]);
     expect(assets.map(call => jsonBodyOf(call))).toEqual([CREATE_ASSET_REQUEST]);
     expect(assets[0]?.headers.Authorization).toMatch(
       /^HMAC-SHA256 Credential=AKLTtestaccesskey\/\d{8}\/ap-southeast-1\/ark\/request, /
