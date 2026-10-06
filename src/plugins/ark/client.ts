@@ -106,7 +106,7 @@ export type ArkErrorInfo = {
 export type OpenApiBodies = {
   /** Lists a numbered page of AIGC asset groups by name. */
   ListAssetGroups: {
-    Filter: { GroupType: "AIGC"; Name: string };
+    Filter: { GroupType: "AIGC"; Name?: string };
     PageNumber: number;
     PageSize: number;
   };
@@ -116,6 +116,16 @@ export type OpenApiBodies = {
   CreateAsset: { GroupId: string; URL: string; AssetType: "Image"; Name: string };
   /** Reads one asset's status. */
   GetAsset: { Id: string };
+  /** Lists a numbered page of AIGC assets, optionally within one group. */
+  ListAssets: {
+    Filter: { GroupType: "AIGC"; GroupIds?: string[] };
+    PageNumber: number;
+    PageSize: number;
+  };
+  /** Deletes one asset. */
+  DeleteAsset: { Id: string };
+  /** Deletes one asset group and its assets. */
+  DeleteAssetGroup: { Id: string };
 };
 
 /**

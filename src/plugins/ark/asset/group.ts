@@ -4,14 +4,12 @@
  * oldest exact match, or create and log a group when none exists. One
  * promise per name shares concurrent lookups; failures forget that name.
  */
-import { openApiCall, readField, readNumber, readString, unreadableResponse } from "../client";
+import { openApiCall, readString, unreadableResponse } from "../client";
 import type { ArkContext } from "../types";
+import { walkAssetPages } from "./pages";
 
 /** Hint logged with a newly created group id. */
 const GROUP_CREATED_HINT = "set ark config groupId to reuse it";
-
-/** Groups requested on each numbered page. */
-const GROUP_PAGE_SIZE = 100;
 
 /** An exact-name group with a usable id and its optional creation time. */
 type Group = {
@@ -56,27 +54,18 @@ function oldestGroupIn(
  */
 async function findGroup(ctx: ArkContext, name: string): Promise<string | undefined> {
   let oldest: Group | undefined;
-  let pageNumber = 1;
-  let seen = 0;
-
-  for (;;) {
-    const result = await openApiCall(ctx, "ListAssetGroups", {
-      Filter: { GroupType: "AIGC", Name: name },
-      PageNumber: pageNumber,
-      PageSize: GROUP_PAGE_SIZE
-    });
-    const rawItems = readField(result, "Items");
-    const items: unknown[] = Array.isArray(rawItems) ? rawItems : [];
-    oldest = oldestGroupIn(items, name, oldest);
-
-    // Pagination counts every returned item, including groups we cannot use.
-    seen += items.length;
-    const totalCount = readNumber(result, "TotalCount");
-    const isLastPage =
-      items.length < GROUP_PAGE_SIZE || (totalCount !== undefined && seen >= totalCount);
-    if (isLastPage) return oldest?.id;
-    pageNumber += 1;
-  }
+  await walkAssetPages(
+    (pageNumber, pageSize) =>
+      openApiCall(ctx, "ListAssetGroups", {
+        Filter: { GroupType: "AIGC", Name: name },
+        PageNumber: pageNumber,
+        PageSize: pageSize
+      }),
+    items => {
+      oldest = oldestGroupIn(items, name, oldest);
+    }
+  );
+  return oldest?.id;
 }
 
 /**
