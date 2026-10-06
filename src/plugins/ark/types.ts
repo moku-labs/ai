@@ -71,8 +71,8 @@ export type Config = {
  * Nothing here needs releasing on stop.
  */
 export type State = {
-  /** Single-flight AIGC group id for this process: config.groupId, or created once. */
-  group: Promise<string> | null;
+  /** Single-flight AIGC group ids by name; failed lookups are forgotten. */
+  group: Map<string, Promise<string>>;
   /** Account fingerprint, computed once from region + access key. */
   account: string | null;
   /** Per-process GetAsset preflight cache: assetId → Active, so one run checks each asset once. */
@@ -142,6 +142,102 @@ export type ArkApi = {
    * ```
    */
   info(): ArkInfo;
+  /**
+   * Lists every AIGC asset group, following all numbered pages.
+   *
+   * @param opts - Optional cancellation signal.
+   * @param opts.signal - Aborts the OpenAPI calls.
+   * @returns The groups in Ark's page order.
+   * @example
+   * ```ts
+   * const groups = await app.ark.listAssetGroups();
+   * const portraits = groups.filter(group => group.name === "portraits");
+   * ```
+   */
+  listAssetGroups(opts?: { signal?: AbortSignal }): Promise<ArkAssetGroup[]>;
+  /**
+   * Lists every AIGC asset, optionally restricted to one group.
+   *
+   * @param filter - Optional group filter.
+   * @param filter.groupId - Restricts the list to this group.
+   * @param opts - Optional cancellation signal.
+   * @param opts.signal - Aborts the OpenAPI calls.
+   * @returns The assets in Ark's page order.
+   * @example
+   * ```ts
+   * const assets = await app.ark.listAssets({ groupId: "group-1" });
+   * const active = assets.filter(asset => asset.status === "Active");
+   * ```
+   */
+  listAssets(filter?: { groupId?: string }, opts?: { signal?: AbortSignal }): Promise<ArkAsset[]>;
+  /**
+   * Deletes an asset and forgets its cached Active status after success.
+   *
+   * @param assetId - The asset to delete.
+   * @param opts - Optional cancellation signal.
+   * @param opts.signal - Aborts the OpenAPI call.
+   * @returns Resolves after deletion and cache cleanup.
+   * @example
+   * ```ts
+   * await app.ark.deleteAsset("asset-1");
+   * ```
+   */
+  deleteAsset(assetId: string, opts?: { signal?: AbortSignal }): Promise<void>;
+  /**
+   * Deletes a group and its assets, then forgets matching cached names and Active statuses.
+   *
+   * @param groupId - The group to delete.
+   * @param opts - Optional cancellation signal.
+   * @param opts.signal - Aborts the OpenAPI call.
+   * @returns Resolves after deletion and cache cleanup.
+   * @example
+   * ```ts
+   * await app.ark.deleteAssetGroup("group-1");
+   * ```
+   */
+  deleteAssetGroup(groupId: string, opts?: { signal?: AbortSignal }): Promise<void>;
+};
+
+/**
+ * One listed Ark asset, with provider time strings preserved as returned.
+ *
+ * @example
+ * ```ts
+ * const asset: ArkAsset = { assetId: "asset-1", name: "mira", groupId: "group-1", status: "Active" };
+ * ```
+ */
+export type ArkAsset = {
+  /** Ark's asset id. */
+  assetId: string;
+  /** Display name, or an empty string when absent. */
+  name: string;
+  /** Containing group id, or an empty string when absent. */
+  groupId: string;
+  /** Ark's status, or "unknown" when absent. */
+  status: string;
+  /** Creation time, absent when Ark omits it. */
+  createTime?: string;
+  /** Update time, absent when Ark omits it. */
+  updateTime?: string;
+  /** Last inference time, absent when Ark omits it. */
+  lastInferenceTime?: string;
+};
+
+/**
+ * One listed AIGC asset group, with its optional provider creation time.
+ *
+ * @example
+ * ```ts
+ * const group: ArkAssetGroup = { groupId: "group-1", name: "portraits" };
+ * ```
+ */
+export type ArkAssetGroup = {
+  /** Ark's group id. */
+  groupId: string;
+  /** Display name, or an empty string when absent. */
+  name: string;
+  /** Creation time, absent when Ark omits it. */
+  createTime?: string;
 };
 
 /** Estimate-time request types — declared once in `../video/contract` and re-exported for this plugin's consumers. */

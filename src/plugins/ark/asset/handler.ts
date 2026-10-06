@@ -74,6 +74,25 @@ function checkGroup(group: string | undefined): void {
 }
 
 /**
+ * Checks an explicitly requested group name before any provider call.
+ *
+ * @param groupName - The optional request group name.
+ * @throws {Error} A plain two-line error when the name is empty or too long.
+ * @example
+ * ```ts
+ * checkGroupName("portraits"); // valid
+ * ```
+ */
+function checkGroupName(groupName: string | undefined): void {
+  if (groupName === undefined) return;
+  const isValid = groupName.length > 0 && groupName.length <= MAX_NAME_LENGTH;
+  if (isValid) return;
+  throw new Error(
+    "[ai] ark asset groupName must be 1 to 64 characters.\n  Pass a valid groupName or leave it out."
+  );
+}
+
+/**
  * Checks the public https URL ark fetches the portrait from.
  *
  * @param url - `request.url`.
@@ -151,12 +170,13 @@ async function submitAsset(
 ): Promise<{ jobId: string }> {
   // Refuse what ark cannot take, before any call.
   checkGroup(request.group);
+  checkGroupName(request.groupName);
   const url = checkUrl(request.url);
   const name = assetNameOf(request);
   checkAssetImage(await readAssetImage(request.image), request.image.mimeType, name);
 
-  // One group per process, then the asset from its public URL.
-  const groupId = await findOrCreateGroup(ctx);
+  // Resolve the requested group, then register the asset from its public URL.
+  const groupId = await findOrCreateGroup(ctx, request.groupName ?? ctx.config.groupName);
   const result = await openApiCall(
     ctx,
     "CreateAsset",

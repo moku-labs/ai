@@ -244,6 +244,26 @@ export type FalApi = {
    * ```
    */
   models(task: FalTask): FalModelInfo[];
+  /**
+   * Uploads a local file to fal storage for use through a public HTTPS URL.
+   * Upload failures throw, regardless of the configured upload mode.
+   *
+   * @param file - Local path and MIME type of the file.
+   * @param file.path - Path to the file bytes.
+   * @param file.mimeType - MIME type of the file.
+   * @param opts - Optional caller abort signal.
+   * @param opts.signal - Signal that cancels the upload.
+   * @returns The public file URL.
+   * @example
+   * ```ts
+   * const { url } = await app.fal.upload({ path: "out/portrait.png", mimeType: "image/png" });
+   * // Pass url to an asset registration that requires HTTPS.
+   * ```
+   */
+  upload(
+    file: { path: string; mimeType: string },
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ url: string }>;
 };
 
 /** Structural retry hint of {@link RetryableProviderError}, declared in `./errors`. */

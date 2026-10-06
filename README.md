@@ -174,9 +174,9 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
 | [`codex`](./src/plugins/codex/README.md) | Complex | regular (`app.codex`) | Image and prompt-gen provider over the local Codex CLI (`codex exec`), plan-billed. |
 | [`claude`](./src/plugins/claude/README.md) | Complex | regular (`app.claude`) | Prompt-gen provider over the local Claude Code CLI (`claude -p`), plan-billed. |
-| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Six tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. Sfx: ElevenLabs SFX v2. Sprite: BiRefNet matte. `app.fal.models(task)` lists each task's models with prices. |
+| [`fal`](./src/plugins/fal/README.md) | Complex | regular (`app.fal`) | Six tasks over one fal key, client, upload cache and price table. Video: Seedance, MiniMax H3, Kling, Wan, Veo, Vidu, Gemini Omni. Image: Nano Banana Pro, Seedream 4.5, GPT Image 2.5. Prompt-gen: fal's OpenRouter router. Music: ElevenLabs Music v2.5, Stable Audio 2.5. Sfx: ElevenLabs SFX v2. Sprite: BiRefNet matte. `app.fal.models(task)` lists each task's models with prices. `app.fal.upload(file, opts?)` uploads a local file to storage and returns `{ url }`. |
 | [`apimodels`](./src/plugins/apimodels/README.md) | Complex | regular (`app.apimodels`) | Video provider over apimodels.app: Seedance 2.5 and 2.0 official, which accept real faces; optional `asset://` registration via item `params.assets`, cached in the journal. |
-| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0, 2.0 fast, 2.0 mini and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video, image (Seedream 5.0 lite, text- and image-to-image) and asset providers, 2.5 draft → 1080p final, trusted Seedream faces and `asset://` portraits, per-token prices. |
+| [`ark`](./src/plugins/ark/README.md) | Complex | regular (`app.ark`) | Seedance 2.0, 2.0 fast, 2.0 mini and 2.5 straight from ByteDance — BytePlus ModelArk (`intl`) or Volcengine Ark (`cn`); video, image (Seedream 5.0 lite, text- and image-to-image) and asset providers, 2.5 draft → 1080p final, trusted Seedream faces and `asset://` portraits, per-token prices. `app.ark.listAssetGroups()` and `app.ark.listAssets(filter?)` list the asset library; `app.ark.deleteAsset(assetId)` and `app.ark.deleteAssetGroup(groupId)` delete entries. |
 | [`cli`](./src/plugins/cli/README.md) | Complex | regular (`app.cli`) | The `moku` command surface — seven commands, branded rendering, a ratified exit-code contract. |
 
 ## The `moku` CLI
@@ -512,8 +512,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | `ark` | `region` | `"intl" \| "cn"` | `"intl"` |
 | | `apiKeyEnv` · `accessKeyEnv` · `secretKeyEnv` | `string` | `"ARK_API_KEY"` · `"ARK_ACCESS_KEY"` · `"ARK_SECRET_KEY"` |
 | | `baseUrl` · `controlUrl` | `string \| null` | `null` (the region's URLs) |
-| | `groupId` | `string \| null` | `null` (create one per process, log its id) |
-| | `groupName` | `string` | `"moku-ai"` |
+| | `groupId` | `string \| null` | `null` (find the oldest exact group name match, or create and log one if absent; a configured id applies only to `config.groupName`) |
+| | `groupName` | `string` | `"moku-ai"` (used when the request leaves out `groupName`) |
 | | `timeoutMs` | `number` | `60_000` |
 | | `downloadTimeoutMs` | `number` | `300_000` (one clip or image download) |
 | | `priceOverrides` | `Record<string, number>` | `{}` (USD per 1M output tokens) |

@@ -727,8 +727,7 @@ export type TestCtxOverrides = {
 export function createTestCtx(overrides: TestCtxOverrides = {}): ArkContext {
   const config: Config = { ...DEFAULT_CONFIG, ...overrides.config };
   const state: State = {
-    // eslint-disable-next-line unicorn/no-null -- State.group is `X | null`; mirrors createArkState
-    group: null,
+    group: new Map(),
     // eslint-disable-next-line unicorn/no-null -- State.account is `X | null`; mirrors createArkState
     account: null,
     activeAssets: new Set(),

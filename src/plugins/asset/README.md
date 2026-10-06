@@ -62,6 +62,7 @@ is written as `<label>.json`.
 | `url` | `string` | no | Public https URL of the same bytes, for providers whose register API only fetches URLs (Ark). A provider that needs it and gets none fails before any call. |
 | `group` | `"aigc"` | no | Group kind. Default `"aigc"`, the only kind in v1. |
 | `name` | `string` | no | Display name sent to the provider, max 64 characters. Default: the file's base name. |
+| `groupName` | `string` | no | Asset group name, 1 to 64 characters. Default: the provider's configured group name. Ark's `config.groupId` applies only to `config.groupName`. |
 | `params` | `Record<string, unknown>` | no | Free provider params. `generation` (a number) is the re-register knob, see below. |
 
 `AssetFile` is `{ path: string; mimeType: string; hash: string }`, the same shape as the runner's
@@ -124,6 +125,8 @@ string` or `"registeredAt" must be a finite number`.
 
 ## Build files
 
+The item's `input` accepts `groupName` like `name`, with the same rules as `AssetRequest`.
+
 Register the portrait in an `asset` item, then `$ref` it from the video items:
 
 ```yaml
@@ -158,9 +161,9 @@ items:
 
 ### Register again: `params.generation`
 
-The artifact key covers the image hash, `url`, `name`, `group` and `params`. Unchanged input means
-the stored record is reused, even when the provider has since deleted the asset or reports it as
-not active. To register the same portrait again, bump `params.generation`:
+The artifact key covers the image hash, `url`, `name`, `group`, `groupName` and `params`.
+Unchanged input means the stored record is reused, even when the provider has since deleted the
+asset or reports it as not active. To register the same portrait again, bump `params.generation`:
 
 ```yaml
   - id: face-mira

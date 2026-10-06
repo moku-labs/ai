@@ -3,10 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { EnvProvider } from "@moku-labs/common";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { Ark } from "../../../../index";
 import { createApp } from "../../../../index";
 import type { AssetRecord } from "../../../asset/contract";
 import { ASSET_MIME, encodeAssetRecord, parseAssetRecord } from "../../../asset/contract";
-import type { ArkInfo } from "../../types";
+import type { ArkAsset, ArkAssetGroup, ArkInfo } from "../../types";
 import type { FetchCall } from "../fixtures";
 import {
   ASSET_ID,
@@ -29,6 +30,7 @@ import {
   jsonBodyOf,
   jsonResponse,
   pngHeader,
+  stubFetch,
   TASK_ID,
   TEST_ACCESS_KEY,
   TEST_API_KEY,
@@ -118,6 +120,8 @@ function stubArk(getAsset: AssetAnswer): ReturnType<typeof vi.fn> {
   let getAssetCalls = 0;
   let tasks = 0;
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === intlActionUrl("ListAssetGroups"))
+      return jsonResponse(200, { Result: { Items: [] } });
     if (url === intlActionUrl("CreateAssetGroup"))
       return jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE);
     if (url === intlActionUrl("CreateAsset")) return jsonResponse(200, CREATE_ASSET_RESPONSE);
@@ -262,6 +266,9 @@ describe("ark: through the full framework", () => {
     const assets = callsTo(fetchMock, intlActionUrl("CreateAsset"));
     const getAssets = callsTo(fetchMock, intlActionUrl("GetAsset"));
     expect(groups.map(call => jsonBodyOf(call))).toEqual([CREATE_ASSET_GROUP_REQUEST]);
+    expect(
+      callsTo(fetchMock, intlActionUrl("ListAssetGroups")).map(call => jsonBodyOf(call))
+    ).toEqual([{ Filter: { GroupType: "AIGC", Name: "moku-ai" }, PageNumber: 1, PageSize: 100 }]);
     expect(assets.map(call => jsonBodyOf(call))).toEqual([CREATE_ASSET_REQUEST]);
     expect(assets[0]?.headers.Authorization).toMatch(
       /^HMAC-SHA256 Credential=AKLTtestaccesskey\/\d{8}\/ap-southeast-1\/ark\/request, /
@@ -341,6 +348,56 @@ describe("ark: through the full framework", () => {
       imageModels: ["seedream-5-0-lite-260128"]
     });
     expectTypeOf(app.ark.info()).toEqualTypeOf<ArkInfo>();
+  });
+
+  it("lists groups through the typed app API and public Ark namespace", async () => {
+    stubFetch(jsonResponse(200, { Result: { Items: [{ Id: GROUP_ID }] } }));
+    const app = await startApp();
+
+    expectTypeOf(app.ark.listAssetGroups).toEqualTypeOf<
+      (opts?: { signal?: AbortSignal }) => Promise<ArkAssetGroup[]>
+    >();
+    expectTypeOf<Ark.ArkAssetGroup>().toEqualTypeOf<ArkAssetGroup>();
+    expect(await app.ark.listAssetGroups()).toStrictEqual([{ groupId: GROUP_ID, name: "" }]);
+  });
+
+  it("lists assets through the typed app API and public Ark namespace", async () => {
+    stubFetch(jsonResponse(200, { Result: { Items: [{ Id: ASSET_ID }] } }));
+    const app = await startApp();
+
+    expectTypeOf(app.ark.listAssets).toEqualTypeOf<
+      (filter?: { groupId?: string }, opts?: { signal?: AbortSignal }) => Promise<ArkAsset[]>
+    >();
+    expectTypeOf<Ark.ArkAsset>().toEqualTypeOf<ArkAsset>();
+    expect(await app.ark.listAssets()).toStrictEqual([
+      { assetId: ASSET_ID, name: "", groupId: "", status: "unknown" }
+    ]);
+  });
+
+  it("deletes an asset through the typed app API", async () => {
+    const fetchMock = stubFetch(jsonResponse(200, { Result: {} }));
+    const app = await startApp();
+
+    expectTypeOf(app.ark.deleteAsset).toEqualTypeOf<
+      (assetId: string, opts?: { signal?: AbortSignal }) => Promise<void>
+    >();
+    expect(await app.ark.deleteAsset(ASSET_ID)).toBeUndefined();
+    expect(callsOf(fetchMock).map(call => [call.url, jsonBodyOf(call)])).toEqual([
+      [intlActionUrl("DeleteAsset"), { Id: ASSET_ID }]
+    ]);
+  });
+
+  it("deletes a group through the typed app API", async () => {
+    const fetchMock = stubFetch(jsonResponse(200, { Result: {} }));
+    const app = await startApp();
+
+    expectTypeOf(app.ark.deleteAssetGroup).toEqualTypeOf<
+      (groupId: string, opts?: { signal?: AbortSignal }) => Promise<void>
+    >();
+    expect(await app.ark.deleteAssetGroup(GROUP_ID)).toBeUndefined();
+    expect(callsOf(fetchMock).map(call => [call.url, jsonBodyOf(call)])).toEqual([
+      [intlActionUrl("DeleteAssetGroup"), { Id: GROUP_ID }]
+    ]);
   });
 
   it("registers through app.asset and animates through app.video on provider ark", async () => {

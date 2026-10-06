@@ -83,6 +83,21 @@ describe("estimate", () => {
 });
 
 describe("submit checks before any call", () => {
+  it.each(["", "x".repeat(65)])("rejects invalid groupName %j before any call", async groupName => {
+    const fetchMock = stubFetch();
+    const handler = createAssetHandler(createTestCtx());
+
+    const error = await rejectionOf(handler.submit(request({ groupName }), {}));
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(TerminalProviderError);
+    expect(error).not.toBeInstanceOf(RetryableProviderError);
+    expect((error as Error).message).toBe(
+      "[ai] ark asset groupName must be 1 to 64 characters.\n  Pass a valid groupName or leave it out."
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing or non-https url", async () => {
     const fetchMock = stubFetch();
     const handler = createAssetHandler(createTestCtx());
@@ -158,6 +173,7 @@ describe("submit", () => {
 
   it("creates the group once with CreateAssetGroup when groupId is null, and logs its id", async () => {
     const fetchMock = stubFetch(
+      jsonResponse(200, { Result: { Items: [] } }),
       jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE),
       jsonResponse(200, CREATE_ASSET_RESPONSE),
       jsonResponse(200, CREATE_ASSET_RESPONSE)
@@ -170,11 +186,17 @@ describe("submit", () => {
 
     const calls = callsOf(fetchMock);
     expect(calls.map(call => call.url)).toEqual([
+      intlActionUrl("ListAssetGroups"),
       intlActionUrl("CreateAssetGroup"),
       intlActionUrl("CreateAsset"),
       intlActionUrl("CreateAsset")
     ]);
-    expect(jsonBodyOf(calls[0])).toEqual(CREATE_ASSET_GROUP_REQUEST);
+    expect(jsonBodyOf(calls[0])).toEqual({
+      Filter: { GroupType: "AIGC", Name: "moku-ai" },
+      PageNumber: 1,
+      PageSize: 100
+    });
+    expect(jsonBodyOf(calls[1])).toEqual(CREATE_ASSET_GROUP_REQUEST);
     expect(ctx.log.warn).toHaveBeenCalledWith("ark:asset:group-created", {
       groupId: GROUP_ID,
       hint: "set ark config groupId to reuse it"
@@ -183,6 +205,7 @@ describe("submit", () => {
 
   it("uses the configured group name", async () => {
     const fetchMock = stubFetch(
+      jsonResponse(200, { Result: { Items: [] } }),
       jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE),
       jsonResponse(200, CREATE_ASSET_RESPONSE)
     );
@@ -192,15 +215,46 @@ describe("submit", () => {
       {}
     );
 
-    expect(jsonBodyOf(callsOf(fetchMock)[0])).toEqual({ GroupType: "AIGC", Name: "cliffhanger" });
+    expect(jsonBodyOf(callsOf(fetchMock)[0])).toEqual({
+      Filter: { GroupType: "AIGC", Name: "cliffhanger" },
+      PageNumber: 1,
+      PageSize: 100
+    });
+    expect(jsonBodyOf(callsOf(fetchMock)[1])).toEqual({ GroupType: "AIGC", Name: "cliffhanger" });
+  });
+
+  it.each([
+    "p",
+    "x".repeat(64)
+  ])("uses a valid request groupName %j instead of config.groupId", async groupName => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, { Result: { Items: [{ Id: "named-group", Name: groupName }] } }),
+      jsonResponse(200, CREATE_ASSET_RESPONSE)
+    );
+    const handler = createAssetHandler(createTestCtx({ config: { groupId: GROUP_ID } }));
+
+    expect(await handler.submit(request({ groupName }), {})).toEqual({
+      jobId: `named-group/${ASSET_ID}`
+    });
+    expect(jsonBodyOf(callsOf(fetchMock)[0])).toEqual({
+      Filter: { GroupType: "AIGC", Name: groupName },
+      PageNumber: 1,
+      PageSize: 100
+    });
+    expect(jsonBodyOf(callsOf(fetchMock)[1])).toEqual({
+      ...CREATE_ASSET_REQUEST,
+      GroupId: "named-group"
+    });
   });
 
   it("creates the group only once for concurrent submits", async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      url.includes("CreateAssetGroup")
-        ? jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE)
-        : jsonResponse(200, CREATE_ASSET_RESPONSE)
-    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === intlActionUrl("ListAssetGroups"))
+        return jsonResponse(200, { Result: { Items: [] } });
+      if (url === intlActionUrl("CreateAssetGroup"))
+        return jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE);
+      return jsonResponse(200, CREATE_ASSET_RESPONSE);
+    });
     vi.stubGlobal("fetch", fetchMock);
     const handler = createAssetHandler(createTestCtx());
 
@@ -213,11 +267,16 @@ describe("submit", () => {
     expect(results).toEqual([{ jobId: JOB_ID }, { jobId: JOB_ID }, { jobId: JOB_ID }]);
     const groupCalls = fetchMock.mock.calls.filter(([url]) => url.includes("CreateAssetGroup"));
     expect(groupCalls).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === intlActionUrl("ListAssetGroups"))
+    ).toHaveLength(1);
   });
 
   it("forgets a failed group creation, so the next submit tries again", async () => {
     stubFetch(
+      jsonResponse(200, { Result: { Items: [] } }),
       jsonResponse(403, OPENAPI_ERROR_ACCESS_DENIED),
+      jsonResponse(200, { Result: { Items: [] } }),
       jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE),
       jsonResponse(200, CREATE_ASSET_RESPONSE)
     );
@@ -227,8 +286,6 @@ describe("submit", () => {
     const error = await rejectionOf(handler.submit(request(), {}));
     expect(error).toBeInstanceOf(TerminalProviderError);
     expect(error).toMatchObject({ status: 403, code: "AccessDenied" });
-    expect(ctx.state.group).toBeNull();
-
     expect(await handler.submit(request(), {})).toEqual({ jobId: JOB_ID });
   });
 
@@ -250,7 +307,7 @@ describe("submit", () => {
   });
 
   it("throws retryable 502 when CreateAssetGroup returns no Id", async () => {
-    stubFetch(jsonResponse(200, { Result: {} }));
+    stubFetch(jsonResponse(200, { Result: { Items: [] } }), jsonResponse(200, { Result: {} }));
 
     const error = await rejectionOf(createAssetHandler(createTestCtx()).submit(request(), {}));
 
@@ -379,6 +436,7 @@ describe("poll", () => {
 
   it("never logs a key or a URL", async () => {
     stubFetch(
+      jsonResponse(200, { Result: { Items: [] } }),
       jsonResponse(200, CREATE_ASSET_GROUP_RESPONSE),
       jsonResponse(200, CREATE_ASSET_RESPONSE),
       jsonResponse(200, GET_ASSET_ACTIVE)

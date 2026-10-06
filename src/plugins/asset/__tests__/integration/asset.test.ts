@@ -1,8 +1,20 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore, createPlugin } from "../../../../config";
+import {
+  CREATE_ASSET_RESPONSE,
+  callsOf,
+  createTestCtx as createArkTestCtx,
+  GET_ASSET_ACTIVE,
+  intlActionUrl,
+  jsonBodyOf,
+  jsonResponse,
+  pngHeader,
+  stubFetch
+} from "../../../ark/__tests__/fixtures";
+import { createAssetHandler } from "../../../ark/asset/handler";
 import { buildfilePlugin } from "../../../buildfile";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../../runner";
@@ -168,6 +180,7 @@ describe("asset: through a real app", () => {
   afterEach(async () => {
     for (const stop of stops.splice(0)) await stop();
     await rm(tempDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
   });
 
   it("registers one portrait through app.asset", async () => {
@@ -204,6 +217,37 @@ describe("asset: through a real app", () => {
     const assetFile = reference as VideoFile;
     expect(assetFile.mimeType).toBe(ASSET_MIME);
     expect(parseAssetRecord(await readFile(assetFile.path))).toStrictEqual(record);
+  });
+
+  it("passes a runner item's groupName through to the Ark handler", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, { Result: { Items: [{ Id: "runner-group", Name: "cast" }] } }),
+      jsonResponse(200, CREATE_ASSET_RESPONSE),
+      jsonResponse(200, GET_ASSET_ACTIVE)
+    );
+    await writeFile(path.join(tempDir, "refs", "mira.png"), pngHeader(1024, 1024));
+    await writeFile(
+      path.join(tempDir, "portrait.moku.yaml"),
+      PORTRAIT_YAML.replace(
+        '      url: "https://cdn.example/mira.png"',
+        '      url: "https://cdn.example/mira.png"\n      groupName: cast'
+      )
+    );
+    const app = await startApp(tempDir, [
+      ["asset", "fake", createAssetHandler(createArkTestCtx())],
+      ["video", "fake", videoHandler().handler]
+    ]);
+    stops.push(() => app.stop());
+
+    expect(await app.runner.run({ files })).toMatchObject({ status: "done", totals: { done: 2 } });
+    const calls = callsOf(fetchMock);
+    expect(calls[0]?.url).toBe(intlActionUrl("ListAssetGroups"));
+    expect(jsonBodyOf(calls[0])).toEqual({
+      Filter: { GroupType: "AIGC", Name: "cast" },
+      PageNumber: 1,
+      PageSize: 100
+    });
+    expect(jsonBodyOf(calls[1])).toMatchObject({ GroupId: "runner-group" });
   });
 
   it("reuses the registered asset on the second run without submitting again", async () => {
