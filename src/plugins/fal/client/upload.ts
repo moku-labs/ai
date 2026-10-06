@@ -118,7 +118,7 @@ export function toDataUri(bytes: Uint8Array, mimeType: string): string {
  * @returns The bytes.
  * @throws {Error} A plain (terminal) error when the file cannot be read.
  */
-async function readInput(file: LocalFile): Promise<Uint8Array> {
+async function readInput(file: Pick<LocalFile, "path" | "mimeType">): Promise<Uint8Array> {
   try {
     return new Uint8Array(await readFile(file.path));
   } catch {
@@ -179,19 +179,33 @@ async function initiate(
 }
 
 /**
+ * Content sha256 shared by the storage file name and cache key.
+ *
+ * @param bytes - File bytes.
+ * @returns The sha256 hex digest.
+ * @example
+ * ```ts
+ * hashBytes(new TextEncoder().encode("test")); // => "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+ * ```
+ */
+function hashBytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
  * Cache key of a file in fal storage: storage mode, MIME type and the
  * sha256 of the bytes, so the same content is found under any path.
  *
  * @param mimeType - File MIME type.
- * @param bytes - File bytes.
+ * @param hash - Content sha256 hex digest.
  * @returns `storage:<mime>:<sha256 hex>`.
  * @example
  * ```ts
- * uploadKey("image/png", new TextEncoder().encode("test")); // => "storage:image/png:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+ * uploadKey("image/png", "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"); // => "storage:image/png:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
  * ```
  */
-function uploadKey(mimeType: string, bytes: Uint8Array): string {
-  return `storage:${mimeType}:${createHash("sha256").update(bytes).digest("hex")}`;
+function uploadKey(mimeType: string, hash: string): string {
+  return `storage:${mimeType}:${hash}`;
 }
 
 /**
@@ -207,6 +221,33 @@ function uploadKey(mimeType: string, bytes: Uint8Array): string {
 function fallBack(ctx: FalContext, session: UploadSession, error: unknown): void {
   if (session.mode === "storage") ctx.log.warn("fal:upload:fallback", { status: statusOf(error) });
   session.mode = "data-uri";
+}
+
+/**
+ * Initiates a storage upload and PUTs the file bytes, letting failures propagate.
+ *
+ * @param ctx - Plugin context.
+ * @param file - The input file.
+ * @param bytes - The file bytes.
+ * @param options - Key and caller signal.
+ * @returns The public file URL.
+ */
+async function putToStorage(
+  ctx: FalContext,
+  file: LocalFile,
+  bytes: Uint8Array,
+  options: UploadOptions
+): Promise<string> {
+  const target = await initiate(ctx, file, options);
+  await falFetch({
+    url: target.uploadUrl,
+    method: "PUT",
+    bytes,
+    contentType: file.mimeType,
+    timeoutMs: ctx.config.timeoutMs,
+    signal: options.signal
+  });
+  return target.fileUrl;
 }
 
 /**
@@ -228,32 +269,13 @@ async function uploadToStorage(
   bytes: Uint8Array,
   options: UploadOptions
 ): Promise<string | undefined> {
-  // Ask fal storage where to PUT the file; a failure (not an abort) drops the session to data URIs.
-  let target: StorageTarget;
   try {
-    target = await initiate(ctx, file, options);
+    return await putToStorage(ctx, file, bytes, options);
   } catch (error) {
     if (options.signal?.aborted) throw error;
     fallBack(ctx, session, error);
     return undefined;
   }
-
-  // PUT the bytes to the presigned URL; a failure (not an abort) falls back the same way.
-  try {
-    await falFetch({
-      url: target.uploadUrl,
-      method: "PUT",
-      bytes,
-      contentType: file.mimeType,
-      timeoutMs: ctx.config.timeoutMs,
-      signal: options.signal
-    });
-  } catch (error) {
-    if (options.signal?.aborted) throw error;
-    fallBack(ctx, session, error);
-    return undefined;
-  }
-  return target.fileUrl;
 }
 
 /**
@@ -287,7 +309,7 @@ export async function uploadOne(
   if (ctx.config.upload === "data-uri") return toDataUri(bytes, file.mimeType);
 
   // The same bytes uploaded before in this process go by their URL again.
-  const key = uploadKey(file.mimeType, bytes);
+  const key = uploadKey(file.mimeType, hashBytes(bytes));
   const cached = ctx.state.uploads.get(key);
   if (cached !== undefined) return cached;
 
@@ -297,6 +319,47 @@ export async function uploadOne(
       ? await uploadToStorage(ctx, session, file, bytes, options)
       : undefined;
   if (url === undefined) return toDataUri(bytes, file.mimeType);
+  ctx.state.uploads.set(key, url);
+  return url;
+}
+
+/**
+ * Uploads a local file to a public HTTPS URL, independent of the upload mode
+ * or any session's data-URI fallback.
+ *
+ * @param ctx - Plugin context (storage config and upload cache).
+ * @param file - Local path and MIME type.
+ * @param file.path - Path to the file bytes.
+ * @param file.mimeType - MIME type of the file.
+ * @param options - Key and caller signal.
+ * @returns The cached or newly uploaded public file URL.
+ * @throws {Error} When the file cannot be read, the upload fails, the URL is not HTTPS, or the caller aborts.
+ * @example
+ * ```ts
+ * const url = await uploadPublic(ctx, { path: "out/portrait.png", mimeType: "image/png" }, { apiKey: "fal-key" });
+ * // url starts with "https://" and can be passed to an asset registration.
+ * ```
+ */
+export async function uploadPublic(
+  ctx: FalContext,
+  file: { path: string; mimeType: string },
+  options: UploadOptions
+): Promise<string> {
+  // Reuse storage URLs across paths and tasks, hashing the bytes once.
+  const bytes = await readInput(file);
+  const hash = hashBytes(bytes);
+  const key = uploadKey(file.mimeType, hash);
+  const cached = ctx.state.uploads.get(key);
+  if (cached !== undefined) return cached;
+
+  // Public uploads propagate failures and cache only an HTTPS URL.
+  const local: LocalFile = { path: file.path, mimeType: file.mimeType, hash };
+  const url = await putToStorage(ctx, local, bytes, options);
+  if (!url.startsWith("https://")) {
+    throw new Error(
+      "[ai] fal returned an unreadable upload target.\n  Expected an https file URL."
+    );
+  }
   ctx.state.uploads.set(key, url);
   return url;
 }

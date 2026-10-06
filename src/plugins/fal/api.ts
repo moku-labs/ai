@@ -3,6 +3,8 @@
  * `models` lists each task's catalog with its effective price from the merged
  * table; no network, no key.
  */
+import { resolveApiKey } from "./client/http";
+import { uploadPublic } from "./client/upload";
 import { imageAliases, imageModels } from "./image/models";
 import { imagePriceOf } from "./image/prices";
 import { llmModels } from "./llm/models";
@@ -157,6 +159,11 @@ function isFalTask(task: string): task is FalTask {
  *
  * @param ctx - Plugin context (config, env, price table).
  * @returns The `app.fal` API.
+ * @example
+ * ```ts
+ * const api = createFalApi(ctx);
+ * await api.upload({ path: "out/portrait.png", mimeType: "image/png" });
+ * ```
  */
 export function createFalApi(ctx: FalContext): FalApi {
   return {
@@ -172,6 +179,14 @@ export function createFalApi(ctx: FalContext): FalApi {
         );
       }
       return MODEL_LISTERS[task](resolvePrices(ctx));
+    },
+    upload: async (
+      file: { path: string; mimeType: string },
+      opts: { signal?: AbortSignal } = {}
+    ): Promise<{ url: string }> => {
+      const apiKey = resolveApiKey(ctx);
+      const url = await uploadPublic(ctx, file, { apiKey, signal: opts.signal });
+      return { url };
     }
   };
 }
