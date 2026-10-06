@@ -3,6 +3,24 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.15.0 - Unreleased
+
+### Added
+
+- **asset: `AssetRequest.groupName`.** Choose an Ark asset group per registration, also through
+  the runner's `asset` item input. Names are 1 to 64 characters; absent uses `ark.groupName`.
+- **ark: `listAssetGroups`, `listAssets`, `deleteAsset`, `deleteAssetGroup`.** List AIGC groups and
+  assets across all pages, or delete them. `ArkAsset` and `ArkAssetGroup` describe the listed
+  records. Deleting a group deletes its assets too.
+- **fal: `upload(file, opts?)`.** Upload a local file to fal storage and return `{ url }`, also
+  when `fal.upload` is configured as `"data-uri"`. Failed uploads throw without a data-URI fallback.
+
+### Changed
+
+- **ark: asset group lookup.** Without `config.groupId`, `ListAssetGroups` finds the oldest exact
+  name match before `CreateAssetGroup`. A process no longer creates a new group on every start.
+  A configured `groupId` applies only to `config.groupName`.
+
 ## 0.14.2 - 2026-10-04
 
 ### Added

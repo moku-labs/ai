@@ -54,15 +54,16 @@ Each region serves only its own model ids. A model from the other region fails b
    error says to check the entitlement.
 3. **AIGC authorization letter.** AIGC asset groups need a one-time authorization letter, signed in
    the Ark console.
-4. **Group id.** Leave `groupId` unset for the first run. The first registration of the process
-   creates a group named `groupName` and logs its id:
+4. **Group id.** With `groupId` unset, the first registration for a name uses `ListAssetGroups`
+   to find the oldest exact `groupName` match. Only when none exists does it create a group and
+   log its id:
 
    ```
    warn ark:asset:group-created { groupId: "group-20260929120000-abcde", hint: "set ark config groupId to reuse it" }
    ```
 
-   Set `groupId` to that id afterwards. Every process without a `groupId` creates a new group, and an
-   account holds at most 50 groups.
+   Later processes find the same group by name. Set `groupId` to pin the group for `config.groupName`;
+   requests with another name still look it up. An account holds at most 50 groups.
 
 ## Configuration
 
@@ -76,8 +77,8 @@ Set via `createApp({ pluginConfigs: { ark: { ... } } })`.
 | `secretKeyEnv` | `string` | `"ARK_SECRET_KEY"` | Env var of the secret access key. |
 | `baseUrl` | `string \| null` | `null` | Data-plane URL override (proxies, tests). `null` = the region's. |
 | `controlUrl` | `string \| null` | `null` | Control-plane URL override. `null` = the region's. |
-| `groupId` | `string \| null` | `null` | AIGC asset group. `null` = create one per process and log its id. |
-| `groupName` | `string` | `"moku-ai"` | Name of the group created when `groupId` is `null`. |
+| `groupId` | `string \| null` | `null` | AIGC asset group for `config.groupName` only. `null` = find the oldest exact name match, or create and log one if absent. |
+| `groupName` | `string` | `"moku-ai"` | Default group name when the request leaves out `groupName`. |
 | `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request. |
 | `downloadTimeoutMs` | `number` | `300_000` | Timeout of one clip or image download. A 1080p or 30 s clip is large. |
 | `priceOverrides` | `Record<string, number>` | `{}` | By model id, wins over the catalog: USD per 1M output tokens for a video model, USD per image for an image model. |
@@ -432,6 +433,10 @@ bound for the budget gate. `ark:image:done` carries `images: M` and the total by
 
 An `asset` item registers one portrait. Estimate is $0: the asset fee is part of the entitlement.
 
+Pass `groupName` in the registration request or the runner item's `input` to choose a group.
+It must be 1 to 64 characters; absent uses `config.groupName`. `config.groupId` applies only when
+the requested name equals `config.groupName`. Other names are found or created separately.
+
 **The item needs a public https `url`** of the same bytes as `image`. `CreateAsset` fetches the
 portrait from that URL; ark never uploads it. `url` is part of the artifact key, so a new URL
 registers again. Without it, the item fails before any call:
@@ -453,11 +458,18 @@ registers again. Without it, the item fails before any call:
 Submit, in order, with every check before the first call:
 
 1. `group` must be `"aigc"` or absent.
-2. `url` must be a https URL.
-3. The local image must be PNG, JPEG or WebP, under 30 MB, 300 to 6000 px on each side, with a
+2. An explicit `groupName` must be 1 to 64 characters.
+3. `url` must be a https URL.
+4. The local image must be PNG, JPEG or WebP, under 30 MB, 300 to 6000 px on each side, with a
    width/height ratio of 0.4 to 2.5. The size is read from the file header.
-4. The group: `groupId`, or one `CreateAssetGroup { GroupType: "AIGC", Name: groupName }` per process.
-5. `CreateAsset { GroupId, URL, AssetType: "Image", Name }`. `Name` is `name`, else the file's base name.
+5. Use `config.groupId` for `config.groupName` when set. Otherwise, `ListAssetGroups` with
+   `Filter: { GroupType: "AIGC", Name: groupName }` reads all pages and selects the oldest exact
+   name match. With no match, call `CreateAssetGroup { GroupType: "AIGC", Name: groupName }`.
+6. `CreateAsset { GroupId, URL, AssetType: "Image", Name }`. `Name` is `name`, else the file's base name.
+
+Oldest means the smallest `CreateTime` string; missing times sort last. Concurrent registrations
+share one group promise per name. A failed lookup or creation forgets that name so the next call
+can try again.
 
 Poll is `GetAsset { Id }`: `Processing` is pending, `Active` is done with the record, `Failed` is
 flagged:
@@ -514,6 +526,9 @@ to register the portraits in the new account.
 | Asset API `Throttling*`, `RequestLimitExceeded*`, `FlowLimitExceeded*`, `TooManyRequests*` | Retryable, `status: 429` |
 | Asset API `QuotaExceeded`, `AccessDenied*`, `InvalidAuthorization*` | Terminal, with a hint to check the entitlement and the authorization letter |
 | Other asset API error | Terminal |
+| Request `groupName` is empty or longer than 64 characters | Plain error before any call: `[ai] ark asset groupName must be 1 to 64 characters.\n  Pass a valid groupName or leave it out.` |
+| `deleteAsset` with an empty `assetId` | Plain error before any call: `[ai] ark asset assetId must not be empty.\n  Pass a valid assetId.` |
+| `listAssets` with an empty `filter.groupId`, or `deleteAssetGroup` with an empty `groupId` | Plain error before any call: `[ai] ark asset groupId must not be empty.\n  Pass a valid groupId.` |
 | A key not set, unknown model or param, bad seconds, resolution, ratio or ref count, bad `url` or image | Plain two-line error before any call: terminal after one attempt, nothing billed |
 | A draft on a model without drafts, or not at 480p; `params.draft` other than `true` | Plain two-line error before any call (see [Draft → final](#draft--final)) |
 | A final that breaks a rule: not a video, extra inputs, not 1080p, journal closed, no draft, other model, expired | Plain two-line error before any call (see [Draft → final](#draft--final)) |
@@ -539,6 +554,64 @@ app.ark.info();
 No network call. `configured.video` and `configured.image` are true when the API key is set,
 `configured.assets` when both the access key and the secret key are set. `models` and `imageModels`
 list the configured region's ids.
+
+### Asset library
+
+The four methods on `app.ark` use the signed asset OpenAPI and need the access key and secret key.
+`opts.signal` cancels their OpenAPI calls. Provider errors follow the [error table](#errors).
+
+| Method signature | Action |
+| --- | --- |
+| `listAssetGroups(opts?: { signal?: AbortSignal }): Promise<ArkAssetGroup[]>` | `ListAssetGroups`, `Filter: { GroupType: "AIGC" }` |
+| `listAssets(filter?: { groupId?: string }, opts?: { signal?: AbortSignal }): Promise<ArkAsset[]>` | `ListAssets`, `Filter: { GroupType: "AIGC" }`; adds `GroupIds: [groupId]` when supplied |
+| `deleteAsset(assetId: string, opts?: { signal?: AbortSignal }): Promise<void>` | `DeleteAsset { Id: assetId }` |
+| `deleteAssetGroup(groupId: string, opts?: { signal?: AbortSignal }): Promise<void>` | `DeleteAssetGroup { Id: groupId }`; deletes its assets too |
+
+The list methods and registration's group lookup read all pages: `PageNumber` starts at 1 and
+`PageSize` is 100. They stop when a page has fewer than 100 items or `TotalCount` is reached.
+Lists keep Ark's page order. Items without a string `Id` are skipped, but still count toward
+pagination.
+
+The result types are available as `Ark.ArkAsset` and `Ark.ArkAssetGroup` from `@moku-labs/ai`:
+
+```ts
+type ArkAsset = {
+  assetId: string;
+  name: string;
+  groupId: string;
+  status: string;
+  createTime?: string;
+  updateTime?: string;
+  lastInferenceTime?: string;
+};
+
+type ArkAssetGroup = {
+  groupId: string;
+  name: string;
+  createTime?: string;
+};
+```
+
+Missing or non-string `Name` and asset `GroupId` map to `""`. Missing or non-string `Status` maps
+to `"unknown"`. Time strings are passed as they come, without parsing. Missing or non-string
+times are omitted.
+
+After a successful `deleteAsset`, that id is forgotten in the "seen Active" video preflight cache.
+After a successful `deleteAssetGroup`, every cached group promise that resolved to that id is
+forgotten, and the entire "seen Active" cache is cleared.
+
+One group per series: register in `series-01`, list its assets, then delete one.
+
+```ts
+const image = { path: "faces/mira.png", mimeType: "image/png", hash: "a".repeat(64) };
+const record = await app.asset.register(
+  { image, url: "https://cdn.example/faces/mira.png", groupName: "series-01" },
+  { provider: "ark" }
+);
+const assets = await app.ark.listAssets({ groupId: record.groupId });
+const asset = assets[0];
+if (asset !== undefined) await app.ark.deleteAsset(asset.assetId);
+```
 
 ## Usage
 

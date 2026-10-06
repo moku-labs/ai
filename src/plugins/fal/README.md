@@ -650,6 +650,7 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | prompt-gen: a 2xx answer with `error.message` | Flagged when it names `content_policy`, else terminal 400 `[ai] fal LLM returned an error: <text>` |
 | prompt-gen: tool-call `arguments` that are not JSON | `ToolArgumentsError` (`toolName`, `raw`), never retried |
 | Incomplete result body (no `images[0].url`, `audio.url`, `image.url`, `choices[0].message.content`) | Plain two-line error |
+| `upload`: a new storage upload returns a file URL without `https://` | Plain error: `[ai] fal returned an unreadable upload target.\n  Expected an https file URL.` |
 
 Messages start with `[ai]` and never contain the key or the prompt. Logs carry ids, statuses, counts and error
 classes, never prompts.
@@ -670,6 +671,30 @@ app.fal.models("sprite"); // => [{ id: "birefnet", price: { usd: 0.002, per: "im
 video aliases. `models(task)` lists one task's models in catalog order with their effective price (video and image
 at the model's default resolution, video with audio off and no refs); no network, no key. The price shape narrows
 on `"inputPerM" in info.price`. Any other task string throws `[ai] Unknown fal task "x".`
+
+### `app.fal.upload(file, opts?)`
+
+```ts
+upload(
+  file: { path: string; mimeType: string },
+  opts?: { signal?: AbortSignal }
+): Promise<{ url: string }>;
+```
+
+Uploads through fal storage (initiate + PUT), even when `config.upload` is `"data-uri"`.
+It reads `FAL_KEY` (or the configured variable) at call time. `opts.signal` cancels the upload.
+A failed initiate or PUT throws the existing provider error; it never falls back to a data URI.
+
+The same bytes and MIME type uploaded before in this process return the shared cached URL,
+even from another path. Data-URI fallbacks are not cached. Cached URLs are returned as stored.
+A new upload's file URL must start with `https://`, or the call throws the error above.
+
+With a resolved `image` file (`{ path, mimeType, hash }`), pass the URL to asset registration:
+
+```ts
+const { url } = await app.fal.upload(image);
+const record = await app.asset.register({ image, url }, { provider: "ark" });
+```
 
 ## Usage
 
