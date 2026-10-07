@@ -38,7 +38,8 @@ export const ARK_RATIOS: readonly string[] = [
 ];
 
 /**
- * The `params` keys ark takes: `refUrls`, the allow-listed passthrough,
+ * The `params` keys ark takes: `refUrls`, the allow-listed passthrough
+ * (`omni_reference_task_type` is checked against {@link ARK_TASK_TYPES}),
  * `draft` (a 480p draft render) and `generation` (never sent: it only changes
  * the item key, so a bumped generation renders again).
  *
@@ -54,9 +55,22 @@ export const ARK_PARAMS = [
   "return_last_frame",
   "execution_expires_after",
   "priority",
+  "omni_reference_task_type",
   "draft",
   "generation"
 ] as const;
+
+/**
+ * The `omni_reference_task_type` values Ark takes (Seedance 2.5 omni
+ * reference). `auto` is Ark's default: the model picks the subtask from the
+ * inputs and the prompt wording.
+ *
+ * @example
+ * ```ts
+ * ARK_TASK_TYPES.includes("reference"); // => true
+ * ```
+ */
+export const ARK_TASK_TYPES: readonly string[] = ["auto", "reference", "edit", "extend"];
 
 /**
  * A `params` key ark takes.
@@ -70,7 +84,8 @@ export type ArkPassthroughKey = Exclude<ArkParameterName, "refUrls" | "draft" | 
 
 /**
  * The allow-listed passthrough params. Values come from the build file's
- * `params` (a JSON value of any kind) and go to ark as given: ark validates them.
+ * `params` (a JSON value of any kind) and go to ark as given: ark validates
+ * them. Only `omni_reference_task_type` is checked here, so a typo costs no call.
  *
  * @example
  * ```ts
@@ -421,12 +436,30 @@ export function isArkParameter(key: string): key is ArkParameterName {
 }
 
 /**
+ * Checks `params.omni_reference_task_type` against the values Ark takes.
+ *
+ * @param value - The param, as given.
+ * @throws {Error} A plain two-line error listing the values.
+ * @example
+ * ```ts
+ * checkTaskType("edit"); // passes
+ * ```
+ */
+function checkTaskType(value: unknown): void {
+  const isTaskType = typeof value === "string" && ARK_TASK_TYPES.includes(value);
+  if (isTaskType) return;
+  throw new Error(
+    `[ai] ark params.omni_reference_task_type "${String(value)}" is not supported.\n  Use one of: ${ARK_TASK_TYPES.join(", ")}.`
+  );
+}
+
+/**
  * Picks the allow-listed passthrough params out of `request.params`.
  *
  * @param model - The catalog row.
  * @param params - `request.params`.
  * @returns The passthrough params (`refUrls` excluded).
- * @throws {Error} A plain two-line error for an unknown key, or a seed on a model without seed.
+ * @throws {Error} A plain two-line error for an unknown key, a seed on a model without seed, or a bad task type.
  * @example
  * ```ts
  * checkParameters(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), { watermark: true, refUrls: [], generation: 2 }); // => { watermark: true }
@@ -441,6 +474,7 @@ function checkParameters(model: ArkVideoModel, params: Record<string, unknown>):
     if (key === "seed" && !model.supportsSeed) {
       throw new Error(`[ai] Model ${model.id} takes no seed.\n  Remove params.seed.`);
     }
+    if (key === "omni_reference_task_type") checkTaskType(value);
     passthrough[key] = value;
   }
   return passthrough;

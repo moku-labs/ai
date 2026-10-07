@@ -394,6 +394,35 @@ export function unreadableResponse(label: string): RetryableProviderError {
   );
 }
 
+/** Second line of a task-type error, by ark's code (Seedance 2.5 omni reference). */
+const TASK_TYPE_HINTS: ReadonlyMap<string, string> = new Map([
+  [
+    "InvalidParameter.TaskTypeConstraint",
+    'The task type does not take this ratio or duration: an edit or an extension needs aspect "adaptive", an edit also duration -1. Ark picks the type from the refs and the prompt; set params.omni_reference_task_type to pin it'
+  ],
+  [
+    "InvalidParameter.TaskTypeMismatch",
+    "The prompt reads as another task type than params.omni_reference_task_type. Reword the prompt or change the type"
+  ]
+]);
+
+/**
+ * The reason behind a task-type error code, as the second line of the error.
+ * Matched on ark's code, never on its message. Ark reports the code at submit
+ * (HTTP 400) or on a task that failed after it started.
+ *
+ * @param code - ark's error code, if any.
+ * @returns The hint without its final period, or undefined for another code.
+ * @example
+ * ```ts
+ * taskTypeHint("InvalidParameter.TaskTypeMismatch");
+ * // => "The prompt reads as another task type than params.omni_reference_task_type. Reword the prompt or change the type"
+ * ```
+ */
+export function taskTypeHint(code: string | undefined): string | undefined {
+  return code === undefined ? undefined : TASK_TYPE_HINTS.get(code);
+}
+
 /**
  * The terminal error for a 4xx, with ark's code and message.
  *
@@ -458,7 +487,8 @@ function isEntitlementCode(code: string): boolean {
 /**
  * Classifies a failed call: 429 and 5xx are retryable, a SensitiveContent
  * code on 400/422 is flagged, an OpenAPI throttling code is retryable 429,
- * an entitlement code is terminal with a hint, anything else terminal.
+ * an entitlement code is terminal with a hint, a task-type code is terminal
+ * with its reason, anything else terminal.
  *
  * @param label - The Action or path.
  * @param status - The HTTP status (400 for an envelope error in a 2xx).
@@ -505,7 +535,7 @@ function failureOf(
   if (isEntitlement) {
     return terminalFailure(label, status, info, ENTITLEMENT_HINT);
   }
-  return terminalFailure(label, status, info);
+  return terminalFailure(label, status, info, taskTypeHint(code));
 }
 
 /**
