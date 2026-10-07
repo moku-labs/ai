@@ -22,6 +22,12 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
   on a task that failed after it started. Matched on Ark's code. Class, `status` and `code` are
   unchanged.
 
+### Fixed
+
+- **ark: the estimate of a final from a draft checks `seconds`.** A value outside the model's
+  limits gave a wrong estimate, a negative one below zero. Now it fails at plan time with the
+  seconds error. Absent `seconds` is still 5.
+
 ## 0.15.1 - 2026-10-07
 
 ### Fixed

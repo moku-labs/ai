@@ -290,7 +290,8 @@ The estimate is `width × height × (24 × seconds + 1) / 1024` tokens, rounded 
 price. Sizes: 480p 864×496, 720p 1280×720, 1080p 1920×1080. 9:16 has the same area; other ratios use
 the same area too. This matched the live bills exactly: 480p 5 s = 50,638 tokens ($0.3545 on
 `dreamina-seedance-2-0-260128`), 1080p 5 s = 245,025 tokens. A draft is estimated at 480p, a final at
-1080p for `seconds` (5 when absent). An edit with `seconds: -1` is estimated at the model's longest
+1080p for `seconds` (5 when absent). The final's `seconds` must be within the model's limits, or the
+estimate fails with the seconds error. An edit with `seconds: -1` is estimated at the model's longest
 clip.
 
 `meta` is `{ taskId, model, seconds, resolution, completionTokens, seed?, draft?, draftTaskId?, lastFrameUrl? }`.

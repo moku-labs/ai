@@ -228,6 +228,17 @@ describe("estimate: draft and final", () => {
     expect(handler.estimate({ ...final, seconds: 10 })).toEqual({ usd: 5.709_893 });
   });
 
+  it("fails at plan time for a final whose seconds the model does not take", () => {
+    const handler = createVideoHandler(createTestCtx());
+    const final: EstimateRequest = { model: MODEL_25, prompt: "", fromDraft: { $ref: "draft" } };
+
+    for (const seconds of [-1, 0, 31]) {
+      expect(() => handler.estimate({ ...final, seconds })).toThrow(
+        `[ai] Model ${MODEL_25} takes 4 to 30 seconds.\n  Got ${seconds}; set input.seconds in that range.`
+      );
+    }
+  });
+
   it("fails at plan time for a final on a model without a draft mode (mini), with no fetch", () => {
     const fetchMock = stubFetch();
     const handler = createVideoHandler(createTestCtx());
