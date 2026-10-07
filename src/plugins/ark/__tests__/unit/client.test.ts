@@ -51,6 +51,8 @@ const INIT: ArkInit = {
 const OPTIONS: ArkFetchOptions = { timeoutMs: 5000, label: LABEL };
 const FACE_MESSAGE =
   "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.";
+const RETAKE_HINT =
+  "Run a new take with the same request, it may pass. Ark did not charge this one.";
 const ENTITLEMENT_HINT =
   "\n  Check the Seedance Advanced Creation Rights and the AIGC authorization letter in the Ark console.";
 
@@ -182,14 +184,15 @@ describe("arkFetch error mapping", () => {
     expect((error as Error).message).toBe(FACE_MESSAGE);
   });
 
-  it("a 422 SensitiveContent refusal without a local image is flagged with the prompt hint", async () => {
+  it("a 422 InputText refusal is flagged as a refused prompt text", async () => {
     stubFetch(jsonResponse(422, ERROR_SENSITIVE_TEXT));
 
     const error = await rejectionOf();
 
     expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect(error).toMatchObject({ kind: "content-policy" });
     expect((error as Error).message).toBe(
-      "[ai] ark flagged the request: InputTextSensitiveContentDetected.\n  Change the prompt or the inputs."
+      "[ai] ark refused the prompt text: InputTextSensitiveContentDetected.\n  Change the prompt."
     );
   });
 
@@ -459,12 +462,68 @@ describe("helpers", () => {
     });
   });
 
-  it("flaggedError picks the message by the local-image rule", () => {
+  it("flaggedError gives the face text to an input image code with a local image", () => {
     const code = "InputImageSensitiveContentDetected.PrivacyInformation";
     expect(flaggedError(code, true).message).toBe(FACE_MESSAGE);
+    expect(flaggedError("InputImageSensitiveContentDetected", true).message).toBe(
+      "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item."
+    );
+  });
+
+  it("flaggedError gives the generic text to an input image code without a local image", () => {
+    const code = "InputImageSensitiveContentDetected.PrivacyInformation";
     expect(flaggedError(code, false).message).toBe(
       `[ai] ark flagged the request: ${code}.\n  Change the prompt or the inputs.`
     );
+  });
+
+  it("flaggedError never mentions a face for a refused generated audio", () => {
+    const { message } = flaggedError("OutputAudioSensitiveContentDetected", true);
+    expect(message).toBe(
+      `[ai] ark refused the audio it generated: OutputAudioSensitiveContentDetected.\n  ${RETAKE_HINT}`
+    );
+    expect(message).not.toContain("face");
+    expect(message).not.toContain("Seedream");
+  });
+
+  it("flaggedError names the refused generated part by the Output code", () => {
+    expect(flaggedError("OutputVideoSensitiveContentDetected", true).message).toBe(
+      `[ai] ark refused the video it generated: OutputVideoSensitiveContentDetected.\n  ${RETAKE_HINT}`
+    );
+    expect(flaggedError("OutputImageSensitiveContentDetected", false).message).toBe(
+      `[ai] ark refused the picture it generated: OutputImageSensitiveContentDetected.\n  ${RETAKE_HINT}`
+    );
+    expect(flaggedError("OutputTextSensitiveContentDetected", false).message).toBe(
+      `[ai] ark refused the output it generated: OutputTextSensitiveContentDetected.\n  ${RETAKE_HINT}`
+    );
+  });
+
+  it("flaggedError says the prompt text was refused for an InputText code", () => {
+    expect(flaggedError("InputTextSensitiveContentDetected", true).message).toBe(
+      "[ai] ark refused the prompt text: InputTextSensitiveContentDetected.\n  Change the prompt."
+    );
+  });
+
+  it("flaggedError keeps the generic text for any other SensitiveContent code", () => {
+    expect(flaggedError("InputVideoSensitiveContentDetected", true).message).toBe(
+      "[ai] ark flagged the request: InputVideoSensitiveContentDetected.\n  Change the prompt or the inputs."
+    );
+    expect(flaggedError("SensitiveContentDetected", true).message).toBe(
+      "[ai] ark flagged the request: SensitiveContentDetected.\n  Change the prompt or the inputs."
+    );
+  });
+
+  it("flaggedError keeps the class and kind on every branch", () => {
+    for (const code of [
+      "InputImageSensitiveContentDetected",
+      "InputTextSensitiveContentDetected",
+      "OutputAudioSensitiveContentDetected",
+      "SensitiveContentDetected"
+    ]) {
+      const error = flaggedError(code, true);
+      expect(error).toBeInstanceOf(FlaggedProviderError);
+      expect(error).toMatchObject({ kind: "content-policy" });
+    }
   });
 
   it("unreadableResponse is retryable 502", () => {

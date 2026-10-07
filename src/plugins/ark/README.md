@@ -201,16 +201,16 @@ An asset seen `Active` is not checked again in the same process.
 ### Face refusal
 
 Ark refuses a plain photo that may show a real person (`InputImageSensitiveContentDetected.*`). The
-item is `flagged`, and the message depends on the request:
+item is `flagged`, and the message follows Ark's code:
 
-- The request has a plain local image (`image`, `endImage` or a ref that is not an asset):
+| Code | Message |
+| --- | --- |
+| `Input…Image…`, and the request has a plain local image (`image`, `endImage` or a ref that is not an asset) | `[ai] ark refused an image with a face: <code>.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.` |
+| `OutputAudio…`, `OutputVideo…`, `OutputImage…` | `[ai] ark refused the <audio\|video\|picture> it generated: <code>.\n  Run a new take with the same request, it may pass. Ark did not charge this one.` |
+| `InputText…` | `[ai] ark refused the prompt text: <code>.\n  Change the prompt.` |
+| Any other `SensitiveContent` code | `[ai] ark flagged the request: <code>.\n  Change the prompt or the inputs.` |
 
-  ```
-  [ai] ark refused an image with a face: <code>.
-    Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.
-  ```
-
-- Otherwise: `[ai] ark flagged the request: <code>.\n  Change the prompt or the inputs.`
+An `Output…` code means Ark made the clip and refused its own result. The inputs are fine.
 
 **There is no raw-photo fallback, and no registration after a refusal.** See [Faces](#faces) for the
 two routes that work. A refused task is not billed.
