@@ -3,7 +3,17 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## 0.15.0 - Unreleased
+## 0.15.1 - 2026-10-07
+
+### Fixed
+
+- **ark: the refusal message follows Ark's code.** `OutputAudioSensitiveContentDetected` on a
+  request with a local image was reported as "an image with a face". Now an `Output…` code says
+  which generated part Ark refused (audio, video, picture) and that a new take may pass, an
+  `InputText…` code says the prompt text was refused, and the face text is kept for `Input…Image…`
+  codes on a request with a plain local image. The error class and `kind` are unchanged.
+
+## 0.15.0 - 2026-10-06
 
 ### Added
 
@@ -20,14 +30,6 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 - **ark: asset group lookup.** Without `config.groupId`, `ListAssetGroups` finds the oldest exact
   name match before `CreateAssetGroup`. A process no longer creates a new group on every start.
   A configured `groupId` applies only to `config.groupName`.
-
-### Fixed
-
-- **ark: the refusal message follows Ark's code.** `OutputAudioSensitiveContentDetected` on a
-  request with a local image was reported as "an image with a face". Now an `Output…` code says
-  which generated part Ark refused (audio, video, picture) and that a new take may pass, an
-  `InputText…` code says the prompt text was refused, and the face text is kept for `Input…Image…`
-  codes on a request with a plain local image. The error class and `kind` are unchanged.
 
 ## 0.14.2 - 2026-10-04
 
