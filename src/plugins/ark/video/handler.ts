@@ -277,9 +277,10 @@ function failedPoll(
 }
 
 /**
- * Classifies a `failed` task: a SensitiveContent code is flagged (with the
- * face hint when the request has a plain local image), anything else is
- * terminal and carries ark's code and message.
+ * Classifies a `failed` task: a SensitiveContent code is flagged (the message
+ * follows the code, with the face hint for an input image code when the
+ * request has a plain local image), anything else is terminal and carries
+ * ark's code and message.
  *
  * @param ctx - Plugin context (log).
  * @param taskId - The task id.

@@ -299,25 +299,66 @@ function retryAfterMsOf(value: string | null): number | undefined {
   return Number.isNaN(dateMs) ? undefined : Math.max(0, dateMs - Date.now());
 }
 
+/** The generated part an `Output…` refusal code names, by the word after `Output`. */
+const OUTPUT_PARTS: ReadonlyArray<readonly [prefix: string, part: string]> = [
+  ["OutputAudio", "audio"],
+  ["OutputVideo", "video"],
+  ["OutputImage", "picture"]
+];
+
 /**
- * The content-policy error for a refusal code. A request with a plain local
- * image gets the face hint: ark refuses a real face in a plain image, but
- * trusts one in a Seedream image made on the same account (bytes unchanged)
- * and in a registered asset.
+ * The generated part an `Output…` refusal code names.
+ *
+ * @param code - ark's refusal code, starting with `Output`.
+ * @returns `audio`, `video`, `picture`, or `output` for an unknown part.
+ * @example
+ * ```ts
+ * outputPartOf("OutputAudioSensitiveContentDetected"); // => "audio"
+ * ```
+ */
+function outputPartOf(code: string): string {
+  const match = OUTPUT_PARTS.find(([prefix]) => code.startsWith(prefix));
+  return match?.[1] ?? "output";
+}
+
+/**
+ * The content-policy error for a refusal code. The message follows the code:
+ * an `Output…` code means ark refused what it generated (a new take may pass),
+ * an `InputText…` code means the prompt text, and an `Input…Image…` code on a
+ * request with a plain local image gets the face hint: ark refuses a real face
+ * in a plain image, but trusts one in a Seedream image made on the same
+ * account (bytes unchanged) and in a registered asset.
  *
  * @param code - ark's refusal code, e.g. `InputImageSensitiveContentDetected.PrivacyInformation`.
  * @param localImage - Whether the request carries a plain local image.
  * @returns The flagged error.
  * @example
  * ```ts
- * flaggedError("InputTextSensitiveContentDetected", false).message;
- * // => "[ai] ark flagged the request: InputTextSensitiveContentDetected.\n  Change the prompt or the inputs."
+ * flaggedError("OutputAudioSensitiveContentDetected", true).message;
+ * // => "[ai] ark refused the audio it generated: OutputAudioSensitiveContentDetected.\n  Run a new take with the same request, it may pass. Ark did not charge this one."
  * ```
  */
 export function flaggedError(code: string, localImage: boolean): FlaggedProviderError {
-  const message = localImage
-    ? `[ai] ark refused an image with a face: ${code}.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.`
-    : `[ai] ark flagged the request: ${code}.\n  Change the prompt or the inputs.`;
+  // Ark refused its own output: the inputs are fine, a new take may pass.
+  if (code.startsWith("Output")) {
+    return new FlaggedProviderError(
+      `[ai] ark refused the ${outputPartOf(code)} it generated: ${code}.\n  Run a new take with the same request, it may pass. Ark did not charge this one.`
+    );
+  }
+
+  // Ark refused the prompt text.
+  if (code.startsWith("InputText")) {
+    return new FlaggedProviderError(
+      `[ai] ark refused the prompt text: ${code}.\n  Change the prompt.`
+    );
+  }
+
+  // Ark refused an input image: a plain local one gets the face hint.
+  const isInputImage = code.startsWith("Input") && code.includes("Image");
+  const message =
+    isInputImage && localImage
+      ? `[ai] ark refused an image with a face: ${code}.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.`
+      : `[ai] ark flagged the request: ${code}.\n  Change the prompt or the inputs.`;
   return new FlaggedProviderError(message);
 }
 
