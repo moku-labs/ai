@@ -11,6 +11,9 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
   `extend`, for Seedance 2.5 omni reference tasks. Sent only when the caller passes it. Another
   value fails before any call. `reference` keeps a clip with a fixed ratio and duration from being
   read as an edit or an extension. A final from a draft refuses it: Ark reuses the draft's type.
+- **ark: `seconds: -1` for a video edit.** Sent as `duration: -1`, the clip keeps the source
+  length. It passes only with `omni_reference_task_type: edit`; otherwise it fails before any
+  call. The estimate prices it at the model's longest clip.
 
 ### Changed
 

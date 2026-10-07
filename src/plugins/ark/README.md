@@ -126,7 +126,7 @@ checked 2026-09-30.
 | `image` | `image_url`, `role: "first_frame"` |
 | `endImage` | `image_url`, `role: "last_frame"` |
 | `refs` (images and assets) | `image_url`, `role: "reference_image"`, in request order |
-| `seconds` | `duration`, within the model's limits |
+| `seconds` | `duration`, within the model's limits. `-1` only for an edit, see [Params](#params) |
 | `aspect` | `ratio`: `16:9`, `9:16` (default), `1:1`, `4:3`, `3:4`, `21:9` or `adaptive`. Not sent when the model's ratio follows the image, see below |
 | `resolution` | `resolution`, one of the model's |
 | `audio` | `generate_audio` |
@@ -206,6 +206,23 @@ reference clip with a fixed ratio whose prompt reads as an edit fails after the 
 | `edit` | Video editing. Ark checks ratio `adaptive` and duration `-1` at submit. |
 | `extend` | Video extension. Ark checks ratio `adaptive` at submit. |
 
+**An edit keeps the source length.** `seconds: -1` goes out as `duration: -1`. It passes only with
+`omni_reference_task_type: edit`. Without it the request fails before any call:
+`[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.`
+The estimate prices such an edit at the model's longest clip, because the source is not read. The
+real cost comes from the billed tokens.
+
+```yaml
+    input:
+      model: dreamina-seedance-2-5-260628
+      prompt: "replace the red car in video 1 with a blue one"
+      aspect: adaptive
+      seconds: -1
+    params:
+      refUrls: ["https://cdn.example/source/street.mp4"]
+      omni_reference_task_type: edit
+```
+
 With an explicit value Ark checks the rules at submit and answers at once. Another value fails
 before any call:
 `[ai] ark params.omni_reference_task_type "<value>" is not supported.\n  Use one of: auto, reference, edit, extend.`
@@ -273,7 +290,8 @@ The estimate is `width × height × (24 × seconds + 1) / 1024` tokens, rounded 
 price. Sizes: 480p 864×496, 720p 1280×720, 1080p 1920×1080. 9:16 has the same area; other ratios use
 the same area too. This matched the live bills exactly: 480p 5 s = 50,638 tokens ($0.3545 on
 `dreamina-seedance-2-0-260128`), 1080p 5 s = 245,025 tokens. A draft is estimated at 480p, a final at
-1080p for `seconds` (5 when absent).
+1080p for `seconds` (5 when absent). An edit with `seconds: -1` is estimated at the model's longest
+clip.
 
 `meta` is `{ taskId, model, seconds, resolution, completionTokens, seed?, draft?, draftTaskId?, lastFrameUrl? }`.
 `seed` is the seed ark used. `draft: true` marks a draft, `draftTaskId` a final.

@@ -580,6 +580,25 @@ describe("poll", () => {
     expect(ctx.log.warn).toHaveBeenCalledWith("ark:cost:estimated", { taskId: TASK_ID });
   });
 
+  it("never reports an edit's seconds -1: a task without a duration falls back to the longest clip", async () => {
+    const bare = { id: TASK_ID, status: "succeeded", content: { video_url: VIDEO_URL } };
+    const edit = request({
+      model: "dreamina-seedance-2-5-260628",
+      seconds: -1,
+      params: { omni_reference_task_type: "edit" }
+    });
+
+    // Without a duration, and with the submitted -1 echoed back.
+    for (const task of [bare, { ...bare, duration: -1 }]) {
+      stubFetch(jsonResponse(200, task), bytesResponse(CLIP));
+
+      const result = await createVideoHandler(createTestCtx()).poll(TASK_ID, edit, {});
+
+      expect(result).toMatchObject({ state: "done", meta: { seconds: 30 } });
+      expect(result.state === "done" && result.costUsd).toBeGreaterThan(0);
+    }
+  });
+
   it("estimates the cost of a task with an unlisted resolution instead of throwing", async () => {
     const odd = { id: TASK_ID, status: "succeeded", resolution: "540p", duration: 5 };
     stubFetch(

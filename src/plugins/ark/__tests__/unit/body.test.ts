@@ -381,6 +381,39 @@ describe("checkVideoRequest rejections", () => {
     }
   });
 
+  it("sends duration -1 for an edit that keeps the source length", async () => {
+    const body = await body25Of(
+      request({
+        model: MODEL_25_ID,
+        aspect: "adaptive",
+        seconds: -1,
+        params: { omni_reference_task_type: "edit", refUrls: ["https://cdn.example/a.mp4"] }
+      })
+    );
+    expect(body).toMatchObject({
+      ratio: "adaptive",
+      duration: -1,
+      omni_reference_task_type: "edit"
+    });
+  });
+
+  it("refuses seconds -1 without the edit task type, for each other type", () => {
+    for (const params of [
+      undefined,
+      {},
+      { omni_reference_task_type: "auto" },
+      { omni_reference_task_type: "reference" },
+      { omni_reference_task_type: "extend" }
+    ]) {
+      const base = request({ model: MODEL_25_ID, seconds: -1 });
+      expect(() =>
+        checkVideoRequest(MODEL_25, params === undefined ? base : { ...base, params })
+      ).toThrow(
+        '[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.'
+      );
+    }
+  });
+
   it("leaves omni_reference_task_type out when the caller does not pass it", async () => {
     const body = await bodyOf(request({ params: { watermark: true } }));
     expect(body).not.toHaveProperty("omni_reference_task_type");
