@@ -28,7 +28,13 @@ import {
 } from "../client";
 import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import type { ArkVideoModel } from "../models";
-import { DEFAULT_RESOLUTION, DEFAULT_SECONDS, resolveArkModel, SOURCE_SECONDS } from "../models";
+import {
+  checkSeconds,
+  DEFAULT_RESOLUTION,
+  DEFAULT_SECONDS,
+  resolveArkModel,
+  SOURCE_SECONDS
+} from "../models";
 import { costUsd, estimateTokens, estimateUsd, nearestResolution } from "../prices";
 import { dataPlaneUrl } from "../regions";
 import type { ArkContext, EstimateRequest } from "../types";
@@ -485,19 +491,21 @@ async function pollTask(
 
 /**
  * Estimates a request without any call or file read: a final from a draft
- * is 1080p for `seconds` (5 when absent), a draft is 480p, anything else its
- * own seconds and resolution; all at the base price. It throws the submit
- * errors it can check before the files are resolved.
+ * is 1080p for `seconds` (5 when absent, checked against the model), a draft
+ * is 480p, anything else its own seconds and resolution; all at the base
+ * price. It throws the submit errors it can check before the files are
+ * resolved, and the seconds error for a final.
  *
  * @param ctx - Plugin context (config).
  * @param request - The request, files resolved or not.
  * @returns USD.
+ * @throws {Error} A plain two-line error for a request the submit checks refuse, or a final's `seconds` outside the model's limits.
  */
 function estimateVideo(ctx: ArkContext, request: EstimateRequest): number {
   const model = resolveArkModel(request.model, ctx.config.region);
   if (request.fromDraft !== undefined) {
     const { resolution } = checkFinalRequest(model, request);
-    const tokens = estimateTokens(resolution, request.seconds ?? DEFAULT_SECONDS);
+    const tokens = estimateTokens(resolution, checkSeconds(model, request.seconds));
     return costUsd(ctx.config, model, tokens, false, resolution);
   }
 
