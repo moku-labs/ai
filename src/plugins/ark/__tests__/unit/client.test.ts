@@ -23,6 +23,7 @@ import {
   ERROR_RATE_LIMIT,
   ERROR_SENSITIVE_IMAGE,
   ERROR_SENSITIVE_TEXT,
+  ERROR_TASK_TYPE_MISMATCH,
   GET_ASSET_REQUEST,
   GROUP_ID,
   INTL_IMAGES_URL,
@@ -53,6 +54,10 @@ const FACE_MESSAGE =
   "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.";
 const RETAKE_HINT =
   "Run a new take with the same request, it may pass. Ark did not charge this one.";
+const TASK_TYPE_CONSTRAINT_HINT =
+  'The task type does not take this ratio or duration: an edit or an extension needs aspect "adaptive", an edit also duration -1. Ark picks the type from the refs and the prompt; set params.omni_reference_task_type to pin it.';
+const TASK_TYPE_MISMATCH_HINT =
+  "The prompt reads as another task type than params.omni_reference_task_type. Reword the prompt or change the type.";
 const ENTITLEMENT_HINT =
   "\n  Check the Seedance Advanced Creation Rights and the AIGC authorization letter in the Ark console.";
 
@@ -415,6 +420,33 @@ describe("live error bodies", () => {
     expect(error).toMatchObject({ status: 400, code: "InvalidParameter.TaskTypeConstraint" });
     expect((error as Error).message).toContain(
       "failed (400 InvalidParameter.TaskTypeConstraint): The parameter ratio specified"
+    );
+    expect((error as Error).message.endsWith(`\n  ${TASK_TYPE_CONSTRAINT_HINT}`)).toBe(true);
+  });
+
+  it("gives a 400 TaskTypeMismatch at submit its reason, by the code", async () => {
+    stubFetch(jsonResponse(400, ERROR_TASK_TYPE_MISMATCH));
+
+    const error = await rejectionOf();
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error).toMatchObject({ status: 400, code: "InvalidParameter.TaskTypeMismatch" });
+    expect((error as Error).message).toBe(
+      `[ai] ark ${LABEL} failed (400 InvalidParameter.TaskTypeMismatch): The task type does not match the request.\n  ${TASK_TYPE_MISMATCH_HINT}`
+    );
+  });
+
+  it("picks the task-type reason by the code, not by the message, at submit", async () => {
+    stubFetch(
+      jsonResponse(400, {
+        error: { code: "InvalidParameter", message: "TaskTypeConstraint TaskTypeMismatch." }
+      })
+    );
+
+    const error = await rejectionOf();
+
+    expect((error as Error).message).toBe(
+      `[ai] ark ${LABEL} failed (400 InvalidParameter): TaskTypeConstraint TaskTypeMismatch.`
     );
   });
 

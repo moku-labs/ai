@@ -181,14 +181,15 @@ describe("final checks (pure)", () => {
     );
   });
 
-  it("refuses frames, refs, refUrls, seed and draft on a final (5)", () => {
+  it("refuses frames, refs, refUrls, seed, draft and the task type on a final (5)", () => {
     const cases: Array<[Partial<EstimateRequest>, string]> = [
       [{ image }, "input.image"],
       [{ endImage: image }, "input.endImage"],
       [{ refs: [image] }, "input.refs"],
       [{ params: { refUrls: ["https://cdn.example/a.mp4"] } }, "params.refUrls"],
       [{ params: { seed: 7 } }, "params.seed"],
-      [{ params: { draft: true } }, "params.draft"]
+      [{ params: { draft: true } }, "params.draft"],
+      [{ params: { omni_reference_task_type: "reference" } }, "params.omni_reference_task_type"]
     ];
     for (const [request, field] of cases) {
       expect(() => checkFinalRequest(model25, request)).toThrow(

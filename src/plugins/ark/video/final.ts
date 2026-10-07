@@ -121,8 +121,9 @@ function checkFinalInputs(request: FinalShape): void {
 }
 
 /**
- * Checks a final's `params`: the allowlist, no `refUrls`, `seed` or `draft`
- * (they belong to the draft), and `generation` is never sent.
+ * Checks a final's `params`: the allowlist, no `refUrls`, `seed`, `draft` or
+ * `omni_reference_task_type` (they belong to the draft: ark reuses the draft's
+ * task type and refuses it sent again), and `generation` is never sent.
  *
  * @param params - `request.params`.
  * @returns The passthrough params.
@@ -136,7 +137,8 @@ function checkFinalParameters(params: Record<string, unknown>): FinalPassthrough
   const passthrough: FinalPassthrough = {};
   for (const [key, value] of Object.entries(params)) {
     if (!isArkParameter(key)) throw unknownParameterError(key);
-    const isDraftOnly = key === "refUrls" || key === "seed" || key === "draft";
+    const isDraftOnly =
+      key === "refUrls" || key === "seed" || key === "draft" || key === "omni_reference_task_type";
     if (isDraftOnly) throw onlyDraftError(`params.${key}`);
     if (key === "generation") continue;
     passthrough[key] = value;
@@ -146,8 +148,8 @@ function checkFinalParameters(params: Record<string, unknown>): FinalPassthrough
 
 /**
  * Checks a final with no I/O: a model with a draft mode; no frames, refs,
- * `refUrls`, `seed` or `draft`; known params only; 1080p (the default). Works
- * on an estimate request too.
+ * `refUrls`, `seed`, `draft` or `omni_reference_task_type`; known params
+ * only; 1080p (the default). Works on an estimate request too.
  *
  * @param model - The request's catalog row.
  * @param request - The request, files resolved or not.

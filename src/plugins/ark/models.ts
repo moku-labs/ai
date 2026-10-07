@@ -265,13 +265,24 @@ export function checkResolution(model: ArkVideoModel, resolution: string | undef
 }
 
 /**
+ * `seconds` of a video edit: ark's `duration: -1`, the clip keeps the length
+ * of the source video.
+ */
+export const SOURCE_SECONDS = -1;
+
+/** The error for `seconds: -1` on a request that is not pinned as an edit. */
+const SOURCE_SECONDS_ERROR =
+  '[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.';
+
+/**
  * Checks the parts of a request the estimate can check before the runner
- * resolves its files: seconds and resolution.
+ * resolves its files: seconds and resolution. `seconds: -1` passes only with
+ * `params.omni_reference_task_type: "edit"`: an edit keeps the source length.
  *
  * @param model - The catalog row.
  * @param request - The request, files resolved or not.
  * @returns The checked seconds and resolution.
- * @throws {Error} The {@link checkSeconds} or {@link checkResolution} error.
+ * @throws {Error} The {@link checkSeconds} or {@link checkResolution} error, or a plain two-line error for `seconds: -1` without an edit.
  * @example
  * ```ts
  * checkClip(resolveArkModel("dreamina-seedance-2-0-260128", "intl"), { model: "dreamina-seedance-2-0-260128", prompt: "p" });
@@ -280,10 +291,15 @@ export function checkResolution(model: ArkVideoModel, resolution: string | undef
  */
 export function checkClip(
   model: ArkVideoModel,
-  request: Pick<EstimateRequest, "seconds" | "resolution">
+  request: Pick<EstimateRequest, "seconds" | "resolution" | "params">
 ): { seconds: number; resolution: string } {
-  return {
-    seconds: checkSeconds(model, request.seconds),
-    resolution: checkResolution(model, request.resolution)
-  };
+  const resolution = checkResolution(model, request.resolution);
+  if (request.seconds !== SOURCE_SECONDS) {
+    return { seconds: checkSeconds(model, request.seconds), resolution };
+  }
+
+  // The source length: only an edit takes it.
+  const isEdit = request.params?.omni_reference_task_type === "edit";
+  if (!isEdit) throw new Error(SOURCE_SECONDS_ERROR);
+  return { seconds: SOURCE_SECONDS, resolution };
 }

@@ -422,6 +422,34 @@ export const LIVE_ERROR_RATIO = {
   }
 };
 
+// source: BytePlus ModelArk docs "Create a video generation task", updated 2026-09-28 (the codes; the messages are placeholders)
+export const ERROR_TASK_TYPE_MISMATCH = {
+  error: {
+    code: "InvalidParameter.TaskTypeMismatch",
+    message: "The task type does not match the request.",
+    type: "BadRequest"
+  }
+};
+
+// source: same docs page (a task that failed after it started: the code is in task.error.code)
+export const GET_TASK_FAILED_TASK_TYPE_CONSTRAINT = {
+  id: TASK_ID,
+  model: "dreamina-seedance-2-5-260628",
+  status: "failed",
+  error: {
+    code: "InvalidParameter.TaskTypeConstraint",
+    message: "The parameter ratio specified in the request is not valid."
+  }
+};
+
+// source: same docs page
+export const GET_TASK_FAILED_TASK_TYPE_MISMATCH = {
+  id: TASK_ID,
+  model: "dreamina-seedance-2-5-260628",
+  status: "failed",
+  error: ERROR_TASK_TYPE_MISMATCH.error
+};
+
 // source: live BytePlus intl 2026-09-30 (400: a Codex keyframe with a real face)
 export const LIVE_ERROR_FACE = {
   error: {

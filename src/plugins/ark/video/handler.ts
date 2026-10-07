@@ -23,11 +23,12 @@ import {
   readNumber,
   readString,
   shorten,
+  taskTypeHint,
   unreadableResponse
 } from "../client";
 import { FlaggedProviderError, TerminalProviderError } from "../errors";
 import type { ArkVideoModel } from "../models";
-import { DEFAULT_RESOLUTION, DEFAULT_SECONDS, resolveArkModel } from "../models";
+import { DEFAULT_RESOLUTION, DEFAULT_SECONDS, resolveArkModel, SOURCE_SECONDS } from "../models";
 import { costUsd, estimateTokens, estimateUsd, nearestResolution } from "../prices";
 import { dataPlaneUrl } from "../regions";
 import type { ArkContext, EstimateRequest } from "../types";
@@ -280,7 +281,8 @@ function failedPoll(
  * Classifies a `failed` task: a SensitiveContent code is flagged (the message
  * follows the code, with the face hint for an input image code when the
  * request has a plain local image), anything else is terminal and carries
- * ark's code and message.
+ * ark's code and message, plus the reason on a second line for a task-type
+ * code (`task.error.code`, the same codes a submit can answer with).
  *
  * @param ctx - Plugin context (log).
  * @param taskId - The task id.
@@ -302,8 +304,10 @@ function taskFailed(
 
   const message = shorten(readString(error, "message"));
   const suffix = message === undefined ? "" : `: ${message}`;
+  const hint = taskTypeHint(code);
+  const second = hint === undefined ? "" : `\n  ${hint}.`;
   const terminal = new TerminalProviderError(
-    `[ai] ark task ${taskId} failed (${code ?? "error"})${suffix}.`,
+    `[ai] ark task ${taskId} failed (${code ?? "error"})${suffix}.${second}`,
     FAILED_TASK_STATUS,
     code
   );
@@ -405,8 +409,11 @@ async function downloadClip(
   const model = resolveArkModel(request.model, ctx.config.region);
   if (isDraftTask(task)) recordDraft(ctx, taskId, task, model.id, download.body);
 
-  // Read what the task reports; the request fills in what it lacks.
-  const seconds = readNumber(task, "duration") ?? request.seconds ?? DEFAULT_SECONDS;
+  // Read what the task reports; the request fills in what it lacks (an edit's -1 is no length).
+  const asked = request.seconds === SOURCE_SECONDS ? model.maxSeconds : request.seconds;
+  const reported = readNumber(task, "duration");
+  const isLength = reported !== undefined && reported !== SOURCE_SECONDS;
+  const seconds = isLength ? reported : (asked ?? DEFAULT_SECONDS);
   const resolution =
     readString(task, "resolution") ??
     request.resolution ??

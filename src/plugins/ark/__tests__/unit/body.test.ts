@@ -34,7 +34,7 @@ const MODEL = resolveArkModel(MODEL_ID, "intl");
 const MODEL_25_ID = "dreamina-seedance-2-5-260628";
 const MODEL_25 = resolveArkModel(MODEL_25_ID, "intl");
 const ALLOWED =
-  "Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority, draft, generation.";
+  "Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority, omni_reference_task_type, draft, generation.";
 
 let temp: TempFiles;
 let image: VideoFile;
@@ -199,6 +199,7 @@ describe("mapping rows", () => {
       "return_last_frame",
       "execution_expires_after",
       "priority",
+      "omni_reference_task_type",
       "draft",
       "generation"
     ]);
@@ -371,6 +372,66 @@ describe("checkVideoRequest rejections", () => {
     expect(checkVideoRequest(seeded, request({ params: { seed: 42 } })).params).toEqual({
       seed: 42
     });
+  });
+
+  it("sends omni_reference_task_type as given, for each value ark takes", async () => {
+    for (const type of ["auto", "reference", "edit", "extend"]) {
+      const body = await bodyOf(request({ params: { omni_reference_task_type: type } }));
+      expect(body).toMatchObject({ omni_reference_task_type: type });
+    }
+  });
+
+  it("sends duration -1 for an edit that keeps the source length", async () => {
+    const body = await body25Of(
+      request({
+        model: MODEL_25_ID,
+        aspect: "adaptive",
+        seconds: -1,
+        params: { omni_reference_task_type: "edit", refUrls: ["https://cdn.example/a.mp4"] }
+      })
+    );
+    expect(body).toMatchObject({
+      ratio: "adaptive",
+      duration: -1,
+      omni_reference_task_type: "edit"
+    });
+  });
+
+  it("refuses seconds -1 without the edit task type, for each other type", () => {
+    for (const params of [
+      undefined,
+      {},
+      { omni_reference_task_type: "auto" },
+      { omni_reference_task_type: "reference" },
+      { omni_reference_task_type: "extend" }
+    ]) {
+      const base = request({ model: MODEL_25_ID, seconds: -1 });
+      expect(() =>
+        checkVideoRequest(MODEL_25, params === undefined ? base : { ...base, params })
+      ).toThrow(
+        '[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.'
+      );
+    }
+  });
+
+  it("leaves omni_reference_task_type out when the caller does not pass it", async () => {
+    const body = await bodyOf(request({ params: { watermark: true } }));
+    expect(body).not.toHaveProperty("omni_reference_task_type");
+    expect(await bodyOf(request())).not.toHaveProperty("omni_reference_task_type");
+  });
+
+  it("rejects an omni_reference_task_type ark does not take", () => {
+    for (const [value, shown] of [
+      ["editing", "editing"],
+      ["Edit", "Edit"],
+      [true, "true"]
+    ] as const) {
+      expect(() =>
+        checkVideoRequest(MODEL_25, request({ params: { omni_reference_task_type: value } }))
+      ).toThrow(
+        `[ai] ark params.omni_reference_task_type "${shown}" is not supported.\n  Use one of: auto, reference, edit, extend.`
+      );
+    }
   });
 
   it("rejects a local video or audio ref with the refUrls hint", () => {

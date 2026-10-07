@@ -1578,7 +1578,15 @@ ASSET_MIME input is asset://<assetId>; seconds → duration; aspect → ratio (1
 1:1, 4:3, 3:4, 21:9, adaptive); resolution; audio → generate_audio; negative dropped
 (one ark:negative:ignored warning). params allowlist: refUrls, watermark (default
 false), seed (only with seed support), return_last_frame, execution_expires_after,
-priority; anything else → `[ai] Unknown ark param "<key>".\n  Allowed: ...`.
+priority, omni_reference_task_type; anything else → `[ai] Unknown ark param "<key>".\n  Allowed: ...`.
+params.omni_reference_task_type: auto | reference | edit | extend (Seedance 2.5 omni
+reference task), sent only when given; another value →
+`[ai] ark params.omni_reference_task_type "<value>" is not supported.\n  Use one of: auto, reference, edit, extend.`;
+refused on a final from a draft. seconds: -1 (duration -1, the source length) passes only
+with omni_reference_task_type edit, estimated at the model's longest clip; otherwise
+`[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.`. Ark codes InvalidParameter.TaskTypeConstraint and
+InvalidParameter.TaskTypeMismatch (HTTP 400 at submit, or error.code of a failed task) are
+terminal with the reason on a second line.
 params.refUrls: string[] — video/audio refs by PUBLIC https URL (caller hosts them; ark
 never uploads): .mp4/.mov → video_url reference_video, .mp3/.wav → audio_url
 reference_audio, after the image refs. A local video/audio file in refs →

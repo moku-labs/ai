@@ -126,6 +126,19 @@ describe("estimateUsd", () => {
   it("converts cn to USD", () => {
     expect(estimateUsd(DEFAULT_CONFIG, CN, {})).toBe(0.705_549);
   });
+
+  it("prices an edit that keeps the source length at the model's longest clip", () => {
+    const edit = { seconds: -1, params: { omni_reference_task_type: "edit" } };
+    expect(estimateUsd(DEFAULT_CONFIG, INTL_25, edit)).toBe(
+      estimateUsd(DEFAULT_CONFIG, INTL_25, { seconds: INTL_25.maxSeconds })
+    );
+  });
+
+  it("refuses seconds -1 on a request that is not an edit", () => {
+    expect(() => estimateUsd(DEFAULT_CONFIG, INTL_25, { seconds: -1 })).toThrow(
+      '[ai] ark seconds -1 is for a video edit only.\n  Set params.omni_reference_task_type to "edit", or set input.seconds to a length.'
+    );
+  });
 });
 
 describe("imageCostUsd", () => {
