@@ -105,7 +105,7 @@ export class TerminalProviderError extends Error {
  *
  * @example
  * ```ts
- * throw new FlaggedProviderError("[ai] ark flagged the request: InputTextSensitiveContentDetected.\n  Change the prompt or the inputs.");
+ * throw new FlaggedProviderError("[ai] ark refused the prompt text: InputTextSensitiveContentDetected.\n  Change the prompt.");
  * ```
  */
 export class FlaggedProviderError extends Error {

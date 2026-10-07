@@ -228,6 +228,20 @@ export const GET_TASK_FAILED_SENSITIVE = {
   execution_expires_after: 172_800
 };
 
+// source: https://github.com/Comfy-Org/ComfyUI/issues/13883 (real failed-task body)
+// source: live studio run 2026-10-07 (code OutputAudioSensitiveContentDetected on a request with local images)
+// unverified: the message text is written by analogy with the output-video one
+export const GET_TASK_FAILED_OUTPUT_AUDIO = {
+  id: TASK_ID,
+  model: "dreamina-seedance-2-0-260128",
+  status: "failed",
+  error: {
+    code: "OutputAudioSensitiveContentDetected",
+    message: "The request failed because the output audio may contain sensitive information."
+  },
+  generate_audio: true
+};
+
 // source: https://github.com/Comfy-Org/ComfyUI/issues/13883 (real failed-task body; the real one carries OutputAudioSensitiveContentDetected)
 // unverified: OutputVideoSensitiveContentDetected is named by analogy with the real OutputAudio code
 export const GET_TASK_FAILED_OUTPUT_VIDEO = {

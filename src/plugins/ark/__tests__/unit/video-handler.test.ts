@@ -27,6 +27,7 @@ import {
   GET_TASK_CANCELLED,
   GET_TASK_EXPIRED,
   GET_TASK_FAILED,
+  GET_TASK_FAILED_OUTPUT_AUDIO,
   GET_TASK_FAILED_OUTPUT_VIDEO,
   GET_TASK_FAILED_SENSITIVE,
   GET_TASK_QUEUED,
@@ -613,7 +614,7 @@ describe("poll", () => {
     expect((error as Error).message).toBe(GENERIC_FLAG_MESSAGE);
   });
 
-  it("flags an OutputVideoSensitiveContentDetected failure", async () => {
+  it("flags an OutputVideoSensitiveContentDetected failure as a refused generated video", async () => {
     stubFetch(jsonResponse(200, GET_TASK_FAILED_OUTPUT_VIDEO));
     const ctx = createTestCtx();
 
@@ -621,11 +622,29 @@ describe("poll", () => {
 
     expect(error).toBeInstanceOf(FlaggedProviderError);
     expect(error).toMatchObject({ kind: "content-policy" });
+    expect((error as Error).message).toBe(
+      "[ai] ark refused the video it generated: OutputVideoSensitiveContentDetected.\n  Run a new take with the same request, it may pass. Ark did not charge this one."
+    );
     expect(ctx.log.warn).toHaveBeenCalledWith("ark:video:failed", {
       taskId: TASK_ID,
       errorType: "flagged",
       code: "OutputVideoSensitiveContentDetected"
     });
+  });
+
+  it("a refused generated audio on a request with local images does not mention a face", async () => {
+    stubFetch(jsonResponse(200, GET_TASK_FAILED_OUTPUT_AUDIO));
+
+    const error = failedError(
+      await createVideoHandler(createTestCtx()).poll(TASK_ID, request({ image, refs: [image] }), {})
+    );
+
+    expect(error).toBeInstanceOf(FlaggedProviderError);
+    expect(error).toMatchObject({ kind: "content-policy" });
+    expect((error as Error).message).toBe(
+      "[ai] ark refused the audio it generated: OutputAudioSensitiveContentDetected.\n  Run a new take with the same request, it may pass. Ark did not charge this one."
+    );
+    expect((error as Error).message).not.toContain("face");
   });
 
   it("fails terminally on another task error, carrying the code and message", async () => {
