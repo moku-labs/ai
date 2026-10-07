@@ -6,7 +6,7 @@
  */
 import type { ArkImageModel } from "./image/models";
 import type { ArkVideoModel } from "./models";
-import { checkClip, DEFAULT_RESOLUTION } from "./models";
+import { checkClip, DEFAULT_RESOLUTION, SOURCE_SECONDS } from "./models";
 import { arkRegions } from "./regions";
 import type { Config, EstimateRequest } from "./types";
 
@@ -167,13 +167,15 @@ export function costUsd(
 
 /**
  * Estimated cost of a request, before any file is resolved: the estimated
- * tokens of its seconds and resolution at the base price.
+ * tokens of its seconds and resolution at the base price. An edit that keeps
+ * the source length (`seconds: -1`) is priced at the model's longest clip: the
+ * source is not read here, so the estimate is the upper bound.
  *
  * @param config - Price overrides and the CNY rate.
  * @param model - The catalog row.
- * @param request - Seconds and resolution, checked against the model.
+ * @param request - Seconds, resolution and `params.omni_reference_task_type`, checked against the model.
  * @returns USD.
- * @throws {Error} The model's seconds or resolution error.
+ * @throws {Error} The {@link checkClip} error: seconds or resolution out of range, or `seconds: -1` without an edit.
  * @example
  * ```ts
  * estimateUsd({ priceOverrides: {}, cnyPerUsd: 7.1 }, resolveArkModel("dreamina-seedance-2-0-260128", "intl"), {}); // => 0.7623
@@ -182,10 +184,13 @@ export function costUsd(
 export function estimateUsd(
   config: PriceConfig,
   model: ArkVideoModel,
-  request: Pick<EstimateRequest, "seconds" | "resolution">
+  request: Pick<EstimateRequest, "seconds" | "resolution" | "params">
 ): number {
   const clip = checkClip(model, request);
-  const tokens = estimateTokens(clip.resolution, clip.seconds);
+
+  // An edit keeps the source length: price it at the longest clip (the upper bound).
+  const seconds = clip.seconds === SOURCE_SECONDS ? model.maxSeconds : clip.seconds;
+  const tokens = estimateTokens(clip.resolution, seconds);
   return costUsd(config, model, tokens, false, clip.resolution);
 }
 
