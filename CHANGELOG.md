@@ -3,6 +3,22 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.16.0 - 2026-10-07
+
+### Added
+
+- **ark: `params.omni_reference_task_type` on a video request.** `auto`, `reference`, `edit` or
+  `extend`, for Seedance 2.5 omni reference tasks. Sent only when the caller passes it. Another
+  value fails before any call. `reference` keeps a clip with a fixed ratio and duration from being
+  read as an edit or an extension. A final from a draft refuses it: Ark reuses the draft's type.
+
+### Changed
+
+- **ark: task-type errors say why.** `InvalidParameter.TaskTypeConstraint` and
+  `InvalidParameter.TaskTypeMismatch` get a second line with the reason, at submit (HTTP 400) and
+  on a task that failed after it started. Matched on Ark's code. Class, `status` and `code` are
+  unchanged.
+
 ## 0.15.1 - 2026-10-07
 
 ### Fixed

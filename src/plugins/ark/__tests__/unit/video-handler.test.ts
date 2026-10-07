@@ -30,6 +30,8 @@ import {
   GET_TASK_FAILED_OUTPUT_AUDIO,
   GET_TASK_FAILED_OUTPUT_VIDEO,
   GET_TASK_FAILED_SENSITIVE,
+  GET_TASK_FAILED_TASK_TYPE_CONSTRAINT,
+  GET_TASK_FAILED_TASK_TYPE_MISMATCH,
   GET_TASK_QUEUED,
   GET_TASK_RUNNING,
   GET_TASK_SUCCEEDED,
@@ -53,6 +55,10 @@ const MODEL_ID = "dreamina-seedance-2-0-260128";
 const PROMPT = "A girl walks into the rain, the camera follows her";
 const CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]);
 const TASK_URL = `${INTL_TASKS_URL}/${TASK_ID}`;
+const TASK_TYPE_CONSTRAINT_HINT =
+  'The task type does not take this ratio or duration: an edit or an extension needs aspect "adaptive", an edit also duration -1. Ark picks the type from the refs and the prompt; set params.omni_reference_task_type to pin it.';
+const TASK_TYPE_MISMATCH_HINT =
+  "The prompt reads as another task type than params.omni_reference_task_type. Reword the prompt or change the type.";
 const FACE_MESSAGE =
   "[ai] ark refused an image with a face: InputImageSensitiveContentDetected.PrivacyInformation.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.";
 const GENERIC_FLAG_MESSAGE =
@@ -275,6 +281,35 @@ describe("submit", () => {
 
     expect(error).toBeInstanceOf(FlaggedProviderError);
     expect((error as Error).message).toBe(GENERIC_FLAG_MESSAGE);
+  });
+
+  it("POSTs params.omni_reference_task_type in the body, and no such field without it", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(200, CREATE_TASK_RESPONSE),
+      jsonResponse(200, CREATE_TASK_RESPONSE)
+    );
+    const handler = createVideoHandler(createTestCtx());
+
+    await handler.submit(request({ params: { omni_reference_task_type: "reference" } }), {});
+    await handler.submit(request(), {});
+
+    const [withType, without] = callsOf(fetchMock);
+    expect(jsonBodyOf(withType)).toMatchObject({ omni_reference_task_type: "reference" });
+    expect(jsonBodyOf(without)).not.toHaveProperty("omni_reference_task_type");
+  });
+
+  it("refuses a bad omni_reference_task_type before any fetch", async () => {
+    const fetchMock = stubFetch();
+
+    await expect(
+      createVideoHandler(createTestCtx()).submit(
+        request({ params: { omni_reference_task_type: "editing" } }),
+        {}
+      )
+    ).rejects.toThrow(
+      '[ai] ark params.omni_reference_task_type "editing" is not supported.\n  Use one of: auto, reference, edit, extend.'
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("maps 429 to retryable with Retry-After, and 5xx to retryable", async () => {
@@ -658,6 +693,55 @@ describe("poll", () => {
     expect(error).toMatchObject({ status: 400, code: "InvalidParameter" });
     expect((error as Error).message).toBe(
       `[ai] ark task ${TASK_ID} failed (InvalidParameter): The parameter \`duration\` specified in the request is not valid.`
+    );
+  });
+
+  it("gives a task that failed with a task-type code its reason, by the code", async () => {
+    for (const [body, code, hint] of [
+      [
+        GET_TASK_FAILED_TASK_TYPE_CONSTRAINT,
+        "InvalidParameter.TaskTypeConstraint",
+        TASK_TYPE_CONSTRAINT_HINT
+      ],
+      [
+        GET_TASK_FAILED_TASK_TYPE_MISMATCH,
+        "InvalidParameter.TaskTypeMismatch",
+        TASK_TYPE_MISMATCH_HINT
+      ]
+    ] as const) {
+      stubFetch(jsonResponse(200, body));
+      const ctx = createTestCtx();
+
+      const error = failedError(await createVideoHandler(ctx).poll(TASK_ID, request(), {}));
+
+      expect(error).toBeInstanceOf(TerminalProviderError);
+      expect(error).toMatchObject({ status: 400, code });
+      expect((error as Error).message).toBe(
+        `[ai] ark task ${TASK_ID} failed (${code}): ${body.error.message}\n  ${hint}`
+      );
+      expect(ctx.log.warn).toHaveBeenCalledWith("ark:video:failed", {
+        taskId: TASK_ID,
+        errorType: "terminal",
+        code,
+        status: 400
+      });
+    }
+  });
+
+  it("picks the task-type reason by the code, not by the message", async () => {
+    const body = {
+      id: TASK_ID,
+      status: "failed",
+      error: { code: "InvalidParameter", message: "TaskTypeConstraint TaskTypeMismatch." }
+    };
+    stubFetch(jsonResponse(200, body));
+
+    const error = failedError(
+      await createVideoHandler(createTestCtx()).poll(TASK_ID, request(), {})
+    );
+
+    expect((error as Error).message).toBe(
+      `[ai] ark task ${TASK_ID} failed (InvalidParameter): TaskTypeConstraint TaskTypeMismatch.`
     );
   });
 

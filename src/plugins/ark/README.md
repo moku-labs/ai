@@ -145,7 +145,7 @@ has no `ratio` then. An explicit `aspect` is still checked, but it cannot be hon
 ### Params
 
 `params` is an allowlist. Any other key fails:
-`[ai] Unknown ark param "<key>".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority, draft, generation.`
+`[ai] Unknown ark param "<key>".\n  Allowed: refUrls, watermark, seed, return_last_frame, execution_expires_after, priority, omni_reference_task_type, draft, generation.`
 
 | Param | Meaning |
 | --- | --- |
@@ -155,6 +155,7 @@ has no `ratio` then. An explicit `aspect` is still checked, but it cannot be hon
 | `return_last_frame` | Passed through. The last frame URL comes back in `meta.lastFrameUrl`. |
 | `execution_expires_after` | Passed through. |
 | `priority` | Passed through. |
+| `omni_reference_task_type` | `auto`, `reference`, `edit` or `extend`. Sent only when given. See below. |
 | `draft` | `true` only: a 480p draft. See [Draft → final](#draft--final). |
 | `generation` | Never sent. It only changes the item key, so a new value renders again. |
 
@@ -183,6 +184,44 @@ A video or audio file in `refs` fails before any call:
 [ai] ark takes video and audio references by public URL only.
   Pass them in params.refUrls.
 ```
+
+**`omni_reference_task_type`: pin the omni reference task (Seedance 2.5).** A 2.5 request with
+references is one of three tasks: reference-to-video, video editing or video extension. By default
+(`auto`) the model picks the task from the inputs and from the prompt wording. Words like "add",
+"remove" or "replace" read as an edit. Words like "extend" or "continue" read as an extension. An
+edit needs `aspect: adaptive` and `duration: -1`, an extension needs `aspect: adaptive`. So a
+reference clip with a fixed ratio whose prompt reads as an edit fails after the task started.
+
+```yaml
+    params:
+      refUrls: ["https://cdn.example/motion/walk.mp4"]
+      omni_reference_task_type: reference
+```
+
+| Value | Effect |
+| --- | --- |
+| absent | Nothing is sent. Ark uses `auto`. |
+| `auto` | The model picks the task. |
+| `reference` | Reference-to-video. No special rule for ratio and duration. |
+| `edit` | Video editing. Ark checks ratio `adaptive` and duration `-1` at submit. |
+| `extend` | Video extension. Ark checks ratio `adaptive` at submit. |
+
+With an explicit value Ark checks the rules at submit and answers at once. Another value fails
+before any call:
+`[ai] ark params.omni_reference_task_type "<value>" is not supported.\n  Use one of: auto, reference, edit, extend.`
+
+Ark documents the field for Seedance 2.5 only. The handler sends it on any model when the caller
+passes it, and never on its own. A final from a draft reuses the draft's task type, so the param is
+refused there (see [Draft → final](#draft--final)).
+
+| Ark code | Second line of the error |
+| --- | --- |
+| `InvalidParameter.TaskTypeConstraint` | `The task type does not take this ratio or duration: an edit or an extension needs aspect "adaptive", an edit also duration -1. Ark picks the type from the refs and the prompt; set params.omni_reference_task_type to pin it.` |
+| `InvalidParameter.TaskTypeMismatch` | `The prompt reads as another task type than params.omni_reference_task_type. Reword the prompt or change the type.` |
+
+Both are terminal (400) and keep Ark's code and message on the first line. The reason follows the
+code, never the message. It is added at submit (HTTP 400) and on a `failed` task (`error.code` of
+the task).
 
 ### Asset preflight
 
@@ -222,6 +261,7 @@ two routes that work. A refused task is not billed.
 | `queued`, `running` | pending |
 | `succeeded` | Download `content.video_url` at once (it expires 24 h after success). Done, `video/mp4`. |
 | `failed` with a `SensitiveContent` code | failed, flagged |
+| `failed` with a `TaskType…` code | failed, terminal (400) with Ark's code and message, and the reason on a second line (see [Params](#params)) |
 | `failed`, other code | failed, terminal (400) with Ark's code and message |
 | `expired`, `cancelled` | failed, terminal (410) |
 
@@ -306,7 +346,9 @@ final never reads `prompt`, `seconds`, `aspect`, `audio` or `negative`. The body
 { "model": "dreamina-seedance-2-5-260628", "content": [{ "type": "draft_task", "draft_task": { "id": "<draft task id>" } }], "resolution": "1080p", "watermark": false }
 ```
 
-Only `watermark`, `return_last_frame`, `execution_expires_after` and `priority` pass through. Every
+Only `watermark`, `return_last_frame`, `execution_expires_after` and `priority` pass through.
+`omni_reference_task_type` is refused: Ark reuses the draft's task type and fails when it is sent
+again, even with the same value. Every
 check runs before any call. Each failure is a plain error: terminal, nothing billed.
 
 | Check | Error |
@@ -522,6 +564,7 @@ to register the portraits in the new account.
 | HTTP 429 | Retryable, `status: 429`, `Retry-After` honored (seconds or HTTP date) |
 | HTTP 5xx | Retryable, `status` |
 | HTTP 400 / 422 with a `SensitiveContent` code | Flagged (see [Face refusal](#face-refusal)) |
+| HTTP 4xx with `InvalidParameter.TaskTypeConstraint` or `InvalidParameter.TaskTypeMismatch` | Terminal, with the reason on a second line (see [Params](#params)) |
 | Other HTTP 4xx | Terminal: `[ai] ark <Action or path> failed (<status> <code>): <message>.` |
 | Asset API `Throttling*`, `RequestLimitExceeded*`, `FlowLimitExceeded*`, `TooManyRequests*` | Retryable, `status: 429` |
 | Asset API `QuotaExceeded`, `AccessDenied*`, `InvalidAuthorization*` | Terminal, with a hint to check the entitlement and the authorization letter |
