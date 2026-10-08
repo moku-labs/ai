@@ -43,6 +43,14 @@ const DRAFT_CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 1]);
 const FINAL_CLIP = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 2]);
 const DRAFT_HASH = createHash("sha256").update(DRAFT_CLIP).digest("hex");
 const HOUR_MS = 60 * 60 * 1000;
+const DRAFT_INPUT_UNKNOWN = "ark:cost:draft-input-unknown";
+
+// source: BytePlus bill 2026-10-08 (a 4 s 1080p final: 341,880 tokens, billed at the video-in rate)
+const BILLED_FINAL_TASK = {
+  ...LIVE_FINAL_TASK,
+  duration: 4,
+  usage: { completion_tokens: 341_880, total_tokens: 341_880 }
+};
 const model25 = resolveArkModel(MODEL_25, "intl");
 
 let temp: TempFiles;
@@ -92,6 +100,12 @@ function journalWithDraft(record: object = {}): FakeJournal {
   return journal;
 }
 
+/** The estimate of a resolved final whose draft record has these extra fields. */
+function estimateFinalWith(record: object): { usd: number } {
+  const ctx = createTestCtx({ journal: journalWithDraft(record) });
+  return createVideoHandler(ctx).estimate(finalRequest());
+}
+
 /** Freezes `Date.now()` at the given moment. */
 function freezeClock(at: number): void {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -130,8 +144,15 @@ describe("draft helpers", () => {
       taskId: "cgt-1",
       model: "m",
       seed: 7,
-      createdAt: 1
+      createdAt: 1,
+      withVideoInput: undefined
     });
+    expect(
+      parseDraftRecord('{"taskId":"cgt-1","model":"m","createdAt":1,"withVideoInput":true}')
+    ).toMatchObject({ withVideoInput: true });
+    expect(
+      parseDraftRecord('{"taskId":"cgt-1","model":"m","createdAt":1,"withVideoInput":"yes"}')
+    ).toMatchObject({ withVideoInput: undefined });
     expect(parseDraftRecord("{not json")).toBeUndefined();
     expect(parseDraftRecord('{"taskId":"cgt-1","model":"m"}')).toBeUndefined();
   });
@@ -226,6 +247,39 @@ describe("estimate: draft and final", () => {
 
     expect(handler.estimate(final)).toEqual({ usd: 2.866_793 });
     expect(handler.estimate({ ...final, seconds: 10 })).toEqual({ usd: 5.709_893 });
+  });
+
+  it("prices a resolved final by its draft's video input, at the base price when unknown", () => {
+    expect(estimateFinalWith({ withVideoInput: true })).toEqual({ usd: 1.715_175 });
+    expect(estimateFinalWith({ withVideoInput: false })).toEqual({ usd: 2.866_793 });
+    expect(estimateFinalWith({})).toEqual({ usd: 2.866_793 });
+  });
+
+  it("estimates a final at the base price when fromDraft is not an object", () => {
+    const handler = createVideoHandler(createTestCtx({ journal: journalWithDraft() }));
+    const final = { model: MODEL_25, prompt: "", fromDraft: "draft" as unknown as VideoFile };
+
+    expect(handler.estimate(final)).toEqual({ usd: 2.866_793 });
+  });
+
+  it("estimates a resolved final at the base price while the journal is closed", () => {
+    const journal = journalWithDraft({ withVideoInput: true });
+    journal.open = false;
+
+    const handler = createVideoHandler(createTestCtx({ journal }));
+
+    expect(handler.estimate(finalRequest())).toEqual({ usd: 2.866_793 });
+  });
+
+  it("fails at plan time for a final whose seconds the model does not take", () => {
+    const handler = createVideoHandler(createTestCtx());
+    const final: EstimateRequest = { model: MODEL_25, prompt: "", fromDraft: { $ref: "draft" } };
+
+    for (const seconds of [-1, 0, 31]) {
+      expect(() => handler.estimate({ ...final, seconds })).toThrow(
+        `[ai] Model ${MODEL_25} takes 4 to 30 seconds.\n  Got ${seconds}; set input.seconds in that range.`
+      );
+    }
   });
 
   it("fails at plan time for a final on a model without a draft mode (mini), with no fetch", () => {
@@ -430,7 +484,8 @@ describe("poll: draft record and meta", () => {
           taskId: DRAFT_TASK_ID,
           model: MODEL_25,
           seed: 76_282,
-          createdAt: DRAFT_CREATED_MS
+          createdAt: DRAFT_CREATED_MS,
+          withVideoInput: false
         })
       }
     ]);
@@ -517,6 +572,69 @@ describe("poll: draft record and meta", () => {
     });
     expect(callsOf(fetchMock)[1]?.url).toBe(FINAL_VIDEO_URL);
     expect(ctx.journal.putProviderRecords).not.toHaveBeenCalled();
+  });
+
+  it("prices a final at the video-in 1080p rate when its draft had a reference video", async () => {
+    stubFetch(
+      jsonResponse(200, LIVE_DRAFT_TASK),
+      bytesResponse(DRAFT_CLIP),
+      jsonResponse(200, BILLED_FINAL_TASK),
+      bytesResponse(FINAL_CLIP)
+    );
+    const ctx = createTestCtx();
+    const handler = createVideoHandler(ctx);
+    const draft = {
+      model: MODEL_25,
+      prompt: "p",
+      params: { draft: true, refUrls: ["https://cdn.example/walk.mp4"] }
+    };
+
+    await handler.poll(DRAFT_TASK_ID, draft, {});
+    const result = await handler.poll(FINAL_TASK_ID, finalRequest(), {});
+
+    // The real bill: 341,880 tokens at $7.0 per 1M, not $11.7.
+    expect(result).toMatchObject({ state: "done", costUsd: 2.393_16 });
+    expect(ctx.log.warn).not.toHaveBeenCalledWith(DRAFT_INPUT_UNKNOWN, expect.anything());
+  });
+
+  it("prices a final at the base 1080p rate when its draft had no reference video", async () => {
+    stubFetch(
+      jsonResponse(200, LIVE_DRAFT_TASK),
+      bytesResponse(DRAFT_CLIP),
+      jsonResponse(200, BILLED_FINAL_TASK),
+      bytesResponse(FINAL_CLIP)
+    );
+    const ctx = createTestCtx();
+    const handler = createVideoHandler(ctx);
+    const draft = { model: MODEL_25, prompt: "p", image, params: { draft: true } };
+
+    await handler.poll(DRAFT_TASK_ID, draft, {});
+    const result = await handler.poll(FINAL_TASK_ID, finalRequest(), {});
+
+    expect(result).toMatchObject({ state: "done", costUsd: 3.999_996 });
+    expect(ctx.log.warn).not.toHaveBeenCalledWith(DRAFT_INPUT_UNKNOWN, expect.anything());
+  });
+
+  it("prices a final of an old draft record at the base rate and warns", async () => {
+    stubFetch(jsonResponse(200, BILLED_FINAL_TASK), bytesResponse(FINAL_CLIP));
+    const ctx = createTestCtx({ journal: journalWithDraft() });
+
+    const result = await createVideoHandler(ctx).poll(FINAL_TASK_ID, finalRequest(), {});
+
+    expect(result).toMatchObject({ state: "done", costUsd: 3.999_996 });
+    expect(ctx.log.warn).toHaveBeenCalledWith(DRAFT_INPUT_UNKNOWN, { taskId: FINAL_TASK_ID });
+  });
+
+  it("prices a final at the base rate and warns while the journal is closed", async () => {
+    stubFetch(jsonResponse(200, BILLED_FINAL_TASK), bytesResponse(FINAL_CLIP));
+    const journal = journalWithDraft({ withVideoInput: true });
+    journal.open = false;
+    const ctx = createTestCtx({ journal });
+
+    const result = await createVideoHandler(ctx).poll(FINAL_TASK_ID, finalRequest(), {});
+
+    expect(result).toMatchObject({ state: "done", costUsd: 3.999_996 });
+    expect(ctx.log.warn).toHaveBeenCalledWith(DRAFT_INPUT_UNKNOWN, { taskId: FINAL_TASK_ID });
   });
 
   it("downloads the live draft clip from its content URL", async () => {
