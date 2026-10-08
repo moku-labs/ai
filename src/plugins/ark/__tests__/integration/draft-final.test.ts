@@ -267,6 +267,22 @@ describe("ark: image → draft → final through the full framework", () => {
     expect(bytes).toEqual(expect.arrayContaining([KEY_IMAGE, DRAFT_CLIP, FINAL_CLIP]));
   });
 
+  it("prices the final at the video-in rate when the draft had a reference video", async () => {
+    const withVideo = DRAFT_FINAL_YAML.replace(
+      "params: { draft: true }",
+      'params: { draft: true, refUrls: ["https://cdn.example/walk.mp4"] }'
+    );
+    await writeFile(path.join(tempDir, "e01.moku.yaml"), withVideo);
+    stubArk();
+    const app = await startApp();
+
+    const result = await app.runner.run({ files });
+
+    // Key, then the draft and the final both at the video-in rows: $6.4 and $7.0 per 1M.
+    expect(result).toMatchObject({ status: "done", totals: { total: 3, done: 3, failed: 0 } });
+    expect(result.totals.spendUsd).toBeCloseTo(0.035 + 0.309_997 + 1.715_175, 6);
+  });
+
   it("reuses all three on a second run, with no fetch at all", async () => {
     await writeFile(path.join(tempDir, "e01.moku.yaml"), DRAFT_FINAL_YAML);
     const fetchMock = stubArk();

@@ -3,6 +3,21 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.15.3 - 2026-10-08
+
+### Fixed
+
+- **ark: a final from a draft is priced by the draft's video input.** Ark bills a final at the
+  rate of its draft: "with video input" when the draft had a reference video. The final was priced
+  by its own request, which sends no video, so the base 1080p price was recorded: $11.7 per 1M
+  instead of $7.0 on `dreamina-seedance-2-5-260628` (341,880 tokens: $4.00 recorded, $2.39 billed).
+  Now the draft record keeps `withVideoInput`, and the final's cost and estimate use it. A draft
+  record written before this version has no such field: its final keeps the base price (the higher
+  one) and logs `ark:cost:draft-input-unknown`. Costs already in the journal are not changed.
+- **ark: the estimate of a final from a draft checks `seconds`.** A value outside the model's
+  limits gave a wrong estimate, a negative one below zero. Now it fails at plan time with the
+  seconds error. Absent `seconds` is still 5.
+
 ## 0.16.0 - 2026-10-07
 
 ### Added
@@ -21,12 +36,6 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
   `InvalidParameter.TaskTypeMismatch` get a second line with the reason, at submit (HTTP 400) and
   on a task that failed after it started. Matched on Ark's code. Class, `status` and `code` are
   unchanged.
-
-### Fixed
-
-- **ark: the estimate of a final from a draft checks `seconds`.** A value outside the model's
-  limits gave a wrong estimate, a negative one below zero. Now it fails at plan time with the
-  seconds error. Absent `seconds` is still 5.
 
 ## 0.15.1 - 2026-10-07
 

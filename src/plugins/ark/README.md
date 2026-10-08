@@ -286,12 +286,18 @@ Cost = `usage.completion_tokens / 1e6 × price`. The price is the "with video in
 `refUrls` holds a video URL, the base one otherwise. At 1080p a row's 1080p price is used when it has
 one. `priceOverrides[model]` (USD) wins. cn prices are divided by `cnyPerUsd`.
 
+A final from a draft is priced by its draft, as ark bills it: the "with video input" 1080p price
+when the draft had a video in `refUrls`, the base 1080p price when it had none. See
+[Draft → final](#draft--final).
+
 The estimate is `width × height × (24 × seconds + 1) / 1024` tokens, rounded down, at the base
 price. Sizes: 480p 864×496, 720p 1280×720, 1080p 1920×1080. 9:16 has the same area; other ratios use
 the same area too. This matched the live bills exactly: 480p 5 s = 50,638 tokens ($0.3545 on
 `dreamina-seedance-2-0-260128`), 1080p 5 s = 245,025 tokens. A draft is estimated at 480p, a final at
 1080p for `seconds` (5 when absent). The final's `seconds` must be within the model's limits, or the
-estimate fails with the seconds error. An edit with `seconds: -1` is estimated at the model's longest
+estimate fails with the seconds error. A final whose draft clip is resolved and had a reference
+video is estimated at the "with video input" price; a final that still names its draft by `$ref` is
+estimated at the base price, the upper bound. An edit with `seconds: -1` is estimated at the model's longest
 clip.
 
 `meta` is `{ taskId, model, seconds, resolution, completionTokens, seed?, draft?, draftTaskId?, lastFrameUrl? }`.
@@ -356,7 +362,9 @@ set `480p`. Errors, before any call:
 
 When the draft task succeeds, ark keeps its task id in the journal (`provider_records`, kind
 `draft`). The key is the sha256 of the clip, the same hash the store gives the artifact. So a
-`$ref` to the draft item finds it. The record is scoped to this region and API key.
+`$ref` to the draft item finds it. The record is scoped to this region and API key. Its value is
+`{ taskId, model, seed, createdAt, withVideoInput }`. `withVideoInput` is true when the draft's
+`refUrls` held a video URL.
 
 **Final.** `fromDraft: { $ref: <draft item> }` and the same `model`. `prompt` may be left out. The
 final never reads `prompt`, `seconds`, `aspect`, `audio` or `negative`. The body is:
@@ -392,6 +400,20 @@ const final = await app.video.generate(
 );
 // => { video, mimeType: "video/mp4", costUsd: 2.866793, meta: { resolution: "1080p", draftTaskId, ... } }
 ```
+
+**Price of a final.** Ark bills a final at 1080p, at the rate of its draft: "with video input" when
+the draft had a reference video, base when it had none. The final's own request sends no video, so
+the rate comes from the draft record.
+
+| Draft record | Price per 1M tokens (`dreamina-seedance-2-5-260628`) | 341,880 tokens |
+|---|---|---|
+| `withVideoInput: true` | $7.0 | $2.39316 |
+| `withVideoInput: false` | $11.7 | $3.999996 |
+| No `withVideoInput` (written before 0.15.3), or no record | $11.7, with an `ark:cost:draft-input-unknown` warning | $3.999996 |
+
+A record without the field gets the base price: it is the higher one, so the recorded cost is never
+below the bill. Such a record is gone in 7 days, with its draft id. To fix one sooner, bump
+`params.generation` on the draft item.
 
 Before `app.start()` the journal is closed: a draft is still returned, but its record is skipped with
 one `ark:journal:closed` warning, and a final fails.

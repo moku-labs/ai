@@ -1601,7 +1601,9 @@ content.video_url at once (expires 24 h) → done video/mp4, meta { taskId, mode
 seconds, resolution, completionTokens, lastFrameUrl? }; failed + /SensitiveContent/
 code → flagged; failed other → terminal 400; expired/cancelled → terminal 410.
 Cost = usage.completion_tokens / 1e6 × price (withVideoInput when refUrls holds a video
-URL; priceOverrides[model] USD wins; cn ÷ cnyPerUsd). Estimate (no file read) = w×h×24×
+URL; a final from a draft uses its draft's withVideoInput from the draft record, base
+plus warn ark:cost:draft-input-unknown when the record has none; priceOverrides[model]
+USD wins; cn ÷ cnyPerUsd). Estimate (no file read) = w×h×24×
 seconds/1024 tokens at the base price (480p 864×480, 720p 1280×720, 1080p 1920×1080).
 
 Face refusal: a SensitiveContent refusal of a request with a plain local image →
