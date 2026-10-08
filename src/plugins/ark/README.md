@@ -364,7 +364,8 @@ When the draft task succeeds, ark keeps its task id in the journal (`provider_re
 `draft`). The key is the sha256 of the clip, the same hash the store gives the artifact. So a
 `$ref` to the draft item finds it. The record is scoped to this region and API key. Its value is
 `{ taskId, model, seed, createdAt, withVideoInput }`. `withVideoInput` is true when the draft's
-`refUrls` held a video URL.
+`refUrls` held a video URL. Read it from code with `app.ark.draftRecord(hash)`: see
+[Draft record](#draft-record).
 
 **Final.** `fromDraft: { $ref: <draft item> }` and the same `model`. `prompt` may be left out. The
 final never reads `prompt`, `seconds`, `aspect`, `audio` or `negative`. The body is:
@@ -638,6 +639,50 @@ app.ark.info();
 No network call. `configured.video` and `configured.image` are true when the API key is set,
 `configured.assets` when both the access key and the secret key are set. `models` and `imageModels`
 list the configured region's ids.
+
+### Draft record
+
+```ts
+app.ark.draftRecord(hash: string): ArkDraftRecord | undefined
+```
+
+Reads the record of a draft clip. `hash` is the sha256 hex of the clip: the hash the store gives
+the artifact, the same value as `fromDraft.hash`. The call is sync and makes no network call. It
+writes no log line.
+
+The type is available as `Ark.ArkDraftRecord` from `@moku-labs/ai`:
+
+```ts
+type ArkDraftRecord = {
+  taskId: string;
+  model: string;
+  seed: number | undefined;
+  createdAt: number; // ms since the epoch; the draft id is valid 7 days from here
+  withVideoInput: boolean | undefined; // undefined on a record written before 0.15.3
+};
+```
+
+It returns undefined, and never throws, when:
+
+- the API key is not set, or is empty;
+- the journal is closed, as it is before `app.start()`;
+- there is no record for this hash;
+- the stored record is damaged.
+
+The lookup is scoped to this region and API key. A draft made with another key or in another
+region is not found. The API key and the account fingerprint are never returned.
+
+It does not check the age or the model. Compare `createdAt` yourself before a final:
+
+```ts
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+const record = app.ark.draftRecord(draftSha256);
+// => { taskId: "cgt-20260930171041-8mowm", model: "dreamina-seedance-2-5-260628",
+//      seed: 76282, createdAt: 1790759442000, withVideoInput: false }
+const isFresh = record !== undefined && Date.now() - record.createdAt < SEVEN_DAYS_MS;
+// isFresh: queue the final. Otherwise render the draft again first.
+```
 
 ### Asset library
 

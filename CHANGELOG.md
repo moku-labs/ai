@@ -3,6 +3,17 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.17.0 - 2026-10-08
+
+### Added
+
+- **ark: `draftRecord(hash)`.** `app.ark.draftRecord(hash)` reads the record of a draft clip by
+  the clip's sha256: `{ taskId, model, seed, createdAt, withVideoInput }`. No network call. It
+  returns undefined, and never throws, when the API key is not set, the journal is still closed
+  before `app.start()`, there is no record, or the record is damaged. It does not check the age or
+  the model: compare `createdAt` before a final. The type ships as `Ark.ArkDraftRecord`. A consumer
+  no longer needs the account fingerprint to find a draft.
+
 ## 0.15.3 - 2026-10-08
 
 ### Fixed

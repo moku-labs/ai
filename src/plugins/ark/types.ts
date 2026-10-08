@@ -117,8 +117,37 @@ export type ArkInfo = {
 };
 
 /**
+ * A draft task, as kept in the journal and as `app.ark.draftRecord(hash)`
+ * returns it. The API key and the account fingerprint are not part of it.
+ *
+ * @example
+ * ```ts
+ * const record: ArkDraftRecord = {
+ *   taskId: "cgt-20260930171041-8mowm", model: "dreamina-seedance-2-5-260628",
+ *   seed: 76282, createdAt: 1790759442000, withVideoInput: false
+ * };
+ * ```
+ */
+export type ArkDraftRecord = {
+  /** The draft task id a final names in `draft_task.id`. */
+  taskId: string;
+  /** The model that made the draft; a final must use the same one. */
+  model: string;
+  /** The seed ark used, when it sent one. The final reuses it on ark's side. */
+  seed: number | undefined;
+  /** Task creation time, ms since the epoch. The draft id is valid 7 days from here. */
+  createdAt: number;
+  /**
+   * Whether the draft's request had a reference video: ark bills the final at
+   * the video-in rate when it did. Undefined on a record written before 0.15.3.
+   */
+  withVideoInput: boolean | undefined;
+};
+
+/**
  * Public API surface of the `ark` plugin, exposed as `app.ark`. A thin
- * observability surface: the real capability surface is the three registered
+ * observability surface: what this instance can do, the record of a draft,
+ * and the asset library. The real capability surface is the three registered
  * handlers (`video/ark`, `asset/ark`, `image/ark`), used through `app.video`,
  * `app.asset`, `app.image` and `app.runner`.
  *
@@ -142,6 +171,25 @@ export type ArkApi = {
    * ```
    */
   info(): ArkInfo;
+  /**
+   * Reads the record of a draft clip, by the clip's sha256, among this
+   * instance's records: its region and API key. Sync, no network call, no log
+   * line. It does not check the 7-day age or the model: compare `createdAt`.
+   * Never throws. Undefined when the API key is not set, the journal is still
+   * closed before `app.start()`, there is no record, or the record is damaged.
+   *
+   * @param hash - The sha256 hex of the draft clip: the store's artifact hash, `fromDraft.hash`.
+   * @returns The draft record, or undefined.
+   * @example
+   * ```ts
+   * // Before queuing a paid 1080p final, check its draft exists and is younger than 7 days.
+   * const hash = "a4e9a46edf66ce5a0c487357e86b32de8a2d61792b02e718c1c8a49a0d3a9277";
+   * const record = app.ark.draftRecord(hash);
+   * // => { taskId: "cgt-20260930171041-8mowm", model: "dreamina-seedance-2-5-260628", seed: 76282, createdAt: 1790759442000, withVideoInput: false }
+   * const isFresh = record !== undefined && Date.now() - record.createdAt < 7 * 24 * 60 * 60 * 1000;
+   * ```
+   */
+  draftRecord(hash: string): ArkDraftRecord | undefined;
   /**
    * Lists every AIGC asset group, following all numbered pages.
    *

@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { EnvProvider } from "@moku-labs/common";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { Ark } from "../../../../index";
 import { createApp } from "../../../../index";
 import {
   bytesResponse,
@@ -167,16 +168,16 @@ describe("ark: image → draft → final through the full framework", () => {
   const stops: Array<() => Promise<void>> = [];
 
   /**
-   * A started app from src/index.ts, with the journal, store and env pinned
-   * to fixtures and fast polling everywhere.
+   * An app from src/index.ts, not started yet, with the journal, store and
+   * env pinned to fixtures and fast polling everywhere.
    *
-   * @returns The started app.
+   * @returns The app, before `app.start()`.
    * @example
    * ```ts
-   * const app = await startApp();
+   * const app = buildApp();
    * ```
    */
-  async function startApp() {
+  function buildApp() {
     // Core plugins take createApp overrides at runtime; a named object skips the excess-key check.
     const pluginConfigs = {
       journal: { path: path.join(tempDir, "journal.db") },
@@ -185,7 +186,20 @@ describe("ark: image → draft → final through the full framework", () => {
       runner: { retryBaseMs: 1, pollIntervalMs: 1 },
       video: { pollIntervalMs: 1 }
     };
-    const app = createApp({ pluginConfigs });
+    return createApp({ pluginConfigs });
+  }
+
+  /**
+   * A started app from {@link buildApp}, stopped by {@link stopAll}.
+   *
+   * @returns The started app.
+   * @example
+   * ```ts
+   * const app = await startApp();
+   * ```
+   */
+  async function startApp() {
+    const app = buildApp();
     await app.start();
     stops.push(() => app.stop());
     return app;
@@ -281,6 +295,31 @@ describe("ark: image → draft → final through the full framework", () => {
     // Key, then the draft and the final both at the video-in rows: $6.4 and $7.0 per 1M.
     expect(result).toMatchObject({ status: "done", totals: { total: 3, done: 3, failed: 0 } });
     expect(result.totals.spendUsd).toBeCloseTo(0.035 + 0.309_997 + 1.715_175, 6);
+  });
+
+  it("reads the draft's record through app.ark.draftRecord, and nothing before app.start()", async () => {
+    await writeFile(path.join(tempDir, "e01.moku.yaml"), DRAFT_ITEMS);
+    stubArk();
+    const hash = createHash("sha256").update(DRAFT_CLIP).digest("hex");
+
+    // Before app.start() the journal is closed: no record, no throw.
+    expect(buildApp().ark.draftRecord(hash)).toBeUndefined();
+
+    const app = await startApp();
+    expectTypeOf(app.ark.draftRecord).toEqualTypeOf<
+      (hash: string) => Ark.ArkDraftRecord | undefined
+    >();
+    expect(app.ark.draftRecord(hash)).toBeUndefined();
+
+    await app.runner.run({ files });
+
+    expect(app.ark.draftRecord(hash)).toEqual({
+      taskId: DRAFT_TASK_ID,
+      model: MODEL,
+      seed: LIVE_DRAFT_TASK.seed,
+      createdAt: DRAFT_CREATED_MS,
+      withVideoInput: false
+    });
   });
 
   it("reuses all three on a second run, with no fetch at all", async () => {
