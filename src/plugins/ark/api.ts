@@ -1,28 +1,18 @@
 /**
- * @file ark provider plugin — API factory (`app.ark.info()`).
+ * @file ark provider plugin — API factory (`app.ark`: `info()`,
+ * `draftRecord(hash)` and the asset library).
  */
+import { isSet } from "./account";
 import { deleteAsset, deleteAssetGroup, listAssetGroups, listAssets } from "./asset/library";
 import { imageModelsOf } from "./image/models";
 import { modelsOf } from "./models";
-import type { ArkApi, ArkAsset, ArkAssetGroup, ArkContext, ArkInfo } from "./types";
+import type { ArkApi, ArkAsset, ArkAssetGroup, ArkContext, ArkDraftRecord, ArkInfo } from "./types";
+import { draftRecordOf } from "./video/draft";
 
 /**
- * Whether an env var holds a non-empty value. Reads through `ctx.env.get`,
- * so it never throws.
+ * Creates the ark information, draft record and asset library API surface.
  *
- * @param ctx - Plugin context (env).
- * @param name - The env var name.
- * @returns True when set and not empty.
- */
-function isSet(ctx: ArkContext, name: string): boolean {
-  const value = ctx.env.get(name);
-  return value !== undefined && value !== "";
-}
-
-/**
- * Creates the ark information and asset library API surface.
- *
- * @param ctx - Plugin context (config, env).
+ * @param ctx - Plugin context (config, env, journal).
  * @returns The `app.ark` API.
  * @example
  * ```ts
@@ -45,6 +35,7 @@ export function createArkApi(ctx: ArkContext): ArkApi {
         imageModels: imageModelsOf(ctx.config.region)
       };
     },
+    draftRecord: (hash: string): ArkDraftRecord | undefined => draftRecordOf(ctx, hash),
     listAssetGroups: (opts?: { signal?: AbortSignal }): Promise<ArkAssetGroup[]> =>
       listAssetGroups(ctx, opts?.signal),
     listAssets: (

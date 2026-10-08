@@ -5,7 +5,7 @@
  * turned back into it. The region is part of it, because the same key string
  * in two regions is two accounts. The API key gets its own fingerprint
  * ({@link apiAccountOf}): a draft task id is valid only for the API key that
- * made it.
+ * made it. {@link isSet} tells whether a key is there at all, without throwing.
  */
 import { createHash } from "node:crypto";
 import type { ArkContext, ArkRegion } from "./types";
@@ -50,6 +50,19 @@ export function apiAccountOf(region: ArkRegion, apiKey: string): string {
     .update(`moku-ai:api:${region}:${apiKey}`)
     .digest("hex")
     .slice(0, FINGERPRINT_LENGTH);
+}
+
+/**
+ * Whether an env var holds a non-empty value. Reads through `ctx.env.get`,
+ * so it never throws.
+ *
+ * @param ctx - Plugin context (env).
+ * @param name - The env var name.
+ * @returns True when set and not empty.
+ */
+export function isSet(ctx: ArkContext, name: string): boolean {
+  const value = ctx.env.get(name);
+  return value !== undefined && value !== "";
 }
 
 /**

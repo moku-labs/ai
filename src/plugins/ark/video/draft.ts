@@ -10,30 +10,11 @@
  * input, so the final's price reads it from this record.
  */
 import { createHash } from "node:crypto";
-import { apiAccountOf } from "../account";
+import { apiAccountOf, isSet } from "../account";
 import { readField, readNumber, readString } from "../client";
 import type { ArkVideoModel } from "../models";
 import { arkModels } from "../models";
-import type { ArkContext, ArkRegion, EstimateRequest } from "../types";
-
-/**
- * A draft task, as kept in the journal.
- */
-export type DraftRecord = {
-  /** The draft task id a final names in `draft_task.id`. */
-  taskId: string;
-  /** The model that made the draft; a final must use the same one. */
-  model: string;
-  /** The seed ark used, when it sent one. The final reuses it on ark's side. */
-  seed: number | undefined;
-  /** Task creation time, ms since the epoch. The draft id is valid 7 days from here. */
-  createdAt: number;
-  /**
-   * Whether the draft's request had a reference video: ark bills the final at
-   * the video-in rate when it did. Undefined on a record written before 0.15.3.
-   */
-  withVideoInput: boolean | undefined;
-};
+import type { ArkContext, ArkDraftRecord, ArkRegion, EstimateRequest } from "../types";
 
 /**
  * The only resolution of a draft render.
@@ -216,7 +197,7 @@ export function recordDraft(
   if (!isJournalUsable(ctx, taskId)) return;
 
   const createdAtSeconds = readNumber(task, "created_at");
-  const record: DraftRecord = {
+  const record: ArkDraftRecord = {
     taskId,
     model,
     seed: readNumber(task, "seed"),
@@ -246,7 +227,7 @@ export function recordDraft(
  * // => { taskId: "cgt-1", model: "m", seed: undefined, createdAt: 1, withVideoInput: undefined }
  * ```
  */
-export function parseDraftRecord(value: string): DraftRecord | undefined {
+export function parseDraftRecord(value: string): ArkDraftRecord | undefined {
   let json: unknown;
   try {
     json = JSON.parse(value);
@@ -274,7 +255,7 @@ export function parseDraftRecord(value: string): DraftRecord | undefined {
  * @param hash - `fromDraft.hash`: the sha256 of the draft clip.
  * @returns The record, or undefined when there is none.
  */
-export function findDraft(ctx: ArkContext, hash: string): DraftRecord | undefined {
+export function findDraft(ctx: ArkContext, hash: string): ArkDraftRecord | undefined {
   const value = ctx.journal.findProviderRecord({
     provider: PROVIDER,
     account: draftAccount(ctx),
@@ -282,6 +263,23 @@ export function findDraft(ctx: ArkContext, hash: string): DraftRecord | undefine
     key: hash
   });
   return value === undefined ? undefined : parseDraftRecord(value);
+}
+
+/**
+ * The draft record of a draft clip, for a caller that must not fail:
+ * `app.ark.draftRecord(hash)` and the price of a final. Never throws, makes
+ * no call and logs nothing. The journal is read only when the API key is set
+ * and the journal is open. The age and the model are not checked.
+ *
+ * @param ctx - Plugin context (config, env, journal).
+ * @param hash - `fromDraft.hash`: the sha256 of the draft clip.
+ * @returns The record, or undefined: no API key, a closed journal, no record, or a damaged record.
+ */
+export function draftRecordOf(ctx: ArkContext, hash: string): ArkDraftRecord | undefined {
+  if (!isSet(ctx, ctx.config.apiKeyEnv)) return undefined;
+  if (!ctx.journal.isOpen()) return undefined;
+
+  return findDraft(ctx, hash);
 }
 
 /**
@@ -293,9 +291,7 @@ export function findDraft(ctx: ArkContext, hash: string): DraftRecord | undefine
  * @returns The draft's `withVideoInput`, or undefined when it is not known: no API key, a closed journal, no record, or a record written before 0.15.3.
  */
 export function draftVideoInputOf(ctx: ArkContext, hash: string): boolean | undefined {
-  const hasApiKey = ctx.env.get(ctx.config.apiKeyEnv) !== undefined;
-  if (!hasApiKey || !ctx.journal.isOpen()) return undefined;
-  return findDraft(ctx, hash)?.withVideoInput;
+  return draftRecordOf(ctx, hash)?.withVideoInput;
 }
 
 /**

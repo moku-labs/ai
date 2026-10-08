@@ -8,10 +8,9 @@
  */
 import type { VideoFile } from "../../video/contract";
 import type { ArkVideoModel } from "../models";
-import type { ArkContext, EstimateRequest } from "../types";
+import type { ArkContext, ArkDraftRecord, EstimateRequest } from "../types";
 import type { ArkContentItem } from "./body";
 import { isArkParameter, unknownParameterError } from "./body";
-import type { DraftRecord } from "./draft";
 import { DRAFT_TTL_MS, draftModelOf, FINAL_RESOLUTION, findDraft } from "./draft";
 
 /**
@@ -185,7 +184,7 @@ export function checkFinalRequest(model: ArkVideoModel, request: FinalShape): Ch
  * @returns The draft record.
  * @throws {Error} A plain two-line error for each broken rule.
  */
-export function resolveDraft(ctx: ArkContext, model: ArkVideoModel, hash: string): DraftRecord {
+export function resolveDraft(ctx: ArkContext, model: ArkVideoModel, hash: string): ArkDraftRecord {
   if (!ctx.journal.isOpen()) throw new Error(JOURNAL_CLOSED_ERROR);
 
   const draft = findDraft(ctx, hash);
