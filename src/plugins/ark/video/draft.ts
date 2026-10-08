@@ -2,10 +2,12 @@
  * @file ark draft mode — a Seedance 2.5 draft is a cheap 480p render
  * (`params.draft: true`); a final re-renders it at 1080p from the draft task
  * alone. This module checks the draft flag (pure) and keeps the draft record:
- * when a draft task succeeds, its task id, model, seed and creation time go
- * into the journal's `provider_records`, keyed by the sha256 of the clip
- * bytes. That is the hash the store gives the artifact, so a final that
- * `$ref`s the draft item (`fromDraft.hash`) finds its task.
+ * when a draft task succeeds, its task id, model, seed, creation time and
+ * whether its request had a reference video go into the journal's
+ * `provider_records`, keyed by the sha256 of the clip bytes. That is the hash
+ * the store gives the artifact, so a final that `$ref`s the draft item
+ * (`fromDraft.hash`) finds its task. Ark bills a final by the draft's video
+ * input, so the final's price reads it from this record.
  */
 import { createHash } from "node:crypto";
 import { apiAccountOf } from "../account";
@@ -26,6 +28,11 @@ export type DraftRecord = {
   seed: number | undefined;
   /** Task creation time, ms since the epoch. The draft id is valid 7 days from here. */
   createdAt: number;
+  /**
+   * Whether the draft's request had a reference video: ark bills the final at
+   * the video-in rate when it did. Undefined on a record written before 0.15.3.
+   */
+  withVideoInput: boolean | undefined;
 };
 
 /**
@@ -196,13 +203,15 @@ function isJournalUsable(ctx: ArkContext, taskId: string): boolean {
  * @param task - The succeeded task body.
  * @param model - The model id the draft was made with.
  * @param clip - The downloaded clip bytes.
+ * @param withVideoInput - Whether the draft's request had a reference video.
  */
 export function recordDraft(
   ctx: ArkContext,
   taskId: string,
   task: unknown,
   model: string,
-  clip: Uint8Array
+  clip: Uint8Array,
+  withVideoInput: boolean
 ): void {
   if (!isJournalUsable(ctx, taskId)) return;
 
@@ -211,7 +220,8 @@ export function recordDraft(
     taskId,
     model,
     seed: readNumber(task, "seed"),
-    createdAt: createdAtSeconds === undefined ? Date.now() : createdAtSeconds * MS_PER_SECOND
+    createdAt: createdAtSeconds === undefined ? Date.now() : createdAtSeconds * MS_PER_SECOND,
+    withVideoInput
   };
   ctx.journal.putProviderRecords([
     {
@@ -232,7 +242,8 @@ export function recordDraft(
  * @returns The record, or undefined when it is not one.
  * @example
  * ```ts
- * parseDraftRecord('{"taskId":"cgt-1","model":"m","createdAt":1}'); // => { taskId: "cgt-1", model: "m", seed: undefined, createdAt: 1 }
+ * parseDraftRecord('{"taskId":"cgt-1","model":"m","createdAt":1}');
+ * // => { taskId: "cgt-1", model: "m", seed: undefined, createdAt: 1, withVideoInput: undefined }
  * ```
  */
 export function parseDraftRecord(value: string): DraftRecord | undefined {
@@ -242,11 +253,17 @@ export function parseDraftRecord(value: string): DraftRecord | undefined {
   } catch {
     return undefined;
   }
+
+  // The required fields: a record without them is damaged.
   const taskId = readString(json, "taskId");
   const model = readString(json, "model");
   const createdAt = readNumber(json, "createdAt");
   if (taskId === undefined || model === undefined || createdAt === undefined) return undefined;
-  return { taskId, model, seed: readNumber(json, "seed"), createdAt };
+
+  // A record written before 0.15.3 has no withVideoInput.
+  const videoInput = readField(json, "withVideoInput");
+  const withVideoInput = typeof videoInput === "boolean" ? videoInput : undefined;
+  return { taskId, model, seed: readNumber(json, "seed"), createdAt, withVideoInput };
 }
 
 /**
@@ -265,6 +282,20 @@ export function findDraft(ctx: ArkContext, hash: string): DraftRecord | undefine
     key: hash
   });
   return value === undefined ? undefined : parseDraftRecord(value);
+}
+
+/**
+ * Whether the draft of a final had a reference video: the price row ark bills
+ * the final at. Never throws and makes no call, so the estimate can use it.
+ *
+ * @param ctx - Plugin context (config, env, journal).
+ * @param hash - `fromDraft.hash`: the sha256 of the draft clip.
+ * @returns The draft's `withVideoInput`, or undefined when it is not known: no API key, a closed journal, no record, or a record written before 0.15.3.
+ */
+export function draftVideoInputOf(ctx: ArkContext, hash: string): boolean | undefined {
+  const hasApiKey = ctx.env.get(ctx.config.apiKeyEnv) !== undefined;
+  if (!hasApiKey || !ctx.journal.isOpen()) return undefined;
+  return findDraft(ctx, hash)?.withVideoInput;
 }
 
 /**

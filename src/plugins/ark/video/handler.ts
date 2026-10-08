@@ -5,7 +5,8 @@
  * a final from a draft (`fromDraft`) first finds the draft task in the
  * journal. `poll` reads the task once and, on success, downloads the clip
  * right away: its URL expires 24 h after success. A succeeded draft is
- * recorded in the journal, so a final can find it. There is no `execute`: the
+ * recorded in the journal, so a final can find it and is priced by the
+ * draft's video input, as ark bills it. There is no `execute`: the
  * runner and the `video` facade both drive `submit` + `poll`, so a task id is
  * journaled and never submitted twice. Estimate and actual cost share
  * `../prices.ts`.
@@ -37,7 +38,7 @@ import {
 } from "../models";
 import { costUsd, estimateTokens, estimateUsd, nearestResolution } from "../prices";
 import { dataPlaneUrl } from "../regions";
-import type { ArkContext, EstimateRequest } from "../types";
+import type { ArkContext, EstimateInput, EstimateRequest } from "../types";
 import type { ArkVideoBody } from "./body";
 import {
   assetRecordsOf,
@@ -53,6 +54,7 @@ import {
   checkDraftMode,
   DRAFT_RESOLUTION,
   defaultResolutionOf,
+  draftVideoInputOf,
   isDraftTask,
   recordDraft
 } from "./draft";
@@ -364,6 +366,28 @@ function completionTokensOf(
 }
 
 /**
+ * Whether a done clip is priced at the video-in rate. A final is billed by
+ * its draft: the draft record says whether the draft had a reference video.
+ * When the record does not say, the base rate (the higher one) is used and
+ * `ark:cost:draft-input-unknown` is logged. Any other clip is priced by its
+ * own request. Never throws: the task is already paid.
+ *
+ * @param ctx - Plugin context (config, env, journal, log).
+ * @param taskId - The task id, for the log.
+ * @param request - The request the task was submitted with.
+ * @returns True for the video-in price row.
+ */
+function videoInputOf(ctx: ArkContext, taskId: string, request: VideoRequest): boolean {
+  if (request.fromDraft === undefined) return hasVideoReferenceUrl(request);
+
+  const fromDraft = draftVideoInputOf(ctx, request.fromDraft.hash);
+  if (fromDraft !== undefined) return fromDraft;
+
+  ctx.log.warn("ark:cost:draft-input-unknown", { taskId });
+  return false;
+}
+
+/**
  * The draft fields of a done poll's meta: `draft: true` for a draft,
  * `draftTaskId` for a final, nothing otherwise.
  *
@@ -383,7 +407,8 @@ function draftMetaOf(task: unknown): { draft?: true; draftTaskId?: string } {
 /**
  * Downloads a succeeded task's clip (without the key, with its own longer
  * timeout), records a draft in the journal, and prices the clip from the
- * completion tokens; the request's values fill in what the task body lacks.
+ * completion tokens (a final at its draft's price row); the request's values
+ * fill in what the task body lacks.
  *
  * @param ctx - Plugin context.
  * @param taskId - The task id.
@@ -411,9 +436,11 @@ async function downloadClip(
     { timeoutMs: ctx.config.downloadTimeoutMs, signal, label: "video download" }
   );
 
-  // A draft is kept by its clip's hash, so a final can find its task.
+  // A draft is kept by its clip's hash, so a final can find its task and its price row.
   const model = resolveArkModel(request.model, ctx.config.region);
-  if (isDraftTask(task)) recordDraft(ctx, taskId, task, model.id, download.body);
+  if (isDraftTask(task)) {
+    recordDraft(ctx, taskId, task, model.id, download.body, hasVideoReferenceUrl(request));
+  }
 
   // Read what the task reports; the request fills in what it lacks (an edit's -1 is no length).
   const asked = request.seconds === SOURCE_SECONDS ? model.maxSeconds : request.seconds;
@@ -429,7 +456,7 @@ async function downloadClip(
 
   // Price the completion tokens; fall back to the estimate when ark sent none.
   const completionTokens = completionTokensOf(ctx, taskId, task, { resolution, seconds });
-  const withVideoInput = hasVideoReferenceUrl(request);
+  const withVideoInput = videoInputOf(ctx, taskId, request);
 
   // Report the clip as done.
   ctx.log.info("ark:video:done", { taskId, bytes: download.body.length });
@@ -490,23 +517,47 @@ async function pollTask(
 }
 
 /**
+ * Whether a final is estimated at the video-in rate: only when its draft clip
+ * is resolved and its record says the draft had a reference video. A draft
+ * still named by a build-file reference, or an unknown one, gives the base
+ * rate: the higher one, so the estimate is an upper bound.
+ *
+ * @param ctx - Plugin context (config, env, journal).
+ * @param fromDraft - `request.fromDraft`, resolved or not.
+ * @returns True for the video-in price row.
+ */
+function estimateVideoInputOf(ctx: ArkContext, fromDraft: EstimateInput): boolean {
+  const hash = readString(fromDraft, "hash");
+  if (hash === undefined) return false;
+  return draftVideoInputOf(ctx, hash) ?? false;
+}
+
+/**
  * Estimates a request without any call or file read: a final from a draft
  * is 1080p for `seconds` (5 when absent, checked against the model), a draft
  * is 480p, anything else its own seconds and resolution; all at the base
- * price. It throws the submit errors it can check before the files are
- * resolved, and the seconds error for a final.
+ * price, but a final whose draft is known to have had a reference video is at
+ * the video-in price, as ark bills it. It throws the submit errors it can
+ * check before the files are resolved, and the seconds error for a final.
  *
- * @param ctx - Plugin context (config).
+ * @param ctx - Plugin context (config, env, journal).
  * @param request - The request, files resolved or not.
  * @returns USD.
  * @throws {Error} A plain two-line error for a request the submit checks refuse, or a final's `seconds` outside the model's limits.
  */
 function estimateVideo(ctx: ArkContext, request: EstimateRequest): number {
   const model = resolveArkModel(request.model, ctx.config.region);
+  // A final is 1080p and priced by its draft's video input.
   if (request.fromDraft !== undefined) {
     const { resolution } = checkFinalRequest(model, request);
     const tokens = estimateTokens(resolution, checkSeconds(model, request.seconds));
-    return costUsd(ctx.config, model, tokens, false, resolution);
+    return costUsd(
+      ctx.config,
+      model,
+      tokens,
+      estimateVideoInputOf(ctx, request.fromDraft),
+      resolution
+    );
   }
 
   const isDraft = checkDraftMode(model, request);
@@ -521,7 +572,8 @@ function estimateVideo(ctx: ArkContext, request: EstimateRequest): number {
  * Creates the ark video handler registered under `("video", "ark")`.
  * `estimate` touches no network and never reads a file: it checks model,
  * region, draft mode, seconds and resolution with the submit errors, then
- * prices the estimated tokens at the base price. `submit` refuses a bad
+ * prices the estimated tokens at the base price (a final of a known draft
+ * with a reference video at the video-in price). `submit` refuses a bad
  * request, a bad asset or a draft it cannot find before the POST; once the
  * POST is sent it runs to the end, so a billed task always returns its id.
  *
