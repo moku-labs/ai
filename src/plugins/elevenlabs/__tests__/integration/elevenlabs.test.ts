@@ -105,7 +105,7 @@ describe("elevenlabs integration", () => {
 
     await app.start();
 
-    expect(app.registry.tasks()).toEqual(["voiceover", "sfx"]);
+    expect(app.registry.tasks()).toEqual(["voiceover", "sfx", "music"]);
     expect(app.registry.providers("sfx")).toEqual(["elevenlabs"]);
 
     await app.stop();
