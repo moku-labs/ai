@@ -29,6 +29,20 @@ export type ElevenlabsRequestOptions = {
 type ElevenlabsErrorDetail = { status?: string | undefined; message?: string | undefined };
 
 /**
+ * `detail.status` values that mean the content was refused, with the message
+ * each one throws. `bad_prompt` and `bad_composition_plan` are the Music API's
+ * refusals of copyrighted material (an artist name, known lyrics); the
+ * suggestion the response carries is never read into a message or a log.
+ */
+const FLAGGED_MESSAGES: Readonly<Record<string, string>> = {
+  content_policy_violation: "[ai] ElevenLabs rejected the request for content-policy reasons.",
+  bad_prompt:
+    "[ai] ElevenLabs refused the music prompt (bad_prompt).\n  Remove artist names, band names and known lyrics from the prompt.",
+  bad_composition_plan:
+    "[ai] ElevenLabs refused the composition plan (bad_composition_plan).\n  Remove artist names, band names and known lyrics from the chunks."
+};
+
+/**
  * Reads a `Retry-After` header value (seconds, or an HTTP-date) into a
  * millisecond delay.
  *
@@ -90,8 +104,8 @@ async function parseErrorBody(response: Response): Promise<unknown> {
 
 /**
  * Classifies a failed HTTP response into the plugin's provider error
- * taxonomy: a `detail.status` of `"content_policy_violation"` is flagged
- * regardless of numeric status; else 429 and 5xx are retryable; every other
+ * taxonomy: a `detail.status` of `"content_policy_violation"`, `"bad_prompt"`
+ * or `"bad_composition_plan"` is flagged regardless of numeric status; else 429 and 5xx are retryable; every other
  * 4xx is terminal. Never includes the response body in the thrown message —
  * only the status code (redaction rule, spec/10).
  *
@@ -104,11 +118,11 @@ async function parseErrorBody(response: Response): Promise<unknown> {
  */
 async function classifyHttpFailure(response: Response): Promise<Error> {
   const detail = extractErrorDetail(await parseErrorBody(response));
-  if (detail.status === "content_policy_violation") {
-    return new FlaggedProviderError(
-      "[ai] ElevenLabs rejected the request for content-policy reasons."
-    );
-  }
+  const flaggedMessage =
+    detail.status !== undefined && Object.hasOwn(FLAGGED_MESSAGES, detail.status)
+      ? FLAGGED_MESSAGES[detail.status]
+      : undefined;
+  if (flaggedMessage !== undefined) return new FlaggedProviderError(flaggedMessage);
   if (response.status === 429) {
     const retryAfterMs = retryAfterMsFromHeader(response.headers.get("retry-after"));
     return new RetryableProviderError("[ai] ElevenLabs rate-limited the request.", {
