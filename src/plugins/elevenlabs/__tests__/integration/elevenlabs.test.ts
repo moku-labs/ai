@@ -4,12 +4,15 @@ import path from "node:path";
 import type { EnvProvider } from "@moku-labs/common";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import { musicPlugin } from "../../../music";
+import type { MusicHandler } from "../../../music/contract";
 import { registryPlugin } from "../../../registry";
 import type { SfxHandler } from "../../../sfx/contract";
 import { voiceoverPlugin } from "../../../voiceover";
 import type { VoiceoverHandler } from "../../../voiceover/types";
-import { RetryableProviderError } from "../../errors";
+import { FlaggedProviderError, RetryableProviderError } from "../../errors";
 import { elevenlabsPlugin } from "../../index";
+import { createMusicHandler } from "../../music/handler";
 import { createSfxHandler } from "../../sfx/handler";
 import type { ElevenlabsContext } from "../../types";
 import { createVoiceoverHandler } from "../../voiceover/handler";
@@ -45,6 +48,18 @@ function fakeFailureResponse(status: number): Response {
   return fake as unknown as Response;
 }
 
+/** A failed ElevenLabs response whose JSON body carries `detail.status`. */
+function fakeRefusalResponse(status: string): Response {
+  const fake = {
+    ok: false,
+    status: 400,
+    headers: new Headers(),
+    json: () => Promise.resolve({ detail: { status, data: { prompt_suggestion: "reworded" } } }),
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0))
+  };
+  return fake as unknown as Response;
+}
+
 /** A fixture `EnvProvider` resolving `ELEVENLABS_API_KEY` without touching real `process.env`. */
 const fixtureEnvProvider: EnvProvider = {
   name: "elevenlabs-integration-fixture",
@@ -62,7 +77,7 @@ const fixtureEnvProvider: EnvProvider = {
  */
 function buildFramework(dbPath: string) {
   return createCore(coreConfig, {
-    plugins: [registryPlugin, voiceoverPlugin, elevenlabsPlugin],
+    plugins: [registryPlugin, voiceoverPlugin, musicPlugin, elevenlabsPlugin],
     pluginConfigs: {
       journal: { path: dbPath },
       env: { providers: [fixtureEnvProvider] }
@@ -107,6 +122,7 @@ describe("elevenlabs integration", () => {
 
     expect(app.registry.tasks()).toEqual(["voiceover", "sfx", "music"]);
     expect(app.registry.providers("sfx")).toEqual(["elevenlabs"]);
+    expect(app.registry.providers("music")).toEqual(["elevenlabs"]);
 
     await app.stop();
   });
@@ -131,6 +147,74 @@ describe("elevenlabs integration", () => {
     expect(result.audio).toEqual(new Uint8Array([1, 2, 3]));
     expect(result.mimeType).toBe("audio/mpeg");
     expect(result.costUsd).toBeCloseTo("Hello, world!".length * 0.001, 10);
+
+    await app.stop();
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime: music through the music facade, with a stubbed HTTP client
+  // -------------------------------------------------------------------------
+
+  it("generates a track end-to-end through app.music.generate()", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse(new Uint8Array([4, 5, 6])));
+    vi.stubGlobal("fetch", fetchMock);
+    const { createApp } = buildFramework(dbPath);
+    const app = createApp();
+    await app.start();
+
+    const result = await app.music.generate(
+      { prompt: "tense synth pulse", model: "music_v2_5", lengthMs: 65_000 },
+      { provider: "elevenlabs" }
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.elevenlabs.io/v1/music");
+    expect(new Headers(init.headers).get("xi-api-key")).toBe("test-key");
+    expect(JSON.parse(init.body as string)).toEqual({
+      prompt: "tense synth pulse",
+      music_length_ms: 65_000,
+      model_id: "music_v2_5",
+      force_instrumental: true
+    });
+    expect(result.audio).toEqual(new Uint8Array([4, 5, 6]));
+    expect(result.mimeType).toBe("audio/mpeg");
+    expect(result.costUsd).toBeCloseTo(0.3, 10);
+
+    await app.stop();
+  });
+
+  it("app.music.estimate() reads elevenlabs's own price table, without a network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { createApp } = buildFramework(dbPath);
+    const app = createApp({
+      pluginConfigs: { elevenlabs: { priceOverrides: { "music:music_v2": 0.2 } } }
+    });
+    await app.start();
+
+    const { usd } = app.music.estimate(
+      { prompt: "calm piano", model: "music_v2", lengthMs: 120_000 },
+      { provider: "elevenlabs" }
+    );
+
+    expect(usd).toBeCloseTo(0.4, 10);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await app.stop();
+  });
+
+  it("propagates a bad_prompt refusal as FlaggedProviderError through app.music.generate()", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fakeRefusalResponse("bad_prompt")));
+    const { createApp } = buildFramework(dbPath);
+    const app = createApp();
+    await app.start();
+
+    await expect(
+      app.music.generate(
+        { prompt: "a song in the style of a famous band", model: "music_v1", lengthMs: 30_000 },
+        { provider: "elevenlabs" }
+      )
+    ).rejects.toBeInstanceOf(FlaggedProviderError);
 
     await app.stop();
   });
@@ -203,6 +287,11 @@ describe("elevenlabs integration", () => {
     it("createSfxHandler's return value satisfies SfxHandler structurally", () => {
       expectTypeOf(createSfxHandler).returns.toEqualTypeOf<SfxHandler>();
       expectTypeOf(createSfxHandler).parameter(0).toEqualTypeOf<ElevenlabsContext>();
+    });
+
+    it("createMusicHandler's return value satisfies MusicHandler structurally", () => {
+      expectTypeOf(createMusicHandler).returns.toEqualTypeOf<MusicHandler>();
+      expectTypeOf(createMusicHandler).parameter(0).toEqualTypeOf<ElevenlabsContext>();
     });
 
     it("createVoiceoverHandler accepts an ElevenlabsContext", () => {

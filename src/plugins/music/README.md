@@ -56,7 +56,7 @@ same types as `Music.MusicHandler` etc.
 | `lengthMs` | `number` | yes | Track length, ms. |
 | `chunks` | `MusicChunk[]` | no | Composition plan. A model without plans rejects it, never drops it silently. |
 | `seed` | `number` | no | Seed, when the model takes one. |
-| `params` | `Record<string, unknown>` | no | Provider params; each provider documents which keys it reads (fal reads none). |
+| `params` | `Record<string, unknown>` | no | Provider params; each provider documents which keys it reads (fal reads none; elevenlabs reads `output_format` and `force_instrumental`). |
 
 ### `MusicChunk`
 
@@ -155,7 +155,7 @@ const { usd } = app.music.estimate({ prompt: "x", model: "stable-audio-2.5", len
 Registered music providers, in registration order. Delegates to `registry.providers("music")`.
 
 ```ts
-app.music.providers(); // => ["fal"]
+app.music.providers(); // => ["elevenlabs", "fal"]
 ```
 
 ### Module-level export (not on `app.music`)
@@ -176,7 +176,7 @@ re-exported from `types.ts`.
 
 ### Provider plugins (fal)
 
-Providers register a `MusicHandler` in their `onInit`; the first is `("music", "fal")`. A Layer-3
+Providers register a `MusicHandler` in their `onInit`; `("music", "elevenlabs")` and `("music", "fal")` ship in the package; the default stays `fal` through `defaultProvider`. A Layer-3
 custom provider works the same way:
 
 ```ts
