@@ -37,11 +37,21 @@ describe("createElevenlabsApi", () => {
       expect(api.info().configured).toBe(true);
     });
 
-    it("lists the bundled models by default, without the sfx price keys", () => {
+    it("lists the bundled models by default, without the sfx and music price keys", () => {
       const api = createElevenlabsApi(createTestCtx());
-      const voiceModels = Object.keys(bundledPrices).filter(key => !key.startsWith("sfx:"));
+      const voiceModels = Object.keys(bundledPrices).filter(
+        key => !key.startsWith("sfx:") && !key.startsWith("music:")
+      );
 
       expect(api.info().models.toSorted()).toEqual(voiceModels.toSorted());
+    });
+
+    it("never reports a music price key as a model, even an overridden one", () => {
+      const api = createElevenlabsApi(
+        createTestCtx({ config: { priceOverrides: { "music:music_v2_5": 0.2 } } })
+      );
+
+      expect(api.info().models.some(model => model.startsWith("music:"))).toBe(false);
     });
 
     it("never reports an sfx price key as a model, even an overridden one", () => {

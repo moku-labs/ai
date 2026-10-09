@@ -23,6 +23,7 @@ import type {
  *   baseUrl: "https://api.elevenlabs.io",
  *   defaultModel: "eleven_multilingual_v2",
  *   timeoutMs: 60_000,
+ *   musicTimeoutMs: 600_000,
  *   priceOverrides: {}
  * };
  * ```
@@ -36,10 +37,13 @@ export type Config = {
   defaultModel: string;
   /** Request timeout, ms. Default: 60_000. */
   timeoutMs: number;
+  /** Timeout of one music request, ms: `/v1/music` answers only when the whole track is ready. Default: 600_000. */
+  musicTimeoutMs: number;
   /**
    * Price overrides merged over the bundled table. Voice models are keyed by model id (USD per
    * character); sfx rows are keyed `sfx:<model>#second` (USD per started second) and
-   * `sfx:<model>#auto` (USD for a model-picked length). Default: {}.
+   * `sfx:<model>#auto` (USD for a model-picked length); music rows are keyed `music:<model>`
+   * (USD per started minute). Default: {}.
    */
   priceOverrides: Record<string, number>;
 };
@@ -61,8 +65,8 @@ export type State = {
 /**
  * Public API surface of the `elevenlabs` plugin, exposed as `app.elevenlabs`.
  * A thin observability surface — the real capability surface is the
- * registered `VoiceoverHandler` and `SfxHandler` (spec/10), consumed through
- * `app.voiceover`, `app.sfx` and `app.runner`.
+ * registered `VoiceoverHandler`, `SfxHandler` and `MusicHandler` (spec/10),
+ * consumed through `app.voiceover`, `app.sfx`, `app.music` and `app.runner`.
  *
  * @example
  * ```ts
@@ -73,7 +77,7 @@ export type ElevenlabsApi = {
   /**
    * Provider health/info for `moku status` + docs.
    *
-   * @returns Whether the provider is configured (an API key is present, without throwing) and the voice models known to the effective price table (`sfx:` price rows are left out).
+   * @returns Whether the provider is configured (an API key is present, without throwing) and the voice models known to the effective price table (`sfx:` and `music:` price rows are left out).
    * @example
    * ```ts
    * // Before a voiceover run, check ELEVENLABS_API_KEY is set; this call never throws.
@@ -98,8 +102,8 @@ export type TerminalProviderError = TerminalProviderErrorClass;
 export type FlaggedProviderError = FlaggedProviderErrorClass;
 
 /**
- * Domain context shared by `api.ts` (`info()`), `voiceover/handler.ts` and
- * `sfx/handler.ts` (`estimate()`/`execute()`) — the framework's `PluginCtx` helper supplies
+ * Domain context shared by `api.ts` (`info()`), `voiceover/handler.ts`,
+ * `sfx/handler.ts` and `music/handler.ts` (`estimate()`/`execute()`) — the framework's `PluginCtx` helper supplies
  * `config`/`state`/`emit`; `require` is narrowed to the one declared
  * dependency (`registry`), and `env`/`log` are the injected core APIs this
  * plugin reads the API key and logs redacted failures through.

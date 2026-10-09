@@ -1,12 +1,13 @@
 /**
  * Complex tier — ElevenLabs provider: owns all ElevenLabs capabilities
- * (voiceover and sfx via a thin fetch client). Registers handlers in onInit.
+ * (voiceover, sfx and music via a thin fetch client). Registers handlers in onInit.
  *
  * @see README.md
  */
 import { createPlugin } from "../../config";
 import { registryPlugin } from "../registry";
 import { createElevenlabsApi } from "./api";
+import { createMusicHandler } from "./music/handler";
 import { createSfxHandler } from "./sfx/handler";
 import { createElevenlabsState } from "./state";
 import type { Config } from "./types";
@@ -17,6 +18,7 @@ const defaultConfig: Config = {
   baseUrl: "https://api.elevenlabs.io",
   defaultModel: "eleven_multilingual_v2",
   timeoutMs: 60_000,
+  musicTimeoutMs: 600_000,
   priceOverrides: {}
 };
 
@@ -31,14 +33,15 @@ export const elevenlabsPlugin = createPlugin("elevenlabs", {
   createState: createElevenlabsState,
   api: createElevenlabsApi,
   /**
-   * Registers the ElevenLabs voiceover and sfx handlers with the registry.
+   * Registers the ElevenLabs voiceover, sfx and music handlers with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @returns {void} Nothing; both handlers are registered.
+   * @returns {void} Nothing; the three handlers are registered.
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);
     registry.register("voiceover", "elevenlabs", createVoiceoverHandler(ctx));
     registry.register("sfx", "elevenlabs", createSfxHandler(ctx));
+    registry.register("music", "elevenlabs", createMusicHandler(ctx));
   }
 });

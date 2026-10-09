@@ -48,7 +48,7 @@ export type MusicRequest = {
   chunks?: MusicChunk[];
   /** Seed, when the model takes one. */
   seed?: number;
-  /** Provider params; each provider documents which keys it reads (fal reads none). */
+  /** Provider params; each provider documents which keys it reads (fal reads none; elevenlabs reads two). */
   params?: Record<string, unknown>;
 };
 

@@ -2,14 +2,24 @@
  * @file elevenlabs bundled price table — data module. Voice models are keyed
  * by model id (USD per character); sfx rows are keyed
  * `sfx:<model>#second` (USD per started second) and `sfx:<model>#auto` (USD
- * for one generation whose length the model picks). Approximate defaults;
- * override precisely via `config.priceOverrides`.
+ * for one generation whose length the model picks); music rows are keyed
+ * `music:<model>` (USD per started minute). Approximate defaults; override
+ * precisely via `config.priceOverrides`.
  */
 import { TerminalProviderError } from "./errors";
 import type { ElevenlabsContext } from "./types";
 
 /** Key prefix of every sfx price row. */
 const SFX_PRICE_PREFIX = "sfx:";
+
+/** Key prefix of every music price row. */
+const MUSIC_PRICE_PREFIX = "music:";
+
+/** Milliseconds in a billed minute. */
+const MS_PER_MINUTE = 60_000;
+
+/** Cost precision: micro-dollars. */
+const MICRO_DOLLARS = 1_000_000;
 
 /** Status of a request refused before any charge. */
 const BAD_REQUEST = 400;
@@ -30,6 +40,11 @@ export type SfxPriceUnit = "second" | "auto";
  * 2026-10-04. The per-credit USD rate is not published; $0.12/min gives $0.002
  * per second, and the same rate gives $0.01 for 200 credits. Correct them with
  * `priceOverrides` for your plan.
+ *
+ * music rows are an ESTIMATE too. ElevenLabs lists the Music API at $0.15 per
+ * minute, one price for every music model (https://elevenlabs.io/pricing/api,
+ * checked 2026-10-09). The page does not say how a part of a minute is billed,
+ * so every started minute is counted: the estimate is never below the bill.
  */
 export const bundledPrices: Record<string, number> = {
   eleven_multilingual_v2: 0.0003,
@@ -37,7 +52,10 @@ export const bundledPrices: Record<string, number> = {
   eleven_flash_v2_5: 0.000_06,
   eleven_monolingual_v1: 0.0003,
   "sfx:eleven_text_to_sound_v2#second": 0.002,
-  "sfx:eleven_text_to_sound_v2#auto": 0.01
+  "sfx:eleven_text_to_sound_v2#auto": 0.01,
+  "music:music_v1": 0.15,
+  "music:music_v2": 0.15,
+  "music:music_v2_5": 0.15
 };
 
 /**
@@ -117,4 +135,49 @@ export function sfxPriceOf(
     );
   }
   return usd;
+}
+
+/**
+ * Tells whether a price-table key is a music row rather than a voice model id.
+ *
+ * @param key - A key of the effective price table.
+ * @returns True for a `music:` row.
+ * @example
+ * ```ts
+ * isMusicPriceKey("music:music_v2_5"); // => true
+ * ```
+ */
+export function isMusicPriceKey(key: string): boolean {
+  return key.startsWith(MUSIC_PRICE_PREFIX);
+}
+
+/**
+ * Prices one music track: every started minute at the `music:<model>` price.
+ * A paid job never runs at an unknown price, so a missing row is a terminal
+ * error before any HTTP call.
+ *
+ * @param prices - The effective price table.
+ * @param model - The music model id.
+ * @param lengthMs - Track length, ms.
+ * @returns The price in USD, rounded to micro-dollars.
+ * @throws {TerminalProviderError} Status 400 when the table has no row for `model`.
+ * @example
+ * ```ts
+ * musicPriceOf(bundledPrices, "music_v2_5", 65_000); // => 0.3
+ * ```
+ */
+export function musicPriceOf(
+  prices: Readonly<Record<string, number>>,
+  model: string,
+  lengthMs: number
+): number {
+  const usd = prices[`${MUSIC_PRICE_PREFIX}${model}`];
+  if (usd === undefined) {
+    throw new TerminalProviderError(
+      `[ai] No price for ElevenLabs music model "${model}".\n  Add it to elevenlabs.priceOverrides.`,
+      BAD_REQUEST
+    );
+  }
+  const minutes = Math.ceil(lengthMs / MS_PER_MINUTE);
+  return Math.round(usd * minutes * MICRO_DOLLARS) / MICRO_DOLLARS;
 }

@@ -13,6 +13,7 @@ const DEFAULT_CONFIG: Config = {
   baseUrl: "https://api.elevenlabs.io",
   defaultModel: "eleven_multilingual_v2",
   timeoutMs: 60_000,
+  musicTimeoutMs: 600_000,
   priceOverrides: {}
 };
 
