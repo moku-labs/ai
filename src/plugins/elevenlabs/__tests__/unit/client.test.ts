@@ -121,6 +121,27 @@ describe("elevenlabsRequest", () => {
     expect(caught).toBeInstanceOf(FlaggedProviderError);
   });
 
+  it.each([
+    "bad_prompt",
+    "bad_composition_plan"
+  ])("classifies a music refusal (detail.status %s) as FlaggedProviderError, without the suggestion", async status => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        fakeResponse({
+          status: 400,
+          body: { detail: { status, data: { prompt_suggestion: "SECRET SUGGESTION" } } }
+        })
+      )
+    );
+
+    const caught = await captureRejection(BASE_OPTIONS);
+
+    expect(caught).toBeInstanceOf(FlaggedProviderError);
+    expect((caught as Error).message).toContain(status);
+    expect((caught as Error).message).not.toContain("SECRET SUGGESTION");
+  });
+
   it("classifies a network failure (fetch rejects) as RetryableProviderError with kind network", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
 

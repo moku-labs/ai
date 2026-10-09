@@ -1,6 +1,6 @@
 # elevenlabs
 
-> The ElevenLabs provider adapter — a Complex-tier plugin that owns everything ElevenLabs-specific and registers the `("voiceover", "elevenlabs")` and `("sfx", "elevenlabs")` capabilities with the registry.
+> The ElevenLabs provider adapter — a Complex-tier plugin that owns everything ElevenLabs-specific and registers the `("voiceover", "elevenlabs")`, `("sfx", "elevenlabs")` and `("music", "elevenlabs")` capabilities with the registry.
 
 ## Purpose
 
@@ -9,12 +9,13 @@
 generate it, and the [`registry`](../registry) connects the two. The `elevenlabs` plugin is the
 provider side of that contract for ElevenLabs: it owns a thin internal `fetch` client (no SDK
 dependency — one TTS endpoint doesn't justify one), a bundled per-character price table, and
-per-task handler submodules. It implements two capabilities, both registered in `onInit`:
-text-to-speech via `POST /v1/text-to-speech/{voiceId}` under `("voiceover", "elevenlabs")`, and
-sound effects via `POST /v1/sound-generation` under `("sfx", "elevenlabs")`.
+per-task handler submodules. It implements three capabilities, all registered in `onInit`:
+text-to-speech via `POST /v1/text-to-speech/{voiceId}` under `("voiceover", "elevenlabs")`,
+sound effects via `POST /v1/sound-generation` under `("sfx", "elevenlabs")`, and music via
+`POST /v1/music` under `("music", "elevenlabs")`.
 
 The plugin follows the provider-owns-all-tasks shape: each capability is a sibling submodule
-(`voiceover/`, `sfx/`). Per-task submodules never import each other — they
+(`voiceover/`, `sfx/`, `music/`). Per-task submodules never import each other — they
 coordinate through the plugin's root state (the shared, lazily-computed price table in
 `prices.ts` / `state.ts`).
 
@@ -29,7 +30,8 @@ plugin works out of the box once the API key env var is exported.
 | `baseUrl` | `string` | `"https://api.elevenlabs.io"` | API base URL. |
 | `defaultModel` | `string` | `"eleven_multilingual_v2"` | Model used when a request doesn't name one. |
 | `timeoutMs` | `number` | `60_000` | Per-request timeout, ms (enforced via `AbortSignal.timeout`, merged with any caller signal). |
-| `priceOverrides` | `Record<string, number>` | `{}` | Price overrides, merged over the bundled table (overrides win). Voice models: USD per character, keyed by model id. sfx: `sfx:<model>#second` (USD per started second) and `sfx:<model>#auto` (USD for a model-picked length). |
+| `musicTimeoutMs` | `number` | `600_000` | Timeout of one music request, ms. `/v1/music` answers only when the whole track is ready. |
+| `priceOverrides` | `Record<string, number>` | `{}` | Price overrides, merged over the bundled table (overrides win). Voice models: USD per character, keyed by model id. sfx: `sfx:<model>#second` (USD per started second) and `sfx:<model>#auto` (USD for a model-picked length). music: `music:<model>` (USD per started minute). |
 
 ```ts
 import { createApp } from "@moku-labs/ai";
@@ -91,9 +93,19 @@ createApp({
 });
 ```
 
+| music key | USD |
+| --- | --- |
+| `music:music_v1` | 0.15 per started minute |
+| `music:music_v2` | 0.15 per started minute |
+| `music:music_v2_5` | 0.15 per started minute |
+
+The music prices are an estimate. ElevenLabs lists the Music API at $0.15 per minute, one price
+for every music model ([pricing](https://elevenlabs.io/pricing/api), checked 2026-10-09). The
+page does not say how a part of a minute is billed, so the handler counts every started minute.
+
 The effective table (bundled ∪ overrides) is computed once at first use and cached in plugin
-state. Voice models absent from the effective table estimate at `$0`. A missing sfx price is a
-terminal error instead, because a paid job never runs at an unknown price (see the sfx handler).
+state. Voice models absent from the effective table estimate at `$0`. A missing sfx or music
+price is a terminal error instead, because a paid job never runs at an unknown price (see the sfx handler).
 
 ## API reference
 
@@ -227,6 +239,97 @@ const hit = await app.sfx.generate(
 await Bun.write("sword-hit.mp3", hit.audio); // hit.mimeType === "audio/mpeg", hit.costUsd === 0.002
 ```
 
+### Registered handler — `("music", "elevenlabs")`
+
+Implements the `MusicHandler` contract owned by the [`music`](../music) plugin, over
+`POST /v1/music` with the `xi-api-key` header
+([Compose music](https://elevenlabs.io/docs/api-reference/music/compose),
+[authentication](https://elevenlabs.io/docs/api-reference/authentication), both checked
+2026-10-09). The endpoint is synchronous and answers with the audio file, so the handler offers
+`estimate` + `execute` and no `submit` + `poll`. The default provider of `music` stays `fal`:
+name this one with `provider: elevenlabs`.
+
+The Music API is for paid plans only
+([Music quickstart](https://elevenlabs.io/docs/eleven-api/guides/cookbooks/music): "only
+available to paid users"). On a free plan the call fails with an HTTP 4xx.
+
+#### Request rules
+
+Every rule is checked before any HTTP call. A broken rule throws `TerminalProviderError` with
+status 400. A field the API cannot take is refused, never dropped. The source of every rule is
+the [Compose music](https://elevenlabs.io/docs/api-reference/music/compose) page.
+
+| Field | Rule |
+| --- | --- |
+| `model` | `"music_v1"`, `"music_v2"` or `"music_v2_5"`. Sent as `model_id`. The fal alias `"elevenlabs-music-v2.5"` is refused. |
+| `lengthMs` | Whole number, 3000..600000. With a prompt it is sent as `music_length_ms`. |
+| `prompt` | Sent as `prompt` when the request has no `chunks`. Must not be empty. With `chunks` it is not sent: the API takes `prompt` or `composition_plan`, never both. |
+| `chunks` | Sent as `composition_plan.chunks`: `text`, `durationMs` → `duration_ms`, `styles` → `positive_styles`, `avoid` → `negative_styles`. Only `music_v2` and `music_v2_5`. `music_v1` takes a `sections` plan that `MusicChunk` cannot express, so chunks on `music_v1` throw. |
+| `chunks[].durationMs` | Whole number, 3000..120000. The API takes no `music_length_ms` next to a plan, so the durations must add up to `lengthMs`. |
+| `chunks[].text` | At most 30 lines, each at most 200 characters. |
+| `seed` | Only with `chunks`, a whole number. The API refuses `seed` next to `prompt`, so a seed on a prompt request throws. |
+| `params.force_instrumental` | Optional boolean, only with a prompt. Default `true`, the same instrumental default as the fal handler. With `chunks` it throws. |
+| `params.output_format` | Optional. Must start with `mp3_`, for example `"mp3_44100_192"`. Unset sends no query value: the API then picks `mp3_44100_128` for `music_v1` and `mp3_48000_192` for the v2 models. |
+| any other `params` key | Throws. |
+
+Not mapped, because `MusicRequest` has no field for them: `finetune_id`, `store_for_inpainting`,
+`sign_with_c2pa`, `respect_sections_durations`, chunk `context_adherence`, `conditioning_ref`
+and `condition_strength`, and the `pcm_`, `opus_`, `ulaw_` and `alaw_` output formats.
+
+#### `estimate(request: MusicRequest): { usd: number }`
+
+Checks `model` and `lengthMs` only, then prices every started minute at `music:<model>`. No
+key, no network.
+
+```ts
+app.music.estimate(
+  { prompt: "tense synth pulse", model: "music_v2_5", lengthMs: 65_000 },
+  { provider: "elevenlabs" }
+); // => { usd: 0.3 }
+```
+
+#### `execute(request: MusicRequest, opts: { signal?: AbortSignal }): Promise<MusicResult>`
+
+Checks every rule, prices the request, reads the key, then POSTs and waits up to
+`musicTimeoutMs`. Returns `{ audio, mimeType: "audio/mpeg", costUsd, meta: { model, lengthMs,
+outputFormat? } }`.
+
+```ts
+const track = await app.music.generate(
+  { prompt: "tense synth pulse", model: "music_v2_5", lengthMs: 60_000 },
+  { provider: "elevenlabs" }
+);
+await Bun.write("teaser.mp3", track.audio);
+```
+
+In a build file:
+
+```yaml
+  - id: s01.score
+    task: music
+    provider: elevenlabs
+    input: { model: music_v2_5, prompt: "tense synth pulse", lengthMs: 30000 }
+  - id: s01.theme
+    task: music
+    provider: elevenlabs
+    input:
+      model: music_v2_5
+      prompt: "main theme"
+      lengthMs: 43000
+      seed: 7
+      chunks:
+        - { text: "[Intro]", durationMs: 13000, styles: [synthwave, dark, slow build] }
+        - { text: "[Drop]", durationMs: 30000, styles: [driving bass], avoid: [vocals] }
+```
+
+A content refusal is `FlaggedProviderError`. The API returns `detail.status` `bad_prompt` or
+`bad_composition_plan` for copyrighted material, such as a band name or known lyrics
+([Music quickstart](https://elevenlabs.io/docs/eleven-api/guides/cookbooks/music)). The
+suggested rewrite in the response is not read into the error or the log.
+
+A timeout is retryable, so the runner sends the request again. ElevenLabs may bill the first
+attempt. Raise `musicTimeoutMs` if long tracks time out.
+
 ### Error taxonomy
 
 `client.ts` classifies every failure into one of three `Error` subclasses (defined in this
@@ -241,7 +344,7 @@ structural fields the runner's `classifyError` (`../runner/retry.ts`) reads by s
 | Request timeout | `RetryableProviderError` | `kind: "timeout"` | `timeout` — retried |
 | Network failure | `RetryableProviderError` | `kind: "network"` | `network` — retried |
 | Other HTTP 4xx | `TerminalProviderError` | `status: <code>` | `http-4xx` — terminal `failed` |
-| `detail.status === "content_policy_violation"` | `FlaggedProviderError` | `kind: "content-policy"` | `content-policy` — terminal `flagged`, never re-queued |
+| `detail.status` is `"content_policy_violation"`, `"bad_prompt"` or `"bad_composition_plan"` | `FlaggedProviderError` | `kind: "content-policy"` | `content-policy` — terminal `flagged`, never re-queued |
 
 A content-policy `detail.status` in the error body wins over the numeric status code. A
 caller-initiated abort (via `opts.signal`) rethrows the original abort error, unclassified.
@@ -281,6 +384,9 @@ structured logs through `ctx.log`:
 | `elevenlabs:voiceover:failed` | `warn` | `{ errorType, status?, kind? }` (redacted — never message text) | Before rethrowing any `execute()` failure. |
 | `elevenlabs:sfx:done` | `info` | `{ model, outputFormat }` | After a successful sound generation. |
 | `elevenlabs:sfx:failed` | `warn` | `{ errorType, status?, kind? }` (redacted — never message text) | Before rethrowing an HTTP failure of sfx `execute()`. Request-rule errors are thrown without a log. |
+
+| `elevenlabs:music:done` | `info` | `{ model, lengthMs, bytes }` | After a successful music generation. |
+| `elevenlabs:music:failed` | `warn` | `{ errorType, status?, kind? }` (redacted — never message text) | Before rethrowing an HTTP failure of music `execute()`. Request-rule errors are thrown without a log. |
 
 ## Usage examples
 
@@ -348,12 +454,13 @@ try {
 
 - **Registration.** `onInit` calls
   `register("voiceover", "elevenlabs", createVoiceoverHandler(ctx))`, then
-  `register("sfx", "elevenlabs", createSfxHandler(ctx))`, on `ctx.require(registryPlugin)`.
+  `register("sfx", "elevenlabs", createSfxHandler(ctx))`, then
+  `register("music", "elevenlabs", createMusicHandler(ctx))`, on `ctx.require(registryPlugin)`.
   Registration is a synchronous map insertion, so there is no `onStart`/`onStop` — the fetch
   client is stateless and holds no connections. After startup the provider is visible in
-  `app.voiceover.providers()`, `app.sfx.providers()` and `app.registry.providers(task)`;
+  `app.voiceover.providers()`, `app.sfx.providers()`, `app.music.providers()` and `app.registry.providers(task)`;
   registration order in `src/index.ts` makes the *first*-registered provider the task default.
-- **Tasks fulfilled:** `voiceover` and `sfx`.
+- **Tasks fulfilled:** `voiceover`, `sfx` and `music`.
 - **Runner retry interplay.** When a build runs through `app.runner`, the runner catches
   `execute()` failures and classifies them structurally via `classifyError`
   (`../runner/retry.ts`): `RetryableProviderError` instances are re-queued with exponential,
@@ -380,8 +487,9 @@ try {
 | `errors.ts` | The three provider error classes (values, exported as `ElevenlabsErrors`) and their module-private `RetryHint`. Imports nothing from `types.ts`. |
 | `api.ts` | `createElevenlabsApi` — the `info()` surface. |
 | `client.ts` | Thin generic fetch client: request execution, timeout/signal merging, HTTP failure classification. |
-| `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state), `sfxPriceOf` (missing price is terminal) and `isSfxPriceKey`. |
+| `prices.ts` | Bundled price table + `mergePrices` / `resolvePrices` (lazy cache into state), `sfxPriceOf` and `musicPriceOf` (missing price is terminal), `isSfxPriceKey` and `isMusicPriceKey`. |
 | `support.ts` | What every handler shares: `resolveApiKey` and `redactedFailureOf`. |
 | `state.ts` | `createElevenlabsState` — `{ prices: null }` sentinel. |
 | `voiceover/handler.ts` | The `VoiceoverHandler` implementation: request mapping, cost math, redacted logging. |
 | `sfx/handler.ts` | The `SfxHandler` implementation: request rules, mp3 guard, per-second or auto cost, redacted logging. |
+| `music/handler.ts` | The `MusicHandler` implementation: request rules, prompt or chunk plan body, per-minute cost, redacted logging. |

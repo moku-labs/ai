@@ -163,7 +163,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
 | [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
-| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")` and `("sfx", "elevenlabs")`; price table, retry-taxonomy errors. |
+| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
@@ -355,6 +355,18 @@ const track = await app.music.generate({
 await Bun.write("teaser.mp3", track.audio);
 ```
 
+ElevenLabs' own Music API works with `ELEVENLABS_API_KEY` alone, on a paid ElevenLabs plan.
+Name the provider and use an ElevenLabs model id (`music_v1`, `music_v2`, `music_v2_5`); the
+default provider of `music` stays `fal`. The rules are in the
+[elevenlabs README](./src/plugins/elevenlabs/README.md):
+
+```yaml
+  - id: s01.score
+    task: music
+    provider: elevenlabs
+    input: { model: music_v2_5, prompt: "tense synth pulse", lengthMs: 30000 }
+```
+
 ### Game assets: sound effects and sprites
 
 `sfx` items make a short mp3 from a prompt. `model` is required, as for music:
@@ -464,7 +476,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `baseUrl` | `string` | `"https://api.elevenlabs.io"` |
 | | `defaultModel` | `string` | `"eleven_multilingual_v2"` |
 | | `timeoutMs` | `number` | `60_000` |
-| | `priceOverrides` | `Record<string, number>` | `{}` |
+| | `musicTimeoutMs` | `number` | `600_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` (voice `<model>`; `sfx:<model>#second` / `#auto`; `music:<model>`) |
 | `openai` | `apiKeyEnv` | `string` | `"OPENAI_API_KEY"` |
 | | `baseUrl` | `string?` | `undefined` (SDK default) |
 | | `models` | `{ tts: string; chat: string }` | `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` |

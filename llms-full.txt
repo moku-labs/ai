@@ -990,8 +990,8 @@ Unknown-provider error (also for a value that fails isVideoHandler):
 4.9 elevenlabs — app.elevenlabs (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
-("voiceover", "elevenlabs") → createVoiceoverHandler(ctx) and ("sfx", "elevenlabs") →
-createSfxHandler(ctx) (§4.20). POST
+("voiceover", "elevenlabs") → createVoiceoverHandler(ctx), ("sfx", "elevenlabs") →
+createSfxHandler(ctx) (§4.20) and ("music", "elevenlabs") → createMusicHandler(ctx). POST
 /v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
 ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
 are key-free). estimate = text.length × per-character price for the resolved model
@@ -1003,7 +1003,8 @@ export type Config = {
   baseUrl: string;        // default "https://api.elevenlabs.io"
   defaultModel: string;   // default "eleven_multilingual_v2"
   timeoutMs: number;      // default 60_000 (AbortSignal.timeout merged with caller signal)
-  priceOverrides: Record<string, number>; // USD/char by model, merged over bundled table
+  musicTimeoutMs: number; // default 600_000 (one /v1/music request)
+  priceOverrides: Record<string, number>; // USD/char by model; sfx:<model>#second / #auto; music:<model>
 };
 export type State = { prices: Record<string, number> | null }; // lazy effective table
 
@@ -1034,6 +1035,32 @@ eleven_flash_v2_5 0.000_06 · eleven_monolingual_v1 0.0003.
 Missing-key error (before any network call):
 `[ai] ELEVENLABS_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.`
 Logs (redacted): elevenlabs:voiceover:done (info) / elevenlabs:voiceover:failed (warn).
+
+music — ("music", "elevenlabs"): estimate + execute, no submit + poll. POST /v1/music is
+synchronous and returns the mp3 (https://elevenlabs.io/docs/api-reference/music/compose). Needs
+a paid ElevenLabs plan. The default provider of music stays fal; name `provider: elevenlabs`.
+- model: music_v1 | music_v2 | music_v2_5 → model_id. The fal alias is refused.
+- lengthMs: whole number 3 000–600 000 → music_length_ms (prompt requests only).
+- prompt → prompt, when there are no chunks. With chunks it is not sent (API: one or the other).
+- chunks → composition_plan.chunks [{ text, duration_ms, positive_styles, negative_styles? }],
+  music_v2 / music_v2_5 only; each 3 000–120 000 ms, text ≤ 30 lines of ≤ 200 chars, durations
+  must add up to lengthMs. Chunks on music_v1 throw.
+- seed: only with chunks. A seed on a prompt request throws (the API refuses it).
+- params.force_instrumental: boolean, prompt requests only, default true.
+- params.output_format: mp3_* only; unset → the API picks. Any other params key throws.
+- Price: music:<model> 0.15 USD per started minute (https://elevenlabs.io/pricing/api,
+  checked 2026-10-09); a missing price throws.
+- Errors: detail.status bad_prompt / bad_composition_plan / content_policy_violation →
+  FlaggedProviderError; 429 and 5xx → RetryableProviderError; other 4xx → TerminalProviderError.
+  Every broken rule is a TerminalProviderError 400 before any HTTP call.
+- Logs: elevenlabs:music:done (info, { model, lengthMs, bytes }) / elevenlabs:music:failed (warn).
+
+```yaml
+  - id: s01.score
+    task: music
+    provider: elevenlabs
+    input: { model: music_v2_5, prompt: "tense synth pulse", lengthMs: 30000 }
+```
 
 --------------------------------------------------------------------------------
 4.10 openai — app.openai (Complex tier; depends: [registryPlugin])
@@ -2097,7 +2124,7 @@ Per-item stream records — app.runner.events(opts?), AsyncIterable<RunEvent>, a
 | terminal          | status, totals                         | ALWAYS the last record delivered |
 
 Structured log events (ctx.log; diagnostics, not bus events): runner:stale-item,
-elevenlabs:voiceover:done/failed, openai:tts:done/failed, openai:translate:done/failed,
+elevenlabs:voiceover:done/failed, elevenlabs:music:done/failed, openai:tts:done/failed, openai:translate:done/failed,
 openai:prompt-gen:done/failed, codex:image:done, codex:prompt-gen:done,
 claude:prompt-gen:done, ark:video:submitted/done/failed, ark:asset:group-created
 (warn), ark:asset:registered, ark:asset:refused (warn), ark:negative:ignored (warn),
@@ -2172,7 +2199,8 @@ elevenlabs:
   baseUrl: string = "https://api.elevenlabs.io"
   defaultModel: string = "eleven_multilingual_v2"
   timeoutMs: number = 60_000
-  priceOverrides: Record<string, number> = {}  — USD/char by model; sfx:<model>#second / sfx:<model>#auto
+  musicTimeoutMs: number = 600_000             — one /v1/music request
+  priceOverrides: Record<string, number> = {}  — USD/char by model; sfx:<model>#second / sfx:<model>#auto; music:<model>
 
 openai:
   apiKeyEnv: string = "OPENAI_API_KEY"
@@ -2586,7 +2614,7 @@ everything it depends on):
  11. sprite        (deps: registry)                      Standard
  12. asset         (deps: registry)                      Standard
  13. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs"),
-                    ("sfx","elevenlabs")                                             Complex
+                    ("sfx","elevenlabs"), ("music","elevenlabs")                     Complex
  14. openai        (deps: registry) — onInit registers ("voiceover","openai"),
                     ("translate","openai"), ("prompt-gen","openai")                  Complex
  15. codex         (deps: registry) — ("image","codex"), ("prompt-gen","codex")     Complex
