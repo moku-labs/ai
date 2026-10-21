@@ -3,6 +3,19 @@
 All notable changes to `@moku-labs/ai` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Unreleased
+
+### Fixed
+
+- **fal: a long call is no longer cut by Bun's socket idle timer.** Bun's fetch drops a socket that
+  receives no byte for about 5 min (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`). A high-reasoning chat model
+  sends nothing while it thinks, so every fal call longer than about 6 min failed at 293-360 s with
+  "[ai] fal request failed (network)", whatever `timeoutMs` said. Now `falFetch` passes Bun's
+  `timeout: false`, and only `timeoutMs` or the caller's signal end a call. Node ignores the field.
+- **fal: a runtime timeout reads as a timeout.** A `TimeoutError` that is not ours is now retryable
+  `kind: "timeout"` with its seconds: "[ai] fal request timed out after 362 s: the runtime's socket
+  idle timer, not timeoutMs (600 s)." It was `kind: "network"`.
+
 ## 0.17.0 - 2026-10-08
 
 ### Added
