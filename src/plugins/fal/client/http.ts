@@ -81,6 +81,12 @@ export type FalErrorInfo = {
   text: string | undefined;
 };
 
+/**
+ * fetch options with Bun's per-request `timeout`: a number of ms sets the
+ * socket idle timer, `false` turns it off. Node ignores the field.
+ */
+type BunIdleInit = RequestInit & { timeout: false };
+
 /** Longest slice of fal's error text copied into an error message. */
 const MAX_ERROR_TEXT = 300;
 
@@ -341,27 +347,53 @@ function classifyHttpFailure(response: FalResponse): Error {
 }
 
 /**
- * Classifies a fetch or body-read rejection: a caller abort passes through
- * unchanged, our own timeout is retryable `timeout`, anything else is
- * retryable `network`.
+ * Whether a rejection is a `TimeoutError`, by name: Bun's own socket idle
+ * timer throws one, as does an `AbortSignal.timeout`.
  *
  * @param error - What fetch threw.
- * @param caller - The caller's signal, if any.
+ * @returns True for a `TimeoutError`.
+ * @example
+ * ```ts
+ * isTimeoutError(new DOMException("x", "TimeoutError")); // => true
+ * ```
+ */
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
+/**
+ * Classifies a fetch or body-read rejection: a caller abort passes through
+ * unchanged, our own timeout is retryable `timeout`, a `TimeoutError` that is
+ * not ours (the runtime's socket idle timer) is retryable `timeout` with its
+ * seconds, anything else is retryable `network`.
+ *
+ * @param error - What fetch threw.
+ * @param request - The fal request, for its caller signal and `timeoutMs`.
  * @param timeout - This request's timeout signal.
+ * @param elapsedMs - How long the call ran before it failed.
  * @returns The value to throw.
  * @example
  * ```ts
- * transportFailure(new Error("x"), undefined, AbortSignal.abort()); // => RetryableProviderError "[ai] fal request timed out.", kind "timeout"
+ * transportFailure(new Error("x"), BASE, AbortSignal.abort(), 10); // => RetryableProviderError "[ai] fal request timed out.", kind "timeout"
  * ```
  */
 function transportFailure(
   error: unknown,
-  caller: AbortSignal | undefined,
-  timeout: AbortSignal
+  request: FalRequest,
+  timeout: AbortSignal,
+  elapsedMs: number
 ): unknown {
-  if (caller?.aborted) return error;
+  if (request.signal?.aborted) return error;
   if (timeout.aborted) {
     return new RetryableProviderError("[ai] fal request timed out.", { kind: "timeout" });
+  }
+  if (isTimeoutError(error)) {
+    const after = Math.round(elapsedMs / MS_PER_SECOND);
+    const limit = Math.round(request.timeoutMs / MS_PER_SECOND);
+    return new RetryableProviderError(
+      `[ai] fal request timed out after ${after} s: the runtime's socket idle timer, not timeoutMs (${limit} s).`,
+      { kind: "timeout" }
+    );
   }
   return new RetryableProviderError("[ai] fal request failed (network).", { kind: "network" });
 }
@@ -403,6 +435,9 @@ function bodyOf(request: FalRequest): string | Uint8Array<ArrayBuffer> | undefin
 /**
  * Performs one fal HTTP call and reads the whole body. Enforces
  * `timeoutMs` through `AbortSignal.any([caller, AbortSignal.timeout(ms)])`.
+ * Bun's socket idle timer (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`, about 5 min) is
+ * turned off with `timeout: false`: a chat model that thinks for minutes
+ * sends no byte, and only `timeoutMs` or the caller may end the call.
  * Error messages start with "[ai] fal" and never contain the key.
  *
  * @param request - URL, method, key, body, timeout and caller signal.
@@ -417,19 +452,24 @@ export async function falFetch(request: FalRequest): Promise<FalResponse> {
   const signal =
     request.signal === undefined ? timeout : AbortSignal.any([request.signal, timeout]);
 
+  // Bun-only `timeout: false` turns off the idle timer; other runtimes ignore it.
+  const init: BunIdleInit = {
+    method: request.method,
+    headers: headersOf(request),
+    body: bodyOf(request),
+    signal,
+    timeout: false
+  };
+
   // Fetch and read the whole body; a transport failure is classified here.
+  const startedAt = Date.now();
   let response: FalResponse;
   try {
-    const raw = await fetch(request.url, {
-      method: request.method,
-      headers: headersOf(request),
-      body: bodyOf(request),
-      signal
-    });
+    const raw = await fetch(request.url, init);
     const body = new Uint8Array(await raw.arrayBuffer());
     response = { status: raw.status, headers: raw.headers, body };
   } catch (error) {
-    throw transportFailure(error, request.signal, timeout);
+    throw transportFailure(error, request, timeout, Date.now() - startedAt);
   }
 
   // Only a 2xx passes; every other status is classified.
