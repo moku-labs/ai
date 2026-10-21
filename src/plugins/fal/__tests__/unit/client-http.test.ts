@@ -24,6 +24,7 @@ async function rejectionOf(request: FalRequest = BASE): Promise<unknown> {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("falFetch request shape", () => {
@@ -40,6 +41,15 @@ describe("falFetch request shape", () => {
     expect(call?.headers.Authorization).toBe(`Key ${TEST_KEY}`);
     expect(call?.headers["content-type"]).toBe("application/json");
     expect(JSON.parse(String(call?.body))).toEqual({ prompt: "p" });
+  });
+
+  it("turns off Bun's socket idle timer, so a model that thinks for minutes is not cut", async () => {
+    const fetchMock = stubFetch(jsonResponse(200, { ok: 1 }));
+
+    await falFetch(BASE);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit & { timeout?: unknown }];
+    expect(init.timeout).toBe(false);
   });
 
   it("sends no Authorization header when no key is given (CDN download)", async () => {
@@ -174,6 +184,20 @@ describe("falFetch classification table", () => {
     const error = (await rejectionOf({ ...BASE, timeoutMs: 5 })) as RetryableProviderError;
     expect(error).toBeInstanceOf(RetryableProviderError);
     expect(error.kind).toBe("timeout");
+    expect(error.message).toBe("[ai] fal request timed out.");
+  });
+
+  it("a runtime TimeoutError that is not ours is kind timeout with its seconds", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValueOnce(363_400);
+    stubFetch(new DOMException("The operation timed out.", "TimeoutError"));
+
+    const error = (await rejectionOf({ ...BASE, timeoutMs: 600_000 })) as RetryableProviderError;
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect(error.kind).toBe("timeout");
+    expect(error.message).toBe(
+      "[ai] fal request timed out after 362 s: the runtime's socket idle timer, not timeoutMs (600 s)."
+    );
   });
 
   it("a body that fails mid-read is retryable kind network", async () => {
