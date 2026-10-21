@@ -374,7 +374,8 @@ function isTimeoutError(error: unknown): boolean {
  * @returns The value to throw.
  * @example
  * ```ts
- * transportFailure(new Error("x"), BASE, AbortSignal.abort(), 10); // => RetryableProviderError "[ai] fal request timed out.", kind "timeout"
+ * const request: FalRequest = { url: "https://queue.fal.run", method: "GET", timeoutMs: 1 };
+ * transportFailure(new Error("x"), request, AbortSignal.abort(), 10); // => RetryableProviderError "[ai] fal request timed out.", kind "timeout"
  * ```
  */
 function transportFailure(

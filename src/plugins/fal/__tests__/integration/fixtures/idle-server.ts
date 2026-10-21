@@ -20,9 +20,14 @@ const [plain, fal] = await Promise.allSettled([
   falFetch({ url, method: "POST", json: {}, timeoutMs: 60_000 })
 ]);
 
+/** The rejection's name or message, without a cast. */
+function field(reason: unknown, key: "name" | "message"): string {
+  return reason instanceof Error ? reason[key] : String(reason);
+}
+
 const outcome = {
-  plain: plain.status === "fulfilled" ? plain.value.status : (plain.reason as Error).name,
-  fal: fal.status === "fulfilled" ? fal.value.status : (fal.reason as Error).message
+  plain: plain.status === "fulfilled" ? plain.value.status : field(plain.reason, "name"),
+  fal: fal.status === "fulfilled" ? fal.value.status : field(fal.reason, "message")
 };
 process.stdout.write(JSON.stringify(outcome));
 await server.stop(true);

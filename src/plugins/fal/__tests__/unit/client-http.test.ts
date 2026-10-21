@@ -24,7 +24,7 @@ async function rejectionOf(request: FalRequest = BASE): Promise<unknown> {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("falFetch request shape", () => {
@@ -188,8 +188,15 @@ describe("falFetch classification table", () => {
   });
 
   it("a runtime TimeoutError that is not ours is kind timeout with its seconds", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValueOnce(363_400);
-    stubFetch(new DOMException("The operation timed out.", "TimeoutError"));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1000);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        vi.setSystemTime(363_400);
+        return Promise.reject(new DOMException("The operation timed out.", "TimeoutError"));
+      })
+    );
 
     const error = (await rejectionOf({ ...BASE, timeoutMs: 600_000 })) as RetryableProviderError;
 
