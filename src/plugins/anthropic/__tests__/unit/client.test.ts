@@ -13,6 +13,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { isPromptGenUnavailable, PromptGenUnavailableError } from "../../../promptGen/contract";
 import {
+  apiErrorDetailOf,
   classifyAnthropicError,
   getAnthropicClient,
   redactedFailureOf,
@@ -97,6 +98,41 @@ describe("anthropic client: error table", () => {
       status,
       message: `[ai] Anthropic rejected the request (${status}).`
     });
+  });
+
+  it("puts Anthropic's 4xx error type and message on the error, the way the live API sends them", () => {
+    const body = {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "tools.15.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level"
+      }
+    };
+
+    const error = classifyAnthropicError(APIError.generate(400, body, "x", new Headers()));
+
+    expect(error).toBeInstanceOf(TerminalProviderError);
+    expect(error.message).toBe(
+      "[ai] Anthropic rejected the request (400).\n  invalid_request_error: tools.15.custom.input_schema: input_schema does not support oneOf, allOf, or anyOf at the top level"
+    );
+    expect(redactedFailureOf(error)).toEqual({
+      errorType: "terminal",
+      status: 400,
+      apiType: "invalid_request_error",
+      apiMessage: body.error.message
+    });
+  });
+
+  it("cuts Anthropic's error message to 300 characters", () => {
+    const body = {
+      type: "error",
+      error: { type: "invalid_request_error", message: "m".repeat(400) }
+    };
+
+    expect(
+      apiErrorDetailOf(APIError.generate(400, body, "x", new Headers()))?.message
+    ).toHaveLength(300);
   });
 
   it.each([

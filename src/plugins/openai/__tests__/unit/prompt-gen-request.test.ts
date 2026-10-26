@@ -284,6 +284,36 @@ describe("openai unit: prompt-gen request (Responses mapping)", () => {
       expect(forgotten.input).toEqual([text, ...calls]);
     });
 
+    it("flattens a tool whose input schema is a top-level union into object parameters", () => {
+      const inputSchema = {
+        anyOf: [
+          { type: "object", properties: { op: { const: "draft" } }, required: ["op"] },
+          {
+            type: "object",
+            properties: { op: { const: "pick" }, cue: { type: "string" } },
+            required: ["op", "cue"]
+          }
+        ]
+      };
+
+      const [tool] =
+        bodyOf({
+          prompt: "p",
+          tools: [{ name: "music", description: "Music.", inputSchema }]
+        }).tools ?? [];
+
+      expect(tool).toMatchObject({
+        parameters: {
+          type: "object",
+          properties: {
+            op: { anyOf: [{ const: "draft" }, { const: "pick" }] },
+            cue: { type: "string" }
+          },
+          required: ["op"]
+        }
+      });
+    });
+
     it("maps tools to non-strict function tools and every toolChoice", () => {
       const tools = [
         { name: "read_frame", description: "One frame.", inputSchema: { type: "object" } }

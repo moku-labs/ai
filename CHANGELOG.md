@@ -16,6 +16,13 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Fixed
 
+- **anthropic, openai: a tool loop no longer answers 400 on a union tool.** Anthropic and OpenAI
+  refuse `oneOf` / `anyOf` / `allOf` at the top of a tool's input schema; a zod discriminated
+  union (the studio's `captions` and `music`) made every director call fail. The schema is now
+  flattened into one object (merged properties, shared required keys, the shapes in the
+  description); the tool's own schema still checks the input before the tool runs.
+- **anthropic: a 4xx names its cause.** The error and the `anthropic:prompt-gen:failed` log carry
+  Anthropic's error type and message (cut to 300 characters, no prompt text).
 - **fal: a long call is no longer cut by Bun's socket idle timer.** Bun's fetch drops a socket that
   receives no byte for about 5 min (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`). A high-reasoning chat model
   sends nothing while it thinks, so every fal call longer than about 6 min failed at 293-360 s with
