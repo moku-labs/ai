@@ -14,12 +14,18 @@ import {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const NANO = resolveImageModel("nano-banana-pro");
+const NANO_21 = resolveImageModel("nano-banana-2.1");
 const SEEDREAM = resolveImageModel("seedream-4.5-edit");
 const GPT = resolveImageModel("gpt-image-2.5");
 
 describe("catalog", () => {
   it("lists the aliases in catalog order", () => {
-    expect(imageAliases()).toEqual(["nano-banana-pro", "seedream-4.5-edit", "gpt-image-2.5"]);
+    expect(imageAliases()).toEqual([
+      "nano-banana-pro",
+      "nano-banana-2.1",
+      "seedream-4.5-edit",
+      "gpt-image-2.5"
+    ]);
   });
 
   it.each([
@@ -55,7 +61,7 @@ describe("catalog", () => {
     expect(caught).toMatchObject({
       status: 400,
       message:
-        '[ai] Unknown fal image model "dall-e".\n  Use one of: nano-banana-pro, seedream-4.5-edit, gpt-image-2.5.'
+        '[ai] Unknown fal image model "dall-e".\n  Use one of: nano-banana-pro, nano-banana-2.1, seedream-4.5-edit, gpt-image-2.5.'
     });
   });
 });
@@ -93,6 +99,12 @@ describe("imageResolution", () => {
 describe("checkImageAspect", () => {
   it("accepts nano's wide aspects", () => {
     expect(() => checkImageAspect(NANO, "21:9", "1K")).not.toThrow();
+  });
+
+  it("accepts the extreme aspects on nano-banana-2.1 only", () => {
+    expect(() => checkImageAspect(NANO_21, "1:8", "2K")).not.toThrow();
+    expect(() => checkImageAspect(NANO_21, "4:1", "1K")).not.toThrow();
+    expect(() => checkImageAspect(NANO, "1:8", "2K")).toThrow(TerminalProviderError);
   });
 
   it("checks the size table of a sized resolution", () => {

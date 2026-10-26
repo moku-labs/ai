@@ -41,9 +41,10 @@ describe("createFalApi().models()", () => {
     ]);
   });
 
-  it("lists the three image models at their default resolution", () => {
+  it("lists the four image models at their default resolution", () => {
     expect(createFalApi(createTestCtx()).models("image")).toEqual([
       { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } },
+      { id: "nano-banana-2.1", price: { usd: 0.15, per: "image" } },
       { id: "seedream-4.5-edit", price: { usd: 0.04, per: "image" } },
       { id: "gpt-image-2.5", price: { usd: 0.05, per: "image" } }
     ]);
@@ -82,7 +83,7 @@ describe("createFalApi().models()", () => {
     });
     const api = createFalApi(ctx);
     expect(api.models("video")[0]?.price).toEqual({ usd: 0.5, per: "second" });
-    expect(api.models("image")[2]?.price).toEqual({ usd: 0.07, per: "image" });
+    expect(api.models("image")[3]?.price).toEqual({ usd: 0.07, per: "image" });
     expect(api.models("music")[1]?.price).toEqual({ usd: 0.3, per: "generation" });
     expect(api.models("prompt-gen")[0]?.price).toEqual({ inputPerM: 4, outputPerM: 25 });
     expect(api.models("sfx")[0]?.price).toEqual({ usd: 0.003, per: "second" });

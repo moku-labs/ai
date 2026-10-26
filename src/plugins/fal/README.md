@@ -256,8 +256,12 @@ Seedance 2.5 and 2.0 Mini 1080p have no bundled price. Add `seedance-2.5@1080p` 
 | Alias | Text endpoint | Edit endpoint | Max refs | `params.resolution` | Aspects |
 | --- | --- | --- | --- | --- | --- |
 | `nano-banana-pro` | `fal-ai/nano-banana-pro` | `fal-ai/nano-banana-pro/edit` | 14 | native `1K` / `2K` / `4K`, default `1K`; `1080` → `1K` | `21:9 16:9 3:2 4:3 5:4 1:1 4:5 3:4 2:3 9:16` |
+| `nano-banana-2.1` | `fal-ai/nano-banana-2.1` | `fal-ai/nano-banana-2.1/edit` | 14 | native `1K` / `2K` / `4K`, default `1K`; `1080` → `1K` | Pro's, plus `4:1 1:4 8:1 1:8` |
 | `seedream-4.5-edit` | `fal-ai/bytedance/seedream/v4.5/text-to-image` | `fal-ai/bytedance/seedream/v4.5/edit` | 10 | `2K` → `image_size: "auto_2K"`; `1080` → preset name; `1K` / `4K` ignored | `9:16 16:9 1:1 3:4 4:3` |
 | `gpt-image-2.5` (default) | `openai/gpt-image-2.5/sunburst/text-to-image` | `openai/gpt-image-2.5/sunburst/edit` | 16 | `2K` → 2K size; `1080` or none → preset name; `1K` / `4K` ignored | `9:16 16:9 1:1 3:4 4:3` |
+
+Nano Banana 2.1 takes fal's other inputs as pass-through `params`: `thinking_level` (`minimal` / `medium` /
+`high`), `safety_tolerance` (`"1"`–`"6"`), `seed`, `system_prompt`. Unset, fal uses its own defaults.
 
 `params.resolution` must be `1K`, `2K`, `4K` or `1080`; any other value is a terminal error. `aspect` defaults to
 `9:16` and is checked against the size table of the resolution, when there is one.
@@ -600,6 +604,7 @@ other tasks' keys carry the task:
 | Key | USD | Unit |
 | --- | --- | --- |
 | `image:nano-banana-pro@1K` / `@2K` / `@4K` | 0.15 / 0.15 / 0.30 | per image |
+| `image:nano-banana-2.1@1K` / `@2K` / `@4K` | 0.15 / 0.15 / 0.30 | per image, Pro's prices as an upper bound: fal lists none |
 | `image:seedream-4.5-edit` | 0.04 | per image |
 | `image:gpt-image-2.5` | 0.05 | per image |
 | `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |

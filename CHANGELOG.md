@@ -5,6 +5,15 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **fal: image model `nano-banana-2.1`.** Google's Nano Banana 2.1 on `fal-ai/nano-banana-2.1` and
+  `fal-ai/nano-banana-2.1/edit`. Up to 14 refs, native `1K` / `2K` / `4K`, Pro's aspects plus
+  `4:1 1:4 8:1 1:8`. `thinking_level`, `safety_tolerance`, `seed` and `system_prompt` pass through
+  `params`. fal lists no per-image price for it, so the bundled price is Nano Banana Pro's
+  (0.15 / 0.15 / 0.30), an upper bound. Set `image:nano-banana-2.1@2K` in `priceOverrides` once
+  the real price is known.
+
 ### Fixed
 
 - **fal: a long call is no longer cut by Bun's socket idle timer.** Bun's fetch drops a socket that

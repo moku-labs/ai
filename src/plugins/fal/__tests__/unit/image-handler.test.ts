@@ -292,6 +292,27 @@ describe("submit", () => {
     });
   });
 
+  it("queues nano-banana-2.1 refs on its edit endpoint, thinking_level passed through", async () => {
+    const fetchMock = stubStorageFetch(submitResponse("req-21"));
+    const request: ImageRequest = {
+      prompt: "p",
+      model: "nano-banana-2.1",
+      refs: [face],
+      params: { resolution: "2K", thinking_level: "high" }
+    };
+
+    await createImageHandler(createTestCtx()).submit(request, {});
+
+    const post = callsOf(fetchMock).find(call => call.url.startsWith("https://queue.fal.run/"));
+    expect(post?.url).toBe("https://queue.fal.run/fal-ai/nano-banana-2.1/edit");
+    expect(jsonBodyOf(post)).toMatchObject({
+      aspect_ratio: "9:16",
+      resolution: "2K",
+      thinking_level: "high",
+      image_urls: [storageUrlOf(face)]
+    });
+  });
+
   it("stops before the queue POST when the caller aborts during the uploads", async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn(async (url: string) => {
