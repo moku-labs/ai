@@ -628,6 +628,7 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | --- | --- |
 | Caller abort | Rethrown unchanged (clean pause). It stops uploads; a queue POST already sent runs to the end, so a billed job always returns its id |
 | Request timeout / network failure | Retryable, `kind: "timeout"` / `"network"` (a poll keeps polling) |
+| The runtime's socket idle timer fires (a `TimeoutError` that is not `timeoutMs`) | Retryable, `kind: "timeout"`, the message names the seconds. Bun's timer is off for every fal call (`timeout: false`), so only `timeoutMs` ends a silent long call |
 | 429 | Retryable, `status: 429`, `Retry-After` honored |
 | 5xx | Retryable, `status` |
 | 422 `content_policy_violation`, `error_type` with `content_policy`, or fal's text matching `sensitive` / `likeness` / `nsfw` / `moderation` (any case) | Flagged, never re-queued |
