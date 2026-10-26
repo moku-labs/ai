@@ -57,10 +57,10 @@ bun add @moku-labs/ai @moku-labs/core @moku-labs/common
 > [!NOTE]
 > **Status: `0.x` — early.** `@moku-labs/core` (`^1.7.1`) and `@moku-labs/common` (`^0.3.4`)
 > are peer dependencies: install them next to the package, one copy per project. The other
-> runtime dependencies (`better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
+> runtime dependencies (`@anthropic-ai/sdk`, `better-sqlite3`, `openai`, `sharp`, `yaml`, `zod`) install with the
 > package. On Bun the journal uses the built-in `bun:sqlite` driver instead of
 > `better-sqlite3`. Providers read API keys from the environment at request time —
-> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
+> export `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `FAL_KEY` / `APIMODELS_API_KEY` /
 > `ARK_API_KEY` (plus `ARK_ACCESS_KEY` / `ARK_SECRET_KEY` for Ark assets), or put them in a
 > `.env.local` file in the working directory (the shell wins over the file), before executing
 > (estimates and validation never need a key). `codex` and `claude` find their CLI on `PATH`;
@@ -162,9 +162,10 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`runner`](./src/plugins/runner/README.md) | Complex | regular (`app.runner`) | The durable orchestrator — `run`/`resume`/`estimate`/`status`/`events()`; owns all bus events. |
 | [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
-| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
+| [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`, `openai` and `anthropic`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
 | [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, retry-taxonomy errors. |
-| [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK. |
+| [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK; prompt-gen runs on the Responses API (GPT-6, images, schema output, reasoning effort, tools, cache-aware cost). |
+| [`anthropic`](./src/plugins/anthropic/README.md) | Complex | regular (`app.anthropic`) | Anthropic provider — registers the prompt-gen handler over the Messages API via the official SDK (Claude 5 models, images, schema output, effort, tools with thinking replay, prompt caching, cache-aware cost). |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
@@ -482,7 +483,14 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `baseUrl` | `string?` | `undefined` (SDK default) |
 | | `models` | `{ tts: string; chat: string }` | `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` |
 | | `timeoutMs` | `number` | `60_000` |
-| | `priceOverrides` | `Record<string, { inputPerM?; outputPerM?; ttsPerMChars? }>` | `{}` |
+| | `promptGenTimeoutMs` | `number` | `900_000` |
+| | `priceOverrides` | `Record<string, Partial<ModelPrice>>` (input, cached input, cache writes 30m / 12h, output, tts chars) | `{}` |
+| `anthropic` | `apiKeyEnv` | `string` | `"ANTHROPIC_API_KEY"` |
+| | `baseUrl` | `string?` | `undefined` (SDK default) |
+| | `model` | `string` | `"claude-opus-5-5"` |
+| | `maxTokens` | `number` | `32_000` |
+| | `timeoutMs` | `number` | `900_000` |
+| | `priceOverrides` | `Record<string, Partial<AnthropicPrice>>` | `{}` |
 | `image` | `defaultProvider` | `string` | `"codex"` |
 | `video` | `defaultProvider` | `string` | `"fal"` |
 | | `pollIntervalMs` | `number` | `5000` |

@@ -8,10 +8,14 @@ import { vi } from "vitest";
 import type { registryPlugin } from "../../../registry";
 import type {
   Config,
+  OpenaiCallOptions,
   OpenaiChatCompletion,
   OpenaiChatRequestBody,
   OpenaiClient,
   OpenaiContext,
+  OpenaiResponse,
+  OpenaiResponsesRequestBody,
+  OpenaiResponseUsage,
   OpenaiSpeechRequestBody,
   OpenaiSpeechResult,
   RegistryApi,
@@ -23,6 +27,7 @@ export const FIXTURE_CONFIG: Config = {
   apiKeyEnv: "OPENAI_API_KEY",
   models: { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" },
   timeoutMs: 60_000,
+  promptGenTimeoutMs: 900_000,
   priceOverrides: {}
 };
 
@@ -88,7 +93,12 @@ export type FakeOpenaiContextOverrides = {
  */
 export function createFakeOpenaiContext(overrides: FakeOpenaiContextOverrides = {}): OpenaiContext {
   const config: Config = { ...FIXTURE_CONFIG, ...overrides.config };
-  const state: State = { client: FAKE_NULL, prices: FAKE_NULL, ...overrides.state };
+  const state: State = {
+    client: FAKE_NULL,
+    prices: FAKE_NULL,
+    turns: new Map(),
+    ...overrides.state
+  };
   const envValues = new Map<string, string>();
   if (overrides.apiKey !== undefined) envValues.set(config.apiKeyEnv, overrides.apiKey);
 
@@ -141,6 +151,30 @@ export function createFakeOpenaiContext(overrides: FakeOpenaiContextOverrides = 
 export type SpeechCreateCall = { params: OpenaiSpeechRequestBody; signal: AbortSignal | undefined };
 /** One recorded `chat.completions.create` call, for call-shape assertions. */
 export type ChatCreateCall = { params: OpenaiChatRequestBody; signal: AbortSignal | undefined };
+/** One recorded `responses.create` call: the body and the per-request options. */
+export type ResponsesCreateCall = {
+  params: OpenaiResponsesRequestBody;
+  options: OpenaiCallOptions | undefined;
+};
+
+/**
+ * Builds a completed Responses answer with one text message.
+ *
+ * @param text - The answer text.
+ * @param usage - The usage to report; `{ input_tokens: 10, output_tokens: 5 }` by default.
+ * @returns The answer.
+ * @example
+ * ```ts
+ * textResponse("A fiery sunset.");
+ * ```
+ */
+export function textResponse(text: string, usage?: OpenaiResponseUsage): OpenaiResponse {
+  return {
+    status: "completed",
+    output: [{ type: "message", content: [{ type: "output_text", text }] }],
+    usage: usage ?? { input_tokens: 10, output_tokens: 5 }
+  };
+}
 
 /** Overrides accepted by {@link createFakeOpenaiClient}. */
 export type FakeOpenaiClientOverrides = {
@@ -148,6 +182,8 @@ export type FakeOpenaiClientOverrides = {
   chatResult?: OpenaiChatCompletion;
   speechImpl?: OpenaiClient["audio"]["speech"]["create"];
   chatImpl?: OpenaiClient["chat"]["completions"]["create"];
+  responsesResult?: OpenaiResponse;
+  responsesImpl?: OpenaiClient["responses"]["create"];
 };
 
 /**
@@ -167,9 +203,11 @@ export function createFakeOpenaiClient(overrides: FakeOpenaiClientOverrides = {}
   client: OpenaiClient;
   speechCalls: SpeechCreateCall[];
   chatCalls: ChatCreateCall[];
+  responsesCalls: ResponsesCreateCall[];
 } {
   const speechCalls: SpeechCreateCall[] = [];
   const chatCalls: ChatCreateCall[] = [];
+  const responsesCalls: ResponsesCreateCall[] = [];
 
   const client: OpenaiClient = {
     audio: {
@@ -194,8 +232,16 @@ export function createFakeOpenaiClient(overrides: FakeOpenaiClientOverrides = {}
           );
         }
       }
+    },
+    responses: {
+      create: async (params, options) => {
+        // A deep copy: the handler's body must be asserted as it was sent.
+        responsesCalls.push({ params: structuredClone(params), options });
+        if (overrides.responsesImpl) return overrides.responsesImpl(params, options);
+        return overrides.responsesResult ?? textResponse("ok");
+      }
     }
   };
 
-  return { client, speechCalls, chatCalls };
+  return { client, speechCalls, chatCalls, responsesCalls };
 }

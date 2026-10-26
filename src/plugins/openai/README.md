@@ -7,8 +7,9 @@
 `openai` is a provider plugin: it owns every OpenAI capability in the build system through the
 official fetch-based `openai` SDK (v5+, no axios). It does not define any task of its own —
 instead it implements the task-owned contracts of three task plugins and registers a handler for
-each in `onInit`: `("voiceover", "openai")` from the tts submodule, `("translate", "openai")` and
-`("prompt-gen", "openai")` from two chat-based submodules. Task facades (`app.voiceover`,
+each in `onInit`: `("voiceover", "openai")` from the tts submodule, `("translate", "openai")` over
+Chat Completions, and `("prompt-gen", "openai")` over the Responses API (GPT-6 tool calling
+requires Responses). Task facades (`app.voiceover`,
 `app.translate`, `app.promptGen`) and the `runner` pipeline resolve those handlers through the
 `registry` — consumers never call this plugin's handlers directly.
 
@@ -29,8 +30,9 @@ Configured under the `openai` key of `pluginConfigs`.
 | `apiKeyEnv` | `string` | `"OPENAI_API_KEY"` | Name of the env var holding the API key. Resolved via `ctx.env.get` at request time — never at init, never logged or echoed. |
 | `baseUrl` | `string` (optional) | `undefined` | API base URL override for proxies / OpenAI-compatible endpoints. When omitted, the SDK's default OpenAI endpoint is used. |
 | `models` | `{ tts: string; chat: string }` | `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` | Default model per capability. Every request may override via its own `model` field. |
-| `timeoutMs` | `number` | `60_000` | Per-request timeout, ms — enforced by the SDK client's own `timeout` option. A timeout surfaces as a retryable error. |
-| `priceOverrides` | `Record<string, { inputPerM?: number; outputPerM?: number; ttsPerMChars?: number }>` | `{}` | USD price overrides by model, merged field-by-field over the bundled table. Required for custom/unlisted models — an unpriced model estimates as $0. |
+| `timeoutMs` | `number` | `60_000` | Request timeout for tts and translate, ms — the SDK client's own `timeout` option. A timeout surfaces as a retryable error. |
+| `promptGenTimeoutMs` | `number` | `900_000` | Request timeout for prompt-gen, ms, passed on each `responses.create` call: reasoning calls run for minutes. |
+| `priceOverrides` | `Record<string, { inputPerM?, cachedInputPerM?, cacheWritePerM?, cacheWrite12hPerM?, outputPerM?, ttsPerMChars? }>` | `{}` | USD price overrides by model, merged field-by-field over the bundled table. Required for custom/unlisted models — an unpriced model costs $0 (prompt-gen logs `openai:prompt-gen:unpriced` once per model). |
 
 ### Environment variables
 
@@ -41,6 +43,14 @@ Configured under the `openai` key of `pluginConfigs`.
   ```
   [ai] OPENAI_API_KEY is not set.
     Export it or set config.apiKeyEnv to the variable that holds your key.
+  ```
+
+  prompt-gen `execute` throws `PromptGenUnavailableError` with reason `"auth"` instead, so a
+  `promptGen` fallback chain moves on (for example to `fal`):
+
+  ```
+  [ai] OPENAI_API_KEY is not set.
+    Export it, or use another prompt-gen provider.
   ```
 
 ### Account pools
@@ -54,16 +64,24 @@ lane-level concern that arrives with pools — nothing in this plugin's config a
 `prices.ts` ships USD prices per one million tokens / characters; `config.priceOverrides` merges
 over it (computed once, cached in state):
 
-| Model | Input /M tokens | Output /M tokens | TTS /M chars |
-|-------|-----------------|------------------|--------------|
-| `gpt-4o-mini` | $0.15 | $0.60 | — |
-| `gpt-4o` | $2.50 | $10.00 | — |
-| `gpt-4o-mini-tts` | — | — | $15 |
-| `tts-1` | — | — | $15 |
-| `tts-1-hd` | — | — | $30 |
+| Model | Input /M | Cached input /M | Cache write 30m /M | Cache write 12h /M | Output /M | TTS /M chars |
+|-------|----------|-----------------|--------------------|--------------------|-----------|--------------|
+| `gpt-6-astra` | $10 | $1 | $12.50 | $25 | $50 | — |
+| `gpt-6.1-sol` | $2 | $0.10 | $2.50 | $5 | $10 | — |
+| `gpt-6-sol` | $2 | $0.20 | $2.50 | $5 | $10 | — |
+| `gpt-6-luna` | $0.10 | $0.01 | $0.125 | $0.25 | $0.50 | — |
+| `gpt-4o-mini` | $0.15 | $0.075 | — | — | $0.60 | — |
+| `gpt-4o` | $2.50 | $1.25 | — | — | $10.00 | — |
+| `gpt-4o-mini-tts` | — | — | — | — | — | $15 |
+| `tts-1` | — | — | — | — | — | $15 |
+| `tts-1-hd` | — | — | — | — | — | $30 |
 
-Token counts for estimates use a `chars / 4` heuristic (`estimateTokenCount`) — a fast,
-dependency-free approximation, not a real tokenizer.
+- **Long context:** a GPT-6 request above 272K input tokens pays every input-side rate ×2 and
+  the output rate ×1.5.
+- **Missing cache rates** fall back to the next rate up: cached input → input, 30m write → input,
+  12h write → 30m write.
+- Token counts for estimates use a `chars / 4` heuristic (`estimateTokenCount`) — a fast,
+  dependency-free approximation, not a real tokenizer.
 
 ## API reference
 
@@ -145,25 +163,91 @@ estimate(request: PromptGenRequest): { usd: number };
 execute(request: PromptGenRequest, opts: { signal?: AbortSignal }): Promise<PromptGenResult>;
 ```
 
-- **estimate** — same `chars / 4` heuristic over `prompt` + `system` (input) and `prompt` again
-  (output), priced at chat rates.
-- **execute** — calls `chat.completions.create` with the caller's `system` (when given),
-  `prompt`, and `temperature` (forwarded only when given — the SDK default applies otherwise).
-  Returns `{ text, costUsd, toolCalls: [], finishReason, usage, meta: { model, promptTokens,
-  completionTokens } }`; usage-based cost with the same heuristic fallback. `finishReason` is
-  `"length"` when `finish_reason` is `"length"`, else `"stop"`. `usage` is `{ promptTokens,
-  completionTokens, cachedTokens, cacheWriteTokens }` from `prompt_tokens`, `completion_tokens`
-  and `prompt_tokens_details.cached_tokens`; a missing count is 0 and `cacheWriteTokens` is
-  always 0. `cachedReadTokens` is set only when `cached_tokens` is reported; `cachedWriteTokens`
-  is never set. `cacheSystem` is ignored.
-- **throws** — `PromptGenUnavailableError` with reason `"unsupported"` when `messages`, `tools`
-  or `toolChoice` is set, from `estimate` and `execute`, before any SDK call; promptGen falls back.
-  Otherwise the same taxonomy as translate (missing key, classified errors, no-choices terminal,
-  refusal → flagged).
+Calls the **Responses API** (`responses.create`) with `store: false` and
+`timeout: config.promptGenTimeoutMs`. It reads the same request contract as fal's prompt-gen, so
+the studio switches provider by name only.
+
+**Models** (`prompt-gen/models.ts`). `model` defaults to `config.models.chat`; an `openai/<id>`
+alias is sent as `<id>`.
+
+| Model | Kind | `params.reasoning: "off"` sends | `temperature` |
+|-------|------|----------------------------------|---------------|
+| `gpt-6-astra`, `gpt-6.1-sol` | GPT-6 reasoning | effort `low` (`none` is a 400 there) | never sent |
+| `gpt-6-sol`, `gpt-6-luna` | GPT-6 reasoning | effort `none` | never sent |
+| any other (gpt-4o family) | chat | no `reasoning` field | forwarded when set |
+
+**Params** (every other param is ignored):
+
+| Param | Type | Default | Sent as |
+|-------|------|---------|---------|
+| `params.reasoning` | `"off" \| "low" \| "medium" \| "high"` | `"medium"` | `reasoning.effort` + `include: ["reasoning.encrypted_content"]` (GPT-6 only) |
+| `params.max_tokens` | positive integer | `32_000` | `max_output_tokens` |
+| `params.responseSchema` | JSON schema object | none | `text.format: { type: "json_schema", name: "answer", schema, strict }` |
+| `params.strictSchema` | `boolean` | `false` | `strict` of the format above |
+| `params.images` | `{ path, mimeType, hash }` or a list | none | `input_image` base64 data URLs after the prompt text |
+
+**Request mapping** (`prompt-gen/request.ts`):
+
+- `system` → a developer message (`input_text`). `cacheSystem` adds
+  `prompt_cache_breakpoint: { mode: "explicit" }` on GPT-6 models.
+- A text part with `cache: true` gets the same breakpoint on GPT-6 (ignored on gpt-4o models).
+  More than 4 marks in one request: the first 4 in request order are kept, the system first.
+- `prompt` → a user message; with `messages` the prompt is ignored and the turns are sent:
+  user parts, assistant text, `function_call { call_id, name, arguments }` (without ids), and
+  `function_call_output { call_id, output }` with a string or `input_text` / `input_image` parts.
+  Image parts are read from disk as data URLs.
+- **Reasoning replay:** the reasoning items of a tool-call answer are kept in plugin state under
+  the answer's first call id (at most 500 turns, oldest dropped) and sent back before that turn's
+  assistant text and function calls, in the order the model produced them. After a restart they
+  are gone and the turn is sent without them, which OpenAI accepts.
+- `tools` → `{ type: "function", name, description, parameters, strict: false }`; `toolChoice` →
+  `"auto"` / `"none"` / `"required"` / `{ type: "function", name }`.
+- Refused before any I/O with a terminal 400: an empty prompt or empty `messages`, a bad
+  `params.reasoning`, a `responseSchema` that is not an object, `params.images` with `messages`, an
+  image that is not `{ path, mimeType, hash }`.
+
+**Answer** (`prompt-gen/answer.ts`):
+
+| Answer | Result |
+|--------|--------|
+| `output_text` parts of the messages | `text`, joined |
+| `function_call` items | `toolCalls` (`arguments` not JSON → `ToolArgumentsError`) |
+| function calls present | `finishReason: "tool_calls"` |
+| `incomplete` + `max_output_tokens` | `finishReason: "length"` |
+| `completed` | `finishReason: "stop"`; anything else `"other"` |
+| a `refusal` part, or `incomplete` + `content_filter` | `FlaggedProviderError` |
+| `failed` | `TerminalProviderError` with the error code |
+
+**Usage and cost.** `usage.promptTokens` is `input_tokens` (all input), `cachedReadTokens` is
+`input_tokens_details.cached_tokens`, `cachedWriteTokens` is `.cache_write_tokens`, each set only
+when reported. Cost = uncached input × input + cache reads × cached input + 30m writes × write 30m
++ 12h writes × write 12h + output × output, with the long-context tier above. Writes split by
+`cache_write_tokens_details.ttl_30m_tokens` / `ttl_12h_tokens`; without a breakdown every write is
+a 30m write. No usage in the answer: chars/4 of what was sent and received.
+
+**Estimate** — offline, no key: chars/4 of all input text plus 1 600 tokens per image in,
+`max_output_tokens` out, at the model's price (an upper bound).
+
+**Errors** — a missing key is `PromptGenUnavailableError` (`"auth"`, see above); SDK errors use
+the classification table below.
 
 ```ts
 const result = await app.promptGen.generate(
   { prompt: "Describe a sunset over the ocean.", temperature: 0.7 },
+  { provider: "openai" }
+);
+
+// GPT-6 Astra with a schema and a frame to check.
+const review = await app.promptGen.generate(
+  {
+    prompt: "Is the subject in frame?",
+    model: "gpt-6-astra",
+    params: {
+      reasoning: "high",
+      responseSchema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+      images: [{ path: "frames/s3-012.png", mimeType: "image/png", hash: "9f2c1a" }]
+    }
+  },
   { provider: "openai" }
 );
 ```
@@ -175,7 +259,7 @@ registry (three `register` calls in `onInit`) and thrown/returned values. Diagno
 `ctx.log` only: `openai:tts:done`, `openai:translate:done`, `openai:prompt-gen:done` on success
 (model + token/character counts, never text) and `openai:tts:failed` /
 `openai:translate:failed` / `openai:prompt-gen:failed` on failure (redacted error class +
-status/kind only).
+status/kind only), and `openai:prompt-gen:unpriced` (model only) once per model without a price.
 
 ## Usage examples
 
@@ -188,6 +272,7 @@ const app = createApp({
       apiKeyEnv: "OPENAI_API_KEY",
       models: { tts: "gpt-4o-mini-tts", chat: "gpt-4o" },
       timeoutMs: 60_000,
+      promptGenTimeoutMs: 900_000,
       priceOverrides: {
         // Price a custom model so estimates and budget gates are non-zero.
         "gpt-4o-2024-11-20": { inputPerM: 2.5, outputPerM: 10 }
@@ -238,6 +323,7 @@ const app = createApp({
   pluginConfigs: {
     openai: {
       apiKeyEnv: "MY_PROXY_KEY",
+      // prompt-gen calls /v1/responses: the proxy must serve it, not only /v1/chat/completions.
       baseUrl: "https://my-proxy.example.com/v1",
       models: { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" },
       timeoutMs: 60_000,
@@ -264,7 +350,8 @@ default).
 `getOpenaiClient` (`client.ts`) constructs the SDK client on the first `execute()` and caches it
 in plugin state. `info()` and `estimate()` never touch it, so a keyless environment can still
 inspect providers and price work. The client is a thin structurally-typed wrapper
-(`OpenaiClient` in `types.ts`) covering exactly the two SDK calls the handlers make —
+(`OpenaiClient` in `types.ts`) covering exactly the three SDK calls the handlers make
+(`audio.speech.create`, `chat.completions.create`, `responses.create`) —
 deliberately not the SDK's own namespace type, which `.d.ts` bundling drops.
 
 ### Error classification and retries
@@ -284,11 +371,13 @@ reads:
 | HTTP 5xx | `RetryableProviderError` | `status` | retried with backoff |
 | Other HTTP 4xx | `TerminalProviderError` | `status` | terminal `failed`, never retried |
 | Content policy / refusal | `FlaggedProviderError` | `kind: "content-policy"` | terminal `flagged`, never re-queued |
-| prompt-gen `messages`, `tools` or `toolChoice` | `PromptGenUnavailableError` | `reason: "unsupported"` | promptGen falls back to the next provider |
+| prompt-gen `execute` without an API key | `PromptGenUnavailableError` | `reason: "auth"` | promptGen falls back to the next provider |
+| prompt-gen answer `failed` | `TerminalProviderError` | — | terminal `failed`, never retried |
 
 Content policy is detected two ways: an SDK error whose body carries a
-`content_policy` / `content_filter` / `moderation` marker, or (chat handlers) a successful
-response whose message has a non-null `refusal`. Every thrown message is a fixed, redacted
+`content_policy` / `content_filter` / `moderation` marker, or a successful answer that refuses:
+a non-null `refusal` (translate), a `refusal` part or `incomplete` + `content_filter`
+(prompt-gen). Every thrown message is a fixed, redacted
 string — the caught SDK error's own message (which may embed request/response text) is never
 echoed.
 
@@ -325,12 +414,17 @@ openai/
 ├── index.ts             # createPlugin: depends [registry], onInit registers 3 handlers
 ├── types.ts             # Config/State/OpenaiClient/request-response shapes (error classes re-exported as types)
 ├── errors.ts            # RetryableProviderError / TerminalProviderError / FlaggedProviderError (runtime values)
-├── state.ts             # { client: null, prices: null } — both lazily created
+├── state.ts             # { client: null, prices: null, turns: Map } — client and prices lazy
 ├── api.ts               # app.openai.info()
 ├── client.ts            # lazy SDK factory, call options, error classification, redaction
-├── prices.ts            # bundled price table + shared estimate math
+├── prices.ts            # bundled price table + chat, tts and cache-aware cost math
+├── images.ts            # local image files as base64 data URLs
 ├── tts/handler.ts       # VoiceoverHandler ("voiceover", "openai")
-├── translate/handler.ts # TranslateHandler ("translate", "openai")
-├── prompt-gen/handler.ts# PromptGenHandler ("prompt-gen", "openai")
+├── translate/handler.ts # TranslateHandler ("translate", "openai"), Chat Completions
+├── prompt-gen/
+│   ├── handler.ts       # PromptGenHandler ("prompt-gen", "openai"), Responses API
+│   ├── models.ts        # model ids, GPT-6 family, effort map, long-context tier
+│   ├── request.ts       # checks before I/O + the Responses request body
+│   └── answer.ts        # answer reading, usage, cost, tool-turn memory
 └── __tests__/           # unit + integration (mocked SDK boundary, no network)
 ```

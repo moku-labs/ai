@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bundledPrices,
+  cacheAwareCostUsd,
   estimateChatCostUsd,
   estimateTokenCount,
   estimateTtsCostUsd,
@@ -25,7 +26,11 @@ describe("openai unit: prices", () => {
 
       const prices = getPrices(ctx);
 
-      expect(prices["gpt-4o-mini"]).toEqual({ inputPerM: 999, outputPerM: 0.6 });
+      expect(prices["gpt-4o-mini"]).toEqual({
+        inputPerM: 999,
+        cachedInputPerM: 0.075,
+        outputPerM: 0.6
+      });
     });
 
     it("adds a wholly new model entry from priceOverrides", () => {
@@ -85,6 +90,27 @@ describe("openai unit: prices", () => {
 
     it("prices an unlisted model as free (0 USD)", () => {
       expect(estimateTtsCostUsd({}, "unknown-model", 1000)).toBe(0);
+    });
+  });
+
+  describe("cacheAwareCostUsd — rate fallbacks", () => {
+    const tokens = {
+      uncached: 1_000_000,
+      cacheReads: 1_000_000,
+      cacheWrites30m: 1_000_000,
+      cacheWrites12h: 1_000_000,
+      output: 0
+    };
+    const standard = { input: 1, output: 1 };
+
+    it("prices a missing cached or 30-minute write rate at the input rate", () => {
+      expect(cacheAwareCostUsd({ inputPerM: 2 }, tokens, standard)).toBeCloseTo(8, 9);
+    });
+
+    it("prices a missing 12-hour write rate at the 30-minute write rate", () => {
+      const entry = { inputPerM: 2, cachedInputPerM: 0.5, cacheWritePerM: 3 };
+
+      expect(cacheAwareCostUsd(entry, tokens, standard)).toBeCloseTo(2 + 0.5 + 3 + 3, 9);
     });
   });
 });

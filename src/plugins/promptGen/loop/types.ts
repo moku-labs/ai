@@ -185,7 +185,7 @@ export type LoopEvent =
  * ```
  */
 export type RunToolLoopOptions = {
-  /** One model call; usually `app.promptGen.generate` with a provider that supports tools (fal). */
+  /** One model call; usually `app.promptGen.generate` with a provider that supports tools (fal, openai, anthropic). */
   generate: (request: PromptGenRequest, signal: AbortSignal) => Promise<PromptGenResult>;
   /** Provider model id sent with every call. */
   model: string;
