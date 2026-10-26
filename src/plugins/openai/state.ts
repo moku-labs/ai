@@ -4,15 +4,12 @@
 import type { State } from "./types";
 
 /**
- * Creates initial openai state (client + price table lazily created).
+ * Creates initial openai state: client and price table created lazily, no
+ * remembered tool turns.
  *
  * @returns Initial openai state.
- * @example
- * ```ts
- * const state = createOpenaiState();
- * ```
  */
 export function createOpenaiState(): State {
   // eslint-disable-next-line unicorn/no-null -- spec/11 pins null as the "not created yet" sentinel (State fields are `X | null`)
-  return { client: null, prices: null };
+  return { client: null, prices: null, turns: new Map() };
 }

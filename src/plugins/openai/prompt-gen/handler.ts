@@ -1,213 +1,208 @@
 /**
- * @file openai prompt-gen handler — implements the prompt-gen task-owned contract.
+ * @file openai prompt-gen handler — implements the prompt-gen task-owned
+ * contract over the Responses API (`responses.create`, never stored): the
+ * request is planned and checked offline (`request.ts`), images are read as
+ * data URLs, the answer is read and its tool turn remembered (`answer.ts`).
  */
-import type {
-  PromptGenHandler,
-  PromptGenRequest,
-  PromptGenResult,
-  PromptGenUsage
-} from "../../promptGen/contract";
-import { assertOneTurnRequest } from "../../promptGen/contract";
-import { redactedFailureOf, requestChatCompletion } from "../client";
-import { FlaggedProviderError, TerminalProviderError } from "../errors";
-import { estimateChatCostUsd, estimateTokenCount, getPrices } from "../prices";
-import type {
-  OpenaiChatMessage,
-  OpenaiChatRequestBody,
-  OpenaiChatUsage,
-  OpenaiContext
-} from "../types";
+import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../promptGen/contract";
+import { PromptGenUnavailableError } from "../../promptGen/contract";
+import { redactedFailureOf, requestResponse } from "../client";
+import { readImageDataUrls } from "../images";
+import { cacheAwareCostUsd, estimateTokenCount, getPrices } from "../prices";
+import type { ModelPrice, OpenaiContext, OpenaiResponse } from "../types";
+import type { ResponsesAnswer } from "./answer";
+import { readAnswer, rememberTurn, usageCostUsd, usageOf } from "./answer";
+import { priceTierOf } from "./models";
+import type { ResponsesPlan } from "./request";
+import { buildResponsesBody, estimateInputTokens, planResponses } from "./request";
+
+/** Looks up a model's prices, logging `openai:prompt-gen:unpriced` the first time a model has none. */
+type PriceLookup = (model: string) => Partial<ModelPrice> | undefined;
 
 /**
- * The typed usage of a completion; counts the API did not send are 0.
- * OpenAI caches prompts on its own, so cache writes are always 0.
- * `cachedReadTokens` is set only when `prompt_tokens_details.cached_tokens`
- * is in the answer (a reported 0 is kept); otherwise the key is absent.
- * OpenAI reports no write count, so `cachedWriteTokens` is always absent.
+ * Whether a price entry prices text tokens.
  *
- * @param usage - The completion's `usage`, if reported.
- * @returns The usage for `PromptGenResult.usage`.
+ * @param entry - The model's table entry, if any.
+ * @returns True when the entry has an input or an output rate.
  * @example
  * ```ts
- * // A cached count in the answer: kept as cachedReadTokens, 0 included.
- * usageOf({ prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: { cached_tokens: 1800 } });
- * // => { promptTokens: 2400, completionTokens: 120, cachedTokens: 1800, cacheWriteTokens: 0, cachedReadTokens: 1800 }
- * // No cached count: the optional key is absent.
- * usageOf({ prompt_tokens: 15, completion_tokens: 8 });
- * // => { promptTokens: 15, completionTokens: 8, cachedTokens: 0, cacheWriteTokens: 0 }
+ * isTextPriced({ ttsPerMChars: 15 }); // => false
  * ```
  */
-function usageOf(usage: OpenaiChatUsage | undefined): PromptGenUsage {
-  const cacheReads = usage?.prompt_tokens_details?.cached_tokens;
+function isTextPriced(entry: Partial<ModelPrice> | undefined): boolean {
+  return entry?.inputPerM !== undefined || entry?.outputPerM !== undefined;
+}
 
-  // The counts every provider has: 0 when OpenAI does not report one.
-  const result: PromptGenUsage = {
-    promptTokens: usage?.prompt_tokens ?? 0,
-    completionTokens: usage?.completion_tokens ?? 0,
-    cachedTokens: cacheReads ?? 0,
-    cacheWriteTokens: 0
+/**
+ * Creates the handler's price lookup over the effective table. A model
+ * without text prices costs 0 USD (add it via `config.priceOverrides`), and
+ * `openai:prompt-gen:unpriced` is logged once per such model.
+ *
+ * @param ctx - Plugin context (prices, log).
+ * @returns The lookup.
+ */
+function createPriceLookup(ctx: OpenaiContext): PriceLookup {
+  const reported = new Set<string>();
+  return model => {
+    const entry = getPrices(ctx)[model];
+    if (!isTextPriced(entry) && !reported.has(model)) {
+      reported.add(model);
+      ctx.log.warn("openai:prompt-gen:unpriced", { model });
+    }
+    return entry;
   };
-
-  // A reported cache count is kept, 0 included; an unreported one leaves the key out.
-  if (typeof cacheReads === "number") result.cachedReadTokens = cacheReads;
-  return result;
 }
 
 /**
- * Resolves the chat model to use: the request's override, else the
- * configured default.
+ * Refuses an `execute` without an API key as "unavailable", so `promptGen`
+ * falls back to its next provider. A client already built needs no key.
  *
- * @param ctx - The openai plugin context.
- * @param model - The request's model override, if any.
- * @returns The chat model name.
- * @example
- * ```ts
- * const model = resolveChatModel(ctx, request.model); // => "gpt-4o-mini"
- * ```
+ * @param ctx - Plugin context (state, config, env).
+ * @throws {PromptGenUnavailableError} With reason "auth" when `config.apiKeyEnv` is unset.
  */
-function resolveChatModel(ctx: OpenaiContext, model: string | undefined): string {
-  return model ?? ctx.config.models.chat;
+function assertApiKey(ctx: OpenaiContext): void {
+  if (ctx.state.client !== null) return;
+  if (ctx.env.get(ctx.config.apiKeyEnv) !== undefined) return;
+  throw new PromptGenUnavailableError(
+    `[ai] ${ctx.config.apiKeyEnv} is not set.\n  Export it, or use another prompt-gen provider.`,
+    "auth"
+  );
 }
 
 /**
- * Builds the chat messages for a prompt-gen request: the caller's system
- * prompt (when given) followed by the user prompt.
+ * The cost of an answer: its usage at the model's prices, or, without usage,
+ * the request's estimated input and the answer text at chars/4.
  *
  * @param request - The prompt-gen request.
- * @returns The chat messages, in order.
- * @example
- * ```ts
- * buildMessages({ prompt: "Describe a sunset." });
- * ```
+ * @param plan - Its plan.
+ * @param price - The model's prices, if any.
+ * @param response - The answer.
+ * @param text - The answer text.
+ * @returns The cost in US dollars.
  */
-function buildMessages(request: PromptGenRequest): OpenaiChatMessage[] {
-  const messages: OpenaiChatMessage[] = [];
-  if (request.system !== undefined) messages.push({ role: "system", content: request.system });
-  messages.push({ role: "user", content: request.prompt });
-  return messages;
+function answerCostUsd(
+  request: PromptGenRequest,
+  plan: ResponsesPlan,
+  price: Partial<ModelPrice> | undefined,
+  response: OpenaiResponse,
+  text: string
+): number {
+  if (response.usage !== undefined) return usageCostUsd(plan.model, price, response.usage);
+
+  const input = estimateInputTokens(request, plan.images.length);
+  const tokens = {
+    uncached: input,
+    cacheReads: 0,
+    cacheWrites30m: 0,
+    cacheWrites12h: 0,
+    output: estimateTokenCount(text)
+  };
+  return cacheAwareCostUsd(price, tokens, priceTierOf(plan.model, input));
 }
 
 /**
- * Builds the chat completion request body for a prompt-gen request,
- * forwarding the caller's temperature only when given (the SDK's own
- * default applies otherwise).
+ * The prompt-gen result of an answer: text, tool calls, finish reason, cost,
+ * typed usage and redacted metadata (model and token counts only).
  *
- * @param model - The chat model to use.
- * @param messages - The chat messages.
- * @param temperature - The caller's temperature override, if any.
- * @returns The chat completion request body.
- * @example
- * ```ts
- * buildChatRequestBody("gpt-4o-mini", messages, 0.7);
- * ```
+ * @param plan - The plan.
+ * @param response - The answer.
+ * @param answer - What the answer carries.
+ * @param costUsd - Its cost.
+ * @returns The result.
  */
-function buildChatRequestBody(
-  model: string,
-  messages: OpenaiChatMessage[],
-  temperature: number | undefined
-): OpenaiChatRequestBody {
-  return temperature === undefined ? { model, messages } : { model, messages, temperature };
+function resultOf(
+  plan: ResponsesPlan,
+  response: OpenaiResponse,
+  answer: ResponsesAnswer,
+  costUsd: number
+): PromptGenResult {
+  return {
+    text: answer.text,
+    costUsd,
+    toolCalls: answer.toolCalls,
+    finishReason: answer.finishReason,
+    usage: usageOf(response.usage),
+    meta: {
+      model: plan.model,
+      promptTokens: response.usage?.input_tokens,
+      completionTokens: response.usage?.output_tokens
+    }
+  };
 }
 
 /**
- * Creates the OpenAI prompt-gen handler: `estimate` prices a chars/4 token
- * heuristic (fast, dependency-free approximation for both the prompt and
- * the expected output) × chat prices; `execute` calls
- * `chat.completions.create` with the caller's system/prompt/temperature and
- * returns usage-based actual cost, typed `usage`, no tool calls, and
- * `finishReason` "length" for a cut answer, else "stop". Both throw
- * `PromptGenUnavailableError` with reason "unsupported" for `messages`,
- * `tools` or `toolChoice`, before any other work; `cacheSystem` alone is
- * ignored.
+ * Creates the OpenAI prompt-gen handler over the Responses API. `estimate`
+ * is an offline upper bound: chars/4 of all input text plus 1 600 tokens per
+ * image in, `max_output_tokens` out, at the model's price. `execute` checks
+ * the request before any I/O (a terminal 400), refuses a missing key as
+ * unavailable ("auth"), reads the images, calls `responses.create` with
+ * `store: false` and `config.promptGenTimeoutMs`, remembers the reasoning of
+ * a tool turn for the next request, and prices the answer from its usage.
  *
  * @param ctx - Plugin context (config + state + env + log).
  * @returns The prompt-gen handler for the "openai" provider.
- * @example
- * ```ts
- * registry.register("prompt-gen", "openai", createPromptGenHandler(ctx));
- * ```
  */
 export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
+  const priceOf = createPriceLookup(ctx);
   return {
     /**
-     * Estimates the cost of `request` without executing it.
+     * Estimates the cost of `request` offline, without an API key.
      *
      * @param request - The prompt-gen request to estimate.
-     * @returns The estimated cost in US dollars.
-     * @throws {PromptGenUnavailableError} With reason "unsupported" for messages or tools.
-     * @example
-     * ```ts
-     * handler.estimate({ prompt: "Describe a sunset over the ocean." });
-     * ```
+     * @returns The upper-bound cost in US dollars.
+     * @throws {TerminalProviderError} A 400 for a request `execute` would refuse.
      */
     estimate(request: PromptGenRequest): { usd: number } {
-      assertOneTurnRequest(request, "OpenAI");
-      const model = resolveChatModel(ctx, request.model);
-      const inputTokens =
-        estimateTokenCount(request.prompt) + estimateTokenCount(request.system ?? "");
-      // No response yet to size against — assume output is the same order of
-      // magnitude as the prompt (a fast, dependency-free approximation).
-      const outputTokens = estimateTokenCount(request.prompt);
-      return { usd: estimateChatCostUsd(getPrices(ctx), model, inputTokens, outputTokens) };
+      const plan = planResponses(request, ctx.config.models.chat);
+      const input = estimateInputTokens(request, plan.images.length);
+      const tokens = {
+        uncached: input,
+        cacheReads: 0,
+        cacheWrites30m: 0,
+        cacheWrites12h: 0,
+        output: plan.maxOutputTokens
+      };
+      return {
+        usd: cacheAwareCostUsd(priceOf(plan.model), tokens, priceTierOf(plan.model, input))
+      };
     },
     /**
-     * Executes `request` against the provider.
+     * Executes `request` against the Responses API.
      *
      * @param request - The prompt-gen request to execute.
      * @param opts - Execution options.
      * @param opts.signal - Optional abort signal to cancel the request.
      * @returns The generated result.
-     * @throws {PromptGenUnavailableError} With reason "unsupported" for messages or tools.
-     * @throws {Error} When the API key is unset, the request fails, or the model declines.
-     * @example
-     * ```ts
-     * await handler.execute({ prompt: "Describe a sunset." }, {});
-     * ```
+     * @throws {PromptGenUnavailableError} With reason "auth" when the API key is unset.
+     * @throws {Error} A terminal 400 for a bad request, a classified SDK error, a flagged refusal, or `ToolArgumentsError`.
      */
     async execute(
       request: PromptGenRequest,
       opts: { signal?: AbortSignal }
     ): Promise<PromptGenResult> {
-      assertOneTurnRequest(request, "OpenAI");
-      const model = resolveChatModel(ctx, request.model);
+      // A bad request, then a missing key, are refused before any I/O.
+      const plan = planResponses(request, ctx.config.models.chat);
+      assertApiKey(ctx);
+      const price = priceOf(plan.model);
+
       try {
-        const completion = await requestChatCompletion(
-          ctx,
-          buildChatRequestBody(model, buildMessages(request), request.temperature),
-          opts.signal
-        );
-        const choice = completion.choices[0];
-        const message = choice?.message;
-        if (message === undefined) {
-          throw new TerminalProviderError("[ai] OpenAI returned no completion choices.");
-        }
-        if (message.refusal !== null) {
-          throw new FlaggedProviderError("[ai] OpenAI declined the request (content policy).");
-        }
-        const text = message.content ?? "";
-        const usage = completion.usage;
-        const costUsd = usage
-          ? estimateChatCostUsd(getPrices(ctx), model, usage.prompt_tokens, usage.completion_tokens)
-          : estimateChatCostUsd(
-              getPrices(ctx),
-              model,
-              estimateTokenCount(request.prompt),
-              estimateTokenCount(text)
-            );
+        // Images become data URLs; remembered reasoning goes back before its calls.
+        const imageUrls = await readImageDataUrls(plan.images);
+        const body = buildResponsesBody(request, plan, imageUrls, ctx.state.turns);
+        const response = await requestResponse(ctx, body, opts.signal);
+
+        // The answer's tool turn is remembered for the next step of the loop.
+        const answer = readAnswer(response);
+        rememberTurn(ctx.state.turns, answer);
+        const costUsd = answerCostUsd(request, plan, price, response, answer.text);
+
         // Redacted diagnostics only — model + token counts, never prompt text.
-        ctx.log.info("openai:prompt-gen:done", { model, promptTokens: usage?.prompt_tokens });
-        return {
-          text,
-          costUsd,
-          toolCalls: [],
-          finishReason: choice?.finish_reason === "length" ? "length" : "stop",
-          usage: usageOf(usage),
-          meta: {
-            model,
-            promptTokens: usage?.prompt_tokens,
-            completionTokens: usage?.completion_tokens
-          }
-        };
+        ctx.log.info("openai:prompt-gen:done", {
+          model: plan.model,
+          promptTokens: response.usage?.input_tokens,
+          completionTokens: response.usage?.output_tokens
+        });
+        return resultOf(plan, response, answer, costUsd);
       } catch (error) {
         ctx.log.warn("openai:prompt-gen:failed", redactedFailureOf(error));
         throw error;

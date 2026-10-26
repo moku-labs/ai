@@ -1,6 +1,7 @@
 /**
  * Complex tier — OpenAI provider via the official SDK: voiceover (tts) +
- * translate + prompt-gen submodules. Registers all three in onInit.
+ * translate (Chat Completions) + prompt-gen (Responses API) submodules.
+ * Registers all three in onInit.
  *
  * @see README.md
  */
@@ -17,6 +18,7 @@ const defaultConfig: Config = {
   apiKeyEnv: "OPENAI_API_KEY",
   models: { tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" },
   timeoutMs: 60_000,
+  promptGenTimeoutMs: 900_000,
   priceOverrides: {}
 };
 

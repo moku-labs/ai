@@ -19,6 +19,8 @@ import type {
   OpenaiChatRequestBody,
   OpenaiClient,
   OpenaiContext,
+  OpenaiResponse,
+  OpenaiResponsesRequestBody,
   OpenaiSpeechRequestBody,
   OpenaiSpeechResult
 } from "./types";
@@ -101,6 +103,21 @@ export function createOpenaiClient(options: {
           callOptions?: OpenaiCallOptions
         ): Promise<OpenaiChatCompletion> => raw.chat.completions.create(params, callOptions)
       }
+    },
+    responses: {
+      /**
+       * Generates a model response via the real SDK client (Responses API),
+       * forwarding our own request/options types so overload resolution on
+       * the real client picks the non-streaming signature.
+       *
+       * @param params - The Responses request body.
+       * @param callOptions - Per-request options (abort signal, timeout).
+       * @returns The answer.
+       */
+      create: (
+        params: OpenaiResponsesRequestBody,
+        callOptions?: OpenaiCallOptions
+      ): Promise<OpenaiResponse> => raw.responses.create(params, callOptions)
     }
   };
 }
@@ -355,6 +372,34 @@ export async function requestSpeech(
   const client = getOpenaiClient(ctx);
   try {
     return await client.audio.speech.create(params, toOpenaiCallOptions(signal));
+  } catch (error) {
+    // Caller-initiated abort propagates unchanged (clean-pause contract).
+    if (signal?.aborted) throw error;
+    throw classifyOpenaiError(error);
+  }
+}
+
+/**
+ * Resolves the SDK client and requests a model response (Responses API) with
+ * the prompt-gen timeout, `config.promptGenTimeoutMs`, on this one request:
+ * the cached client keeps `timeoutMs` for tts and translate. Any thrown SDK
+ * error is mapped onto this plugin's provider error taxonomy.
+ *
+ * @param ctx - The openai plugin context.
+ * @param params - The Responses request body.
+ * @param signal - The caller-supplied abort signal, if any.
+ * @returns The answer.
+ * @throws {Error} When the API key is unset, or the request fails.
+ */
+export async function requestResponse(
+  ctx: OpenaiContext,
+  params: OpenaiResponsesRequestBody,
+  signal: AbortSignal | undefined
+): Promise<OpenaiResponse> {
+  const client = getOpenaiClient(ctx);
+  const options = { ...toOpenaiCallOptions(signal), timeout: ctx.config.promptGenTimeoutMs };
+  try {
+    return await client.responses.create(params, options);
   } catch (error) {
     // Caller-initiated abort propagates unchanged (clean-pause contract).
     if (signal?.aborted) throw error;
