@@ -385,6 +385,42 @@ describe("anthropic prompt-gen request: tools", () => {
     ]);
   });
 
+  it("flattens a tool whose input schema is a top-level union into one object schema", async () => {
+    // Anthropic answers 400 to oneOf / anyOf / allOf at the top of input_schema (live, 2026-10-27).
+    const inputSchema = {
+      oneOf: [
+        { type: "object", properties: { op: { const: "write" } }, required: ["op"] },
+        {
+          type: "object",
+          properties: { op: { const: "translate" }, to: { type: "string" } },
+          required: ["op", "to"]
+        }
+      ]
+    };
+
+    const body = await sentBody({
+      prompt: "",
+      messages: [USER],
+      tools: [{ name: "captions", description: "Captions.", inputSchema }]
+    });
+
+    expect(body.tools).toEqual([
+      {
+        name: "captions",
+        description: "Captions.",
+        input_schema: {
+          type: "object",
+          properties: {
+            op: { anyOf: [{ const: "write" }, { const: "translate" }] },
+            to: { type: "string" }
+          },
+          required: ["op"],
+          description: 'One of: {op: "write"} | {op: "translate", to}'
+        }
+      }
+    ]);
+  });
+
   it("sends no tools field for an empty tool list", async () => {
     const body = await sentBody({ prompt: "", messages: [USER], tools: [] });
 

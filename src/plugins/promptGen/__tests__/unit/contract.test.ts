@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertOneTurnRequest,
   isPromptGenUnavailable,
+  objectInputSchema,
   PromptGenUnavailableError,
   ToolArgumentsError
 } from "../../contract";
@@ -126,5 +127,72 @@ describe("assertOneTurnRequest", () => {
 
   it("lets a one-turn request through, cacheSystem included", () => {
     expect(() => assertOneTurnRequest({ prompt: "p", cacheSystem: true }, "Codex")).not.toThrow();
+  });
+});
+
+describe("objectInputSchema", () => {
+  const write = { type: "object", properties: { op: { const: "write" } }, required: ["op"] };
+  const translate = {
+    type: "object",
+    properties: { op: { const: "translate" }, to: { type: "string" }, note: { type: "string" } },
+    required: ["op", "to"]
+  };
+
+  it("keeps a schema without a top-level union, as an object", () => {
+    expect(objectInputSchema({ properties: { shot: { type: "number" } } })).toEqual({
+      type: "object",
+      properties: { shot: { type: "number" } }
+    });
+  });
+
+  it("flattens a oneOf: merged properties, the shared required keys, the shapes in the description", () => {
+    expect(objectInputSchema({ description: "Captions.", oneOf: [write, translate] })).toEqual({
+      type: "object",
+      properties: {
+        op: { anyOf: [{ const: "write" }, { const: "translate" }] },
+        to: { type: "string" },
+        note: { type: "string" }
+      },
+      required: ["op"],
+      description: 'Captions.\nOne of: {op: "write"} | {op: "translate", to, note?}'
+    });
+  });
+
+  it("keeps one schema for a key every variant types the same way", () => {
+    const flat = objectInputSchema({
+      anyOf: [
+        { properties: { id: { type: "string" } }, required: ["id"] },
+        { properties: { id: { type: "string" }, x: { type: "number" } }, required: ["id"] }
+      ]
+    });
+
+    expect(flat.properties).toEqual({ id: { type: "string" }, x: { type: "number" } });
+    expect(flat.required).toEqual(["id"]);
+  });
+
+  it("requires every variant's keys for an allOf and adds no shapes", () => {
+    const flat = objectInputSchema({
+      allOf: [
+        { properties: { a: { type: "string" } }, required: ["a"] },
+        { properties: { b: { type: "number" } }, required: ["b"] }
+      ]
+    });
+
+    expect(flat).toEqual({
+      type: "object",
+      properties: { a: { type: "string" }, b: { type: "number" } },
+      required: ["a", "b"]
+    });
+  });
+
+  it("sends no required list when the variants share no required key", () => {
+    const flat = objectInputSchema({
+      oneOf: [
+        { properties: { a: { type: "string" } }, required: ["a"] },
+        { properties: { b: { type: "string" } }, required: ["b"] }
+      ]
+    });
+
+    expect(flat).not.toHaveProperty("required");
   });
 });

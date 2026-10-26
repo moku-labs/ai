@@ -7,6 +7,23 @@
  */
 
 /**
+ * Anthropic's error type and message of a 4xx answer (`error.type`,
+ * `error.message`). The message names the field at fault (for example
+ * `tools.15.custom.input_schema: …`); it carries no prompt text.
+ *
+ * @example
+ * ```ts
+ * const api: ApiErrorDetail = { type: "invalid_request_error", message: "max_tokens: too large" };
+ * ```
+ */
+export type ApiErrorDetail = {
+  /** The error type, e.g. `invalid_request_error`. */
+  type: string;
+  /** The error message, cut to 300 characters. */
+  message: string;
+};
+
+/**
  * Retryable transport or provider failure: 5xx (529 overloaded included),
  * 429, timeout or network. Carries exactly the fields the runner's
  * `classifyError` reads, as own instance properties: `status`, `kind` and
@@ -49,21 +66,25 @@ export class RetryableProviderError extends Error {
 export class TerminalProviderError extends Error {
   /** HTTP status, when known. */
   readonly status: number | undefined;
+  /** Anthropic's error type and message of a 4xx answer, when it sent them. */
+  readonly api: ApiErrorDetail | undefined;
 
   /**
    * Creates a terminal provider error.
    *
-   * @param message - Fixed `[ai] Anthropic …` message; never request or answer text.
+   * @param message - `[ai] Anthropic …` message; never request or answer text.
    * @param status - HTTP status, when known.
+   * @param api - Anthropic's error type and message, when it sent them.
    * @example
    * ```ts
    * throw new TerminalProviderError("[ai] Anthropic rejected the request (400).", 400);
    * ```
    */
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, api?: ApiErrorDetail) {
     super(message);
     this.name = "TerminalProviderError";
     this.status = status;
+    this.api = api;
   }
 }
 
