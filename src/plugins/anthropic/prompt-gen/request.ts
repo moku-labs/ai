@@ -12,6 +12,7 @@ import type {
   PromptGenRequest,
   ToolDefinition
 } from "../../promptGen/contract";
+import { objectInputSchema } from "../../promptGen/contract";
 import { badRequest } from "../client";
 import type { ImageFile } from "../images";
 import { imageFileOf } from "../images";
@@ -456,7 +457,8 @@ function turnMessages(
 }
 
 /**
- * A tool as sent. Tool inputs are objects; the schema itself goes as given.
+ * A tool as sent. Tool inputs are objects: a top-level union is flattened
+ * into one object schema (Anthropic refuses `oneOf` / `anyOf` / `allOf` there).
  *
  * @param tool - The tool definition.
  * @returns The tool.
@@ -469,7 +471,7 @@ function toolOf(tool: ToolDefinition): AnthropicTool {
   return {
     name: tool.name,
     description: tool.description,
-    input_schema: { type: "object", ...tool.inputSchema }
+    input_schema: objectInputSchema(tool.inputSchema)
   };
 }
 

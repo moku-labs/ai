@@ -11,6 +11,7 @@ import type {
   PromptGenRequest,
   ToolDefinition
 } from "../../promptGen/contract";
+import { objectInputSchema } from "../../promptGen/contract";
 import { TerminalProviderError } from "../errors";
 import { estimateTokenCount } from "../prices";
 import type {
@@ -589,7 +590,7 @@ function functionToolOf(tool: ToolDefinition): OpenaiFunctionTool {
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: tool.inputSchema,
+    parameters: objectInputSchema(tool.inputSchema),
     strict: false
   };
 }

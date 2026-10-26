@@ -12,6 +12,7 @@ import Anthropic, {
   RateLimitError
 } from "@anthropic-ai/sdk";
 import { PromptGenUnavailableError } from "../promptGen/contract";
+import type { ApiErrorDetail } from "./errors";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import type {
   AnthropicCallOptions,
@@ -47,6 +48,9 @@ const MIN_SERVER_ERROR = 500;
 /** Milliseconds per second, for a Retry-After in seconds. */
 const MS_PER_SECOND = 1000;
 
+/** Longest slice of Anthropic's error message copied into an error or a log line. */
+const MAX_API_MESSAGE = 300;
+
 /** Status of a request this plugin refuses before any I/O. */
 const BAD_REQUEST = 400;
 
@@ -66,7 +70,35 @@ export type RedactedFailure = {
   status?: number | undefined;
   /** The hint kind or the unavailable reason, when the error has one. */
   kind?: string | undefined;
+  /** Anthropic's error type of a 4xx answer, when it sent one. */
+  apiType?: string | undefined;
+  /** Anthropic's error message of a 4xx answer (no prompt text), when it sent one. */
+  apiMessage?: string | undefined;
 };
+
+/**
+ * Anthropic's error type and message of an SDK error, read from the answer
+ * body `{ error: { type, message } }`; the message is cut to 300 characters.
+ *
+ * @param error - The SDK error.
+ * @returns The detail, or undefined when the body has none.
+ * @example
+ * ```ts
+ * apiErrorDetailOf({ error: { error: { type: "invalid_request_error", message: "bad" } } }); // => { type: "invalid_request_error", message: "bad" }
+ * ```
+ */
+export function apiErrorDetailOf(error: unknown): ApiErrorDetail | undefined {
+  const body: unknown =
+    typeof error === "object" && error !== null ? Reflect.get(error, "error") : undefined;
+  const inner: unknown =
+    typeof body === "object" && body !== null ? Reflect.get(body, "error") : undefined;
+  if (typeof inner !== "object" || inner === null) return undefined;
+
+  const type: unknown = Reflect.get(inner, "type");
+  const message: unknown = Reflect.get(inner, "message");
+  if (typeof type !== "string" || typeof message !== "string") return undefined;
+  return { type, message: message.slice(0, MAX_API_MESSAGE) };
+}
 
 /**
  * Whether an SDK answer block is one this plugin reads and sends back.
@@ -265,7 +297,14 @@ export function classifyAnthropicError(error: unknown): Error {
     });
   }
   if (typeof status === "number") {
-    return new TerminalProviderError(`[ai] Anthropic rejected the request (${status}).`, status);
+    // Anthropic's own type and message name the field at fault; they carry no prompt text.
+    const api = apiErrorDetailOf(error);
+    const reason = api === undefined ? "" : `\n  ${api.type}: ${api.message}`;
+    return new TerminalProviderError(
+      `[ai] Anthropic rejected the request (${status}).${reason}`,
+      status,
+      api
+    );
   }
 
   // No status at all: the connection or the stream broke.
@@ -288,8 +327,15 @@ export function redactedFailureOf(error: unknown): RedactedFailure {
   if (error instanceof RetryableProviderError) {
     return { errorType: "retryable", status: error.status, kind: error.kind };
   }
-  if (error instanceof TerminalProviderError)
-    return { errorType: "terminal", status: error.status };
+  if (error instanceof TerminalProviderError) {
+    if (error.api === undefined) return { errorType: "terminal", status: error.status };
+    return {
+      errorType: "terminal",
+      status: error.status,
+      apiType: error.api.type,
+      apiMessage: error.api.message
+    };
+  }
   if (error instanceof FlaggedProviderError) return { errorType: "flagged", kind: error.kind };
   if (error instanceof PromptGenUnavailableError) {
     return { errorType: "unavailable", kind: error.reason };

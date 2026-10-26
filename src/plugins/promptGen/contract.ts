@@ -380,3 +380,132 @@ export function assertOneTurnRequest(request: PromptGenRequest, providerLabel: s
     "unsupported"
   );
 }
+
+/** The union keywords Anthropic and OpenAI refuse at the top of a tool's input schema. */
+const TOP_LEVEL_UNIONS = ["oneOf", "anyOf", "allOf"] as const;
+
+/** A JSON schema node: open JSON by nature. */
+type SchemaNode = Record<string, unknown>;
+
+/**
+ * Whether a value is a plain JSON object.
+ *
+ * @param value - Any value.
+ * @returns True for a non-null, non-array object.
+ */
+function isSchemaNode(value: unknown): value is SchemaNode {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The properties of one union variant; none when it has none.
+ *
+ * @param variant - One variant.
+ * @returns Its properties.
+ */
+function propertiesOf(variant: SchemaNode): SchemaNode {
+  return isSchemaNode(variant.properties) ? variant.properties : {};
+}
+
+/**
+ * The required keys of one union variant; none when it lists none.
+ *
+ * @param variant - One variant.
+ * @returns Its required keys.
+ */
+function requiredOf(variant: SchemaNode): string[] {
+  const { required } = variant;
+  return Array.isArray(required) ? required.filter(key => typeof key === "string") : [];
+}
+
+/**
+ * One property schema for every variant's schema of that key: the schema
+ * itself when all variants agree, else an `anyOf` of the distinct ones.
+ *
+ * @param schemas - The key's schema in each variant that has it.
+ * @returns The merged property schema.
+ */
+function mergedProperty(schemas: readonly unknown[]): unknown {
+  const distinct = [...new Map(schemas.map(schema => [JSON.stringify(schema), schema])).values()];
+  return distinct.length === 1 ? distinct[0] : { anyOf: distinct };
+}
+
+/**
+ * One variant as a short shape: `const` keys with their value, required
+ * keys bare, optional keys with `?`.
+ *
+ * @param variant - One variant.
+ * @returns The shape, e.g. `{op: "translate", to, note?}`.
+ */
+function shapeOf(variant: SchemaNode): string {
+  const required = new Set(requiredOf(variant));
+  const keys = Object.entries(propertiesOf(variant)).map(([key, schema]) => {
+    const fixed = isSchemaNode(schema) && "const" in schema;
+    if (fixed) return `${key}: ${JSON.stringify(schema.const)}`;
+    return required.has(key) ? key : `${key}?`;
+  });
+  return `{${keys.join(", ")}}`;
+}
+
+/**
+ * A tool's input schema as Anthropic and OpenAI take it: an object at the
+ * top. A schema with a top-level `oneOf`, `anyOf` or `allOf` (a zod
+ * discriminated union, for example) is flattened into one object: every
+ * variant's properties (a key that differs between variants becomes an
+ * `anyOf`), the keys every variant requires (all keys for `allOf`), and the
+ * variant shapes added to the description so the model still sees which
+ * keys go together. The exact input is still checked by the tool's own
+ * schema before the tool runs. A schema without a top-level union keeps its
+ * keys, with `type: "object"`.
+ *
+ * @param schema - The tool's JSON input schema.
+ * @returns The object schema to send.
+ * @example
+ * ```ts
+ * objectInputSchema({ oneOf: [
+ *   { type: "object", properties: { op: { const: "write" } }, required: ["op"] },
+ *   { type: "object", properties: { op: { const: "translate" }, to: { type: "string" } }, required: ["op", "to"] }
+ * ] });
+ * // => { type: "object", properties: { op: { anyOf: [{ const: "write" }, { const: "translate" }] }, to: { type: "string" } },
+ * //      required: ["op"], description: "One of: {op: \"write\"} | {op: \"translate\", to}" }
+ * ```
+ */
+export function objectInputSchema(
+  schema: Readonly<Record<string, unknown>>
+): Record<string, unknown> & { type: "object" } {
+  // No top-level union: the schema goes as given, as an object.
+  const unionKey = TOP_LEVEL_UNIONS.find(key => Array.isArray(schema[key]));
+  if (unionKey === undefined) return { ...schema, type: "object" };
+
+  // Every variant's properties, one schema per key.
+  const { [unionKey]: union, ...rest } = schema;
+  const variants = (union as unknown[]).filter(variant => isSchemaNode(variant));
+  const byKey = new Map<string, unknown[]>();
+  for (const variant of variants) {
+    for (const [key, property] of Object.entries(propertiesOf(variant))) {
+      byKey.set(key, [...(byKey.get(key) ?? []), property]);
+    }
+  }
+  const properties = Object.fromEntries(
+    [...byKey].map(([key, schemas]) => [key, mergedProperty(schemas)])
+  );
+
+  // allOf needs every variant's keys; oneOf and anyOf only the keys all variants share.
+  const requiredLists = variants.map(variant => requiredOf(variant));
+  const required =
+    unionKey === "allOf"
+      ? [...new Set(requiredLists.flat())]
+      : (requiredLists[0] ?? []).filter(key => requiredLists.every(list => list.includes(key)));
+
+  // The shapes keep the variants readable for the model.
+  const shapes = `One of: ${variants.map(variant => shapeOf(variant)).join(" | ")}`;
+  const lead = typeof rest.description === "string" ? `${rest.description}\n` : "";
+  const description = unionKey === "allOf" ? rest.description : `${lead}${shapes}`;
+  return {
+    ...rest,
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    ...(description === undefined ? {} : { description })
+  };
+}
