@@ -33,8 +33,13 @@ type ScriptedAnswer = {
   usage: { input: number; output: number; cacheWrite?: number; cacheRead?: number };
 };
 
-/** One request the fake API received: the URL, the credential header (`x-api-key` or `authorization`), the body. */
-type SentRequest = { url: string; credential: string; body: Record<string, unknown> };
+/** One request the fake API received: the URL, the credential header (`x-api-key` or `authorization`), the body, and Bun's idle `timeout` fetch option. */
+type SentRequest = {
+  url: string;
+  credential: string;
+  body: Record<string, unknown>;
+  idleTimeout: unknown;
+};
 
 /**
  * The stream events of one content block.
@@ -144,7 +149,7 @@ function stubMessagesApi(answers: ScriptedAnswer[]): SentRequest[] {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     const headers = new Headers(init?.headers);
     const credential = headers.get("x-api-key") ?? headers.get("authorization") ?? "";
-    sent.push({ url, credential, body });
+    sent.push({ url, credential, body, idleTimeout: Reflect.get(init ?? {}, "timeout") });
     const answer = answers[sent.length - 1];
     if (answer === undefined) throw new Error("no scripted answer left");
     return streamResponse(answer);
@@ -292,6 +297,8 @@ describe("anthropic integration", () => {
 
     expect(sent).toHaveLength(1);
     expect(sent[0]?.credential).toContain("sk-ant-test");
+    // Bun's socket idle timer is off: a long thinking pass is never cut at ~5 min.
+    expect(sent[0]?.idleTimeout).toBe(false);
     expect(sent[0]?.body).toEqual({
       model: "claude-opus-5-5",
       max_tokens: 128_000,

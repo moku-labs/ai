@@ -25,6 +25,14 @@ import type {
 /** The SDK's own retries are off: the runner owns retry timing, so a failure is never retried twice. */
 const SDK_MAX_RETRIES = 0;
 
+/**
+ * fetch options that turn off Bun's socket idle timer
+ * (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`, about 5 min): a model that reasons for
+ * minutes sends no byte, and only the configured timeout or the caller may
+ * end the call. Node ignores the field.
+ */
+const BUN_NO_IDLE_TIMEOUT: { timeout: false } = { timeout: false };
+
 /** Answer block kinds this plugin reads and sends back; the API sends no other kind without server tools. */
 const CONTENT_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "text",
@@ -118,6 +126,7 @@ export function createAnthropicClient(options: {
     apiKey: options.apiKey,
     timeout: options.timeoutMs,
     maxRetries: SDK_MAX_RETRIES,
+    fetchOptions: BUN_NO_IDLE_TIMEOUT,
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl })
   });
   return {

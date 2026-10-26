@@ -34,6 +34,14 @@ import type {
  */
 const SDK_MAX_RETRIES = 0;
 
+/**
+ * fetch options that turn off Bun's socket idle timer
+ * (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`, about 5 min): a model that reasons for
+ * minutes sends no byte, and only the configured timeout or the caller may
+ * end the call. Node ignores the field.
+ */
+const BUN_NO_IDLE_TIMEOUT: { timeout: false } = { timeout: false };
+
 /** Lowest HTTP status that counts as a server error. */
 const MIN_SERVER_ERROR = 500;
 
@@ -66,6 +74,7 @@ export function createOpenaiClient(options: {
     apiKey: options.apiKey,
     timeout: options.timeoutMs,
     maxRetries: SDK_MAX_RETRIES,
+    fetchOptions: BUN_NO_IDLE_TIMEOUT,
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl })
   });
   return {

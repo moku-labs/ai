@@ -127,13 +127,17 @@ function fakeResponsesResponse(body: ResponsesBody): Response {
  * request body so assertions can verify the round trip end to end.
  *
  * @param responsesBodies - Collects every posted Responses body, in order.
+ * @param idleTimeouts - Collects Bun's idle `timeout` fetch option of every Responses request.
  * @returns A fake `fetch` implementation.
  * @example
  * ```ts
  * vi.stubGlobal("fetch", createFakeOpenaiFetch());
  * ```
  */
-function createFakeOpenaiFetch(responsesBodies: ResponsesBody[] = []): typeof fetch {
+function createFakeOpenaiFetch(
+  responsesBodies: ResponsesBody[] = [],
+  idleTimeouts: unknown[] = []
+): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/audio/speech")) {
@@ -142,6 +146,7 @@ function createFakeOpenaiFetch(responsesBodies: ResponsesBody[] = []): typeof fe
     if (url.includes("/responses")) {
       const body = JSON.parse(String(init?.body ?? "{}")) as ResponsesBody;
       responsesBodies.push(body);
+      idleTimeouts.push(Reflect.get(init ?? {}, "timeout"));
       return fakeResponsesResponse(body);
     }
     if (url.includes("/chat/completions")) {
@@ -270,7 +275,8 @@ describe("openai integration", () => {
 
   it("sends a gpt-6-astra tool turn to responses.create and replays its reasoning on the next step", async () => {
     const sent: ResponsesBody[] = [];
-    vi.stubGlobal("fetch", createFakeOpenaiFetch(sent));
+    const idleTimeouts: unknown[] = [];
+    vi.stubGlobal("fetch", createFakeOpenaiFetch(sent, idleTimeouts));
     const { createApp } = buildFramework(dbPath, true);
     const app = createApp();
     await app.start();
@@ -295,6 +301,8 @@ describe("openai integration", () => {
 
     expect(first.toolCalls).toEqual([{ id: "call_1", name: "read_frame", input: { shot: 3 } }]);
     expect(first.finishReason).toBe("tool_calls");
+    // Bun's socket idle timer is off: a long reasoning pass is never cut at ~5 min.
+    expect(idleTimeouts).toEqual([false, false]);
     expect(sent[0]).toMatchObject({
       model: "gpt-6-astra",
       store: false,
