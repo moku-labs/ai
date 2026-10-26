@@ -34,10 +34,6 @@ export const anthropicPlugin = createPlugin("anthropic", {
    * Registers the Anthropic prompt-gen handler with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.promptGen.providers(); // [..., "anthropic"]
-   * ```
    */
   onInit: ctx => {
     ctx.require(registryPlugin).register("prompt-gen", "anthropic", createPromptGenHandler(ctx));

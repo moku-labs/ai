@@ -457,8 +457,8 @@ function assistantItems(
   const reasoning = firstCallId === undefined ? [] : (turns.get(firstCallId) ?? []);
 
   const { content } = message;
-  const text: OpenaiInputItem[] =
-    content === null || content === "" ? [] : [{ type: "message", role: "assistant", content }];
+  const hasText = content !== null && content !== "";
+  const text: OpenaiInputItem[] = hasText ? [{ type: "message", role: "assistant", content }] : [];
   const functionCalls = calls.map(
     (call): OpenaiFunctionCall => ({
       type: "function_call",

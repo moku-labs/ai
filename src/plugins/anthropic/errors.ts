@@ -13,8 +13,11 @@
  * `retryAfterMs`.
  */
 export class RetryableProviderError extends Error {
+  /** HTTP status, when the failure came from an HTTP response. */
   readonly status: number | undefined;
+  /** `timeout` or `network`, when there is no status. */
   readonly kind: "timeout" | "network" | undefined;
+  /** The provider's Retry-After delay, ms. */
   readonly retryAfterMs: number | undefined;
 
   /**
@@ -44,6 +47,7 @@ export class RetryableProviderError extends Error {
 
 /** Deterministic failure (a 4xx other than 429, or a request refused before I/O): never retried. */
 export class TerminalProviderError extends Error {
+  /** HTTP status, when known. */
   readonly status: number | undefined;
 
   /**
@@ -65,6 +69,7 @@ export class TerminalProviderError extends Error {
 
 /** The model refused to answer (`stop_reason: "refusal"`): terminal `flagged`, never re-queued. */
 export class FlaggedProviderError extends Error {
+  /** Always `content-policy`: the runner flags the item instead of retrying. */
   readonly kind = "content-policy" as const;
 
   /**

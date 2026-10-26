@@ -65,19 +65,23 @@ function reportedCount(value: number | null | undefined): number | undefined {
  * ```
  */
 export function readAnswer(message: AnthropicMessage): AnthropicAnswer {
+  // A refusal is flagged, never answered.
   if (message.stop_reason === REFUSAL) {
     throw new FlaggedProviderError("[ai] Anthropic declined the request (refusal).");
   }
 
+  // Join the text blocks and map the tool_use blocks to tool calls.
   const text = message.content
     .flatMap(block => (block.type === "text" ? [block.text] : []))
     .join("");
   const toolCalls = message.content.flatMap((block): ToolCall[] =>
     block.type === "tool_use" ? [{ id: block.id, name: block.name, input: block.input }] : []
   );
+
+  // Map the stop reason to the finish reason.
   const stopReason = message.stop_reason;
-  const finishReason =
-    (stopReason === null ? undefined : FINISH_REASONS.get(stopReason)) ?? "other";
+  const knownFinishReason = stopReason === null ? undefined : FINISH_REASONS.get(stopReason);
+  const finishReason = knownFinishReason ?? "other";
   return { text, toolCalls, finishReason, stopReason };
 }
 

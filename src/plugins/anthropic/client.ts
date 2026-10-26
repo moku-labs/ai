@@ -76,6 +76,23 @@ function isContentBlock(block: { type: string }): block is AnthropicContentBlock
 }
 
 /**
+ * The answer blocks of a final message that this plugin reads, in order.
+ *
+ * @param message - The SDK's final message.
+ * @param message.content - Its answer blocks.
+ * @returns The text, thinking, redacted thinking and tool_use blocks.
+ * @example
+ * ```ts
+ * readableContent({ content: [{ type: "text", text: "hi" }, { type: "server_tool_use" }] }).length; // => 1
+ * ```
+ */
+function readableContent(message: { content: Array<{ type: string }> }): AnthropicContentBlock[] {
+  return message.content.flatMap((block): AnthropicContentBlock[] =>
+    isContentBlock(block) ? [block] : []
+  );
+}
+
+/**
  * Creates the structural client over the official SDK: one call,
  * `messages.stream(params, options).finalMessage()`. Streaming is required
  * for large `max_tokens`; the caller gets one final message. Its blocks are
@@ -110,10 +127,11 @@ export function createAnthropicClient(options: {
         return {
           finalMessage: async (): Promise<AnthropicMessage> => {
             const message = await stream.finalMessage();
-            const content = message.content.flatMap((block): AnthropicContentBlock[] =>
-              isContentBlock(block) ? [block] : []
-            );
-            return { content, stop_reason: message.stop_reason, usage: message.usage };
+            return {
+              content: readableContent(message),
+              stop_reason: message.stop_reason,
+              usage: message.usage
+            };
           }
         };
       }

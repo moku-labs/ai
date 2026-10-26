@@ -506,11 +506,6 @@ export type FlaggedProviderError = FlaggedProviderErrorClass;
  * to its one dependency, `registry`) plus the `env`/`log` core APIs, which
  * `PluginCtx` intentionally omits (mock with matching structural APIs per
  * moku-testing conventions).
- *
- * @example
- * ```ts
- * export const createOpenaiApi = (ctx: OpenaiContext): OpenaiApi => ({ ... });
- * ```
  */
 export type OpenaiContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

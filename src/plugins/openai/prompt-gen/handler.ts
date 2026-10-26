@@ -8,6 +8,7 @@ import type { PromptGenHandler, PromptGenRequest, PromptGenResult } from "../../
 import { PromptGenUnavailableError } from "../../promptGen/contract";
 import { redactedFailureOf, requestResponse } from "../client";
 import { readImageDataUrls } from "../images";
+import type { TokenSplit } from "../prices";
 import { cacheAwareCostUsd, estimateTokenCount, getPrices } from "../prices";
 import type { ModelPrice, OpenaiContext, OpenaiResponse } from "../types";
 import type { ResponsesAnswer } from "./answer";
@@ -15,6 +16,15 @@ import { readAnswer, rememberTurn, usageCostUsd, usageOf } from "./answer";
 import { priceTierOf } from "./models";
 import type { ResponsesPlan } from "./request";
 import { buildResponsesBody, estimateInputTokens, planResponses } from "./request";
+
+/** A token split with nothing counted; requests spread it and set their own fields. */
+const NO_TOKENS: TokenSplit = {
+  uncached: 0,
+  cacheReads: 0,
+  cacheWrites30m: 0,
+  cacheWrites12h: 0,
+  output: 0
+};
 
 /** Looks up a model's prices, logging `openai:prompt-gen:unpriced` the first time a model has none. */
 type PriceLookup = (model: string) => Partial<ModelPrice> | undefined;
@@ -90,13 +100,7 @@ function answerCostUsd(
   if (response.usage !== undefined) return usageCostUsd(plan.model, price, response.usage);
 
   const input = estimateInputTokens(request, plan.images.length);
-  const tokens = {
-    uncached: input,
-    cacheReads: 0,
-    cacheWrites30m: 0,
-    cacheWrites12h: 0,
-    output: estimateTokenCount(text)
-  };
+  const tokens = { ...NO_TOKENS, uncached: input, output: estimateTokenCount(text) };
   return cacheAwareCostUsd(price, tokens, priceTierOf(plan.model, input));
 }
 
@@ -155,13 +159,7 @@ export function createPromptGenHandler(ctx: OpenaiContext): PromptGenHandler {
     estimate(request: PromptGenRequest): { usd: number } {
       const plan = planResponses(request, ctx.config.models.chat);
       const input = estimateInputTokens(request, plan.images.length);
-      const tokens = {
-        uncached: input,
-        cacheReads: 0,
-        cacheWrites30m: 0,
-        cacheWrites12h: 0,
-        output: plan.maxOutputTokens
-      };
+      const tokens = { ...NO_TOKENS, uncached: input, output: plan.maxOutputTokens };
       return {
         usd: cacheAwareCostUsd(priceOf(plan.model), tokens, priceTierOf(plan.model, input))
       };

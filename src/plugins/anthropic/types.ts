@@ -509,11 +509,6 @@ export type FlaggedProviderError = FlaggedProviderErrorClass;
  * Domain context of the plugin's extracted files: `config`/`state`/`emit`
  * from `PluginCtx`, `require` narrowed to `registry`, and the `env`/`log`
  * core APIs.
- *
- * @example
- * ```ts
- * export const createAnthropicApi = (ctx: AnthropicContext): AnthropicApi => ({ ... });
- * ```
  */
 export type AnthropicContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

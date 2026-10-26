@@ -24,6 +24,7 @@ const defaultConfig: Config = {
 
 /**
  * openai — Complex tier provider plugin. Depends on registry (onInit registration ×3).
+ * Complex tier. Emits no events.
  *
  * @see README.md
  */
@@ -36,10 +37,6 @@ export const openaiPlugin = createPlugin("openai", {
    * Registers the OpenAI voiceover/translate/prompt-gen handlers with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @example
-   * ```ts
-   * app.translate.providers(); // ["openai", ...]
-   * ```
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);

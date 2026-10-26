@@ -91,10 +91,6 @@ export const bundledPrices: PriceTable = {
  *
  * @param ctx - The openai plugin context.
  * @returns The effective price table.
- * @example
- * ```ts
- * const prices = getPrices(ctx);
- * ```
  */
 export function getPrices(ctx: OpenaiContext): PriceTable {
   if (ctx.state.prices !== null) return ctx.state.prices;
@@ -134,7 +130,7 @@ export function estimateTokenCount(text: string): number {
  * @returns The cost in US dollars.
  * @example
  * ```ts
- * estimateChatCostUsd(prices, "gpt-4o-mini", 100, 50);
+ * estimateChatCostUsd({ "gpt-4o": { inputPerM: 2, outputPerM: 10 } }, "gpt-4o", 1_000_000, 500_000); // 7
  * ```
  */
 export function estimateChatCostUsd(
@@ -160,7 +156,7 @@ export function estimateChatCostUsd(
  * @returns The cost in US dollars.
  * @example
  * ```ts
- * estimateTtsCostUsd(prices, "gpt-4o-mini-tts", 1_000);
+ * estimateTtsCostUsd({ "tts-1": { ttsPerMChars: 15 } }, "tts-1", 1_000_000); // 15
  * ```
  */
 export function estimateTtsCostUsd(prices: PriceTable, model: string, characters: number): number {

@@ -6,10 +6,12 @@ import {
   RateLimitError
 } from "openai";
 import { describe, expect, it } from "vitest";
+import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import {
   classifyOpenaiError,
   getOpenaiClient,
   missingApiKeyError,
+  redactedFailureOf,
   requestChatCompletion,
   requestResponse,
   requestSpeech,
@@ -316,6 +318,14 @@ describe("openai unit: client", () => {
       controller.abort();
 
       await expect(requestResponse(ctx, body, controller.signal)).rejects.toBe(abortError);
+    });
+  });
+
+  describe("redactedFailureOf", () => {
+    it("logs a missing-key unavailable error by its reason, not as unknown", () => {
+      const error = new PromptGenUnavailableError("[ai] OPENAI_API_KEY is not set.\n  x.", "auth");
+
+      expect(redactedFailureOf(error)).toEqual({ errorType: "unavailable", kind: "auth" });
     });
   });
 });

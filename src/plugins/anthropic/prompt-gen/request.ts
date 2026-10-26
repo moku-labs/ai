@@ -22,7 +22,7 @@ import type {
   AnthropicContext,
   AnthropicEffort,
   AnthropicImageBlock,
-  AnthropicInputMessage as AnthropicInputMessageeter,
+  AnthropicInputMessage,
   AnthropicOutputConfig,
   AnthropicPrice,
   AnthropicRequestBody,
@@ -359,7 +359,7 @@ function systemField(
 function promptMessage(
   prompt: string,
   imageBlocks: readonly AnthropicImageBlock[]
-): AnthropicInputMessageeter {
+): AnthropicInputMessage {
   if (imageBlocks.length === 0) return { role: "user", content: prompt };
   return { role: "user", content: [...imageBlocks, { type: "text", text: prompt }] };
 }
@@ -399,16 +399,15 @@ function contentOf(content: string | readonly ContentPart[], sources: TurnSource
 function assistantMessage(
   message: AssistantMessage,
   turns: ReadonlyMap<string, AnthropicContentBlock[]>
-): AnthropicInputMessageeter {
+): AnthropicInputMessage {
   const calls = message.toolCalls ?? [];
   const firstCallId = calls[0]?.id;
   const remembered = firstCallId === undefined ? undefined : turns.get(firstCallId);
   if (remembered !== undefined) return { role: "assistant", content: remembered };
 
-  const text: AnthropicContentBlock[] =
-    message.content === null || message.content === ""
-      ? []
-      : [{ type: "text", text: message.content }];
+  const { content } = message;
+  const hasText = content !== null && content !== "";
+  const text: AnthropicContentBlock[] = hasText ? [{ type: "text", text: content }] : [];
   const toolUses: AnthropicContentBlock[] = calls.map(call => ({
     type: "tool_use",
     id: call.id,
@@ -429,8 +428,8 @@ function assistantMessage(
 function turnMessages(
   messages: readonly ChatMessage[],
   sources: TurnSources
-): AnthropicInputMessageeter[] {
-  const sent: AnthropicInputMessageeter[] = [];
+): AnthropicInputMessage[] {
+  const sent: AnthropicInputMessage[] = [];
   let toolResults: AnthropicToolResultBlock[] | undefined;
 
   for (const message of messages) {
@@ -506,8 +505,8 @@ function toolFields(request: Pick<PromptGenRequest, "tools" | "toolChoice">): {
   tool_choice?: AnthropicToolChoice;
 } {
   const { tools, toolChoice } = request;
-  const toolsField =
-    tools === undefined || tools.length === 0 ? {} : { tools: tools.map(tool => toolOf(tool)) };
+  const hasTools = tools !== undefined && tools.length > 0;
+  const toolsField = hasTools ? { tools: tools.map(tool => toolOf(tool)) } : {};
   if (toolChoice === undefined) return toolsField;
   return { ...toolsField, tool_choice: toolChoiceOf(toolChoice) };
 }
