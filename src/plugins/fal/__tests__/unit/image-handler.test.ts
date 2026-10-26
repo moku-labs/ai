@@ -123,6 +123,14 @@ describe("estimate", () => {
     expect(handler.estimate(at4k)).toEqual({ usd: 0.3 });
   });
 
+  it.each([
+    ["2K", 0.15],
+    ["4K", 0.3]
+  ])("prices nano-banana-2.1 at %s from its own row", (resolution, usd) => {
+    const request = { prompt: "p", model: "nano-banana-2.1", params: { resolution } };
+    expect(createImageHandler(createTestCtx()).estimate(request)).toEqual({ usd });
+  });
+
   it("counts refs that are still $ref objects, without reading them", () => {
     const handler = createImageHandler(createTestCtx());
     const unresolved = { $ref: "s01.face" } as unknown as ImageFile;
@@ -289,6 +297,27 @@ describe("submit", () => {
       enable_web_search: false,
       sync_mode: false,
       image_urls: [storageUrlOf(face), storageUrlOf(plate)]
+    });
+  });
+
+  it("queues nano-banana-2.1 refs on its edit endpoint, thinking_level passed through", async () => {
+    const fetchMock = stubStorageFetch(submitResponse("req-21"));
+    const request: ImageRequest = {
+      prompt: "p",
+      model: "nano-banana-2.1",
+      refs: [face],
+      params: { resolution: "2K", thinking_level: "high" }
+    };
+
+    await createImageHandler(createTestCtx()).submit(request, {});
+
+    const post = callsOf(fetchMock).find(call => call.url.startsWith("https://queue.fal.run/"));
+    expect(post?.url).toBe("https://queue.fal.run/fal-ai/nano-banana-2.1/edit");
+    expect(jsonBodyOf(post)).toMatchObject({
+      aspect_ratio: "9:16",
+      resolution: "2K",
+      thinking_level: "high",
+      image_urls: [storageUrlOf(face)]
     });
   });
 

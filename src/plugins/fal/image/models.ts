@@ -13,7 +13,11 @@ import { TerminalProviderError } from "../errors";
  * const alias: ImageAlias = "nano-banana-pro";
  * ```
  */
-export type ImageAlias = "nano-banana-pro" | "seedream-4.5-edit" | "gpt-image-2.5";
+export type ImageAlias =
+  | "nano-banana-pro"
+  | "nano-banana-2.1"
+  | "seedream-4.5-edit"
+  | "gpt-image-2.5";
 
 /**
  * Pixel size of an output image, as fal's `image_size` object.
@@ -131,6 +135,32 @@ const NANO_ASPECTS: readonly string[] = [
   "9:16"
 ];
 
+/** Nano Banana 2.1 aspect ratios: Pro's plus the extreme ones (fal schema, checked 2026-10-26). */
+const NANO_21_ASPECTS: readonly string[] = [
+  "21:9",
+  "16:9",
+  "3:2",
+  "4:3",
+  "5:4",
+  "1:1",
+  "4:5",
+  "3:4",
+  "2:3",
+  "9:16",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8"
+];
+
+/** Nano Banana resolution mapping: native `1K` / `2K` / `4K`; `1080` → `1K`. */
+const NANO_RESOLUTIONS: Readonly<Record<string, string>> = {
+  "1K": "1K",
+  "2K": "2K",
+  "4K": "4K",
+  "1080": "1K"
+};
+
 /** Seedream 4.5 default output size by aspect. */
 const SEEDREAM_SIZES: Readonly<Record<string, ImageSize>> = {
   "9:16": { width: 1440, height: 2560 },
@@ -207,7 +237,7 @@ function imageUrlsField(imageUrls: readonly string[]): { image_urls?: readonly s
 }
 
 /**
- * Nano Banana Pro body: aspect ratio and native resolution, one PNG.
+ * Nano Banana body (Pro and 2.1): aspect ratio and native resolution, one PNG.
  *
  * @param input - Planned fields.
  * @returns The mapped body.
@@ -343,7 +373,17 @@ export const imageModels: Readonly<Record<ImageAlias, ImageModel>> = {
     editEndpoint: "fal-ai/nano-banana-pro/edit",
     maxRefs: 14,
     aspects: NANO_ASPECTS,
-    resolutions: { "1K": "1K", "2K": "2K", "4K": "4K", "1080": "1K" },
+    resolutions: NANO_RESOLUTIONS,
+    defaultResolution: "1K",
+    sizeTables: {},
+    body: nanoBananaBody
+  },
+  "nano-banana-2.1": {
+    textEndpoint: "fal-ai/nano-banana-2.1",
+    editEndpoint: "fal-ai/nano-banana-2.1/edit",
+    maxRefs: 14,
+    aspects: NANO_21_ASPECTS,
+    resolutions: NANO_RESOLUTIONS,
     defaultResolution: "1K",
     sizeTables: {},
     body: nanoBananaBody
@@ -376,7 +416,7 @@ export const imageModels: Readonly<Record<ImageAlias, ImageModel>> = {
  * @returns Alias list.
  * @example
  * ```ts
- * imageAliases(); // => ["nano-banana-pro", "seedream-4.5-edit", "gpt-image-2.5"]
+ * imageAliases(); // => ["nano-banana-pro", "nano-banana-2.1", "seedream-4.5-edit", "gpt-image-2.5"]
  * ```
  */
 export function imageAliases(): ImageAlias[] {

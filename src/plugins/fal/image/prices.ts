@@ -16,6 +16,10 @@ export const imagePrices: Readonly<Record<string, number>> = {
   "nano-banana-pro@1K": 0.15,
   "nano-banana-pro@2K": 0.15,
   "nano-banana-pro@4K": 0.3,
+  // Not listed by fal (partner billing in units, checked 2026-10-26): Nano Banana Pro's prices, an upper bound.
+  "nano-banana-2.1@1K": 0.15,
+  "nano-banana-2.1@2K": 0.15,
+  "nano-banana-2.1@4K": 0.3,
   "seedream-4.5-edit": 0.04,
   "gpt-image-2.5": 0.05,
   // Not listed by fal: its high-quality token table interpolated to 2048x2048 (the largest 2K size).
