@@ -5,6 +5,7 @@
 // biome-ignore-all assist/source/organizeImports: two-section barrel layout (Instances → Types) is mandated by the skeleton spec
 
 // ─── Plugin Instances ────────────────────────────────────────
+export { anthropicPlugin } from "./anthropic";
 export { apimodelsPlugin } from "./apimodels";
 export { arkPlugin } from "./ark";
 export { assetPlugin } from "./asset";
@@ -32,6 +33,7 @@ export { voiceoverPlugin } from "./voiceover";
 
 // ─── Plugin Types (namespace re-exports) ─────────────────────
 // Consumers access types as PluginName.Config, PluginName.Api, etc.
+export * as Anthropic from "./anthropic/types";
 export * as Apimodels from "./apimodels/types";
 export * as Ark from "./ark/types";
 export * as Asset from "./asset/types";

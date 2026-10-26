@@ -5,6 +5,7 @@ import type { EnvProvider } from "@moku-labs/common";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
 import { promptGenPlugin } from "../../../promptGen";
+import type { ChatMessage } from "../../../promptGen/contract";
 import { registryPlugin } from "../../../registry";
 import { translatePlugin } from "../../../translate";
 import { voiceoverPlugin } from "../../../voiceover";
@@ -76,22 +77,77 @@ function fakeSpeechResponse(bytes: Uint8Array): Response {
   return new Response(bytes, { status: 200, headers: { "content-type": "audio/mpeg" } });
 }
 
+/** The parts of a posted Responses body the fake reads. */
+type ResponsesBody = {
+  model: string;
+  store?: boolean;
+  reasoning?: { effort: string };
+  tools?: unknown[];
+  input: Array<{ type: string; role?: string; content?: Array<{ text?: string }> }>;
+};
+
 /**
- * Fakes the OpenAI HTTP boundary: dispatches by request path to a chat or
- * speech response, reading the last user message out of the request body so
- * assertions can verify the round trip end to end.
+ * Builds a Responses answer for a posted body: a GPT-6 tool turn (a
+ * reasoning item and one `read_frame` call) when the body offers tools and
+ * answers no call yet; otherwise a text answer echoing the last user text.
  *
+ * @param body - The posted Responses body.
+ * @returns A fake Responses `Response`.
+ * @example
+ * ```ts
+ * fakeResponsesResponse({ model: "gpt-4o-mini", input: [] });
+ * ```
+ */
+function fakeResponsesResponse(body: ResponsesBody): Response {
+  const usage = { input_tokens: 10, output_tokens: 5, input_tokens_details: { cached_tokens: 0 } };
+  const answersCall = body.input.some(item => item.type === "function_call_output");
+  if (body.tools !== undefined && !answersCall) {
+    const output = [
+      { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC" },
+      {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "read_frame",
+        arguments: '{"shot":3}'
+      }
+    ];
+    return Response.json({ id: "resp_1", object: "response", status: "completed", output, usage });
+  }
+
+  const lastUser = body.input.findLast(item => item.role === "user");
+  const text = `echo:${lastUser?.content?.[0]?.text ?? ""}`;
+  const output = [{ type: "message", content: [{ type: "output_text", text, annotations: [] }] }];
+  return Response.json({ id: "resp_2", object: "response", status: "completed", output, usage });
+}
+
+/**
+ * Fakes the OpenAI HTTP boundary: dispatches by request path to a chat,
+ * Responses or speech response, reading the last user message out of the
+ * request body so assertions can verify the round trip end to end.
+ *
+ * @param responsesBodies - Collects every posted Responses body, in order.
+ * @param idleTimeouts - Collects Bun's idle `timeout` fetch option of every Responses request.
  * @returns A fake `fetch` implementation.
  * @example
  * ```ts
  * vi.stubGlobal("fetch", createFakeOpenaiFetch());
  * ```
  */
-function createFakeOpenaiFetch(): typeof fetch {
+function createFakeOpenaiFetch(
+  responsesBodies: ResponsesBody[] = [],
+  idleTimeouts: unknown[] = []
+): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("/audio/speech")) {
       return fakeSpeechResponse(new Uint8Array([1, 2, 3, 4]));
+    }
+    if (url.includes("/responses")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as ResponsesBody;
+      responsesBodies.push(body);
+      idleTimeouts.push(Reflect.get(init ?? {}, "timeout"));
+      return fakeResponsesResponse(body);
     }
     if (url.includes("/chat/completions")) {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -213,6 +269,51 @@ describe("openai integration", () => {
 
     expect(result.text).toBe("echo:Describe a sunset.");
     expect(result.costUsd).toBeGreaterThan(0);
+
+    await app.stop();
+  });
+
+  it("sends a gpt-6-astra tool turn to responses.create and replays its reasoning on the next step", async () => {
+    const sent: ResponsesBody[] = [];
+    const idleTimeouts: unknown[] = [];
+    vi.stubGlobal("fetch", createFakeOpenaiFetch(sent, idleTimeouts));
+    const { createApp } = buildFramework(dbPath, true);
+    const app = createApp();
+    await app.start();
+    const tools = [
+      { name: "read_frame", description: "One frame.", inputSchema: { type: "object" } }
+    ];
+    const asked: ChatMessage[] = [{ role: "user", content: "Check shot 3." }];
+
+    const first = await app.promptGen.generate(
+      { prompt: "", model: "openai/gpt-6-astra", messages: asked, tools },
+      { provider: "openai" }
+    );
+    const answered: ChatMessage[] = [
+      ...asked,
+      { role: "assistant", content: NO_TEXT, toolCalls: first.toolCalls },
+      { role: "tool", toolCallId: "call_1", content: "Subject is cut at the chin." }
+    ];
+    await app.promptGen.generate(
+      { prompt: "", model: "openai/gpt-6-astra", messages: answered, tools },
+      { provider: "openai" }
+    );
+
+    expect(first.toolCalls).toEqual([{ id: "call_1", name: "read_frame", input: { shot: 3 } }]);
+    expect(first.finishReason).toBe("tool_calls");
+    // Bun's socket idle timer is off: a long reasoning pass is never cut at ~5 min.
+    expect(idleTimeouts).toEqual([false, false]);
+    expect(sent[0]).toMatchObject({
+      model: "gpt-6-astra",
+      store: false,
+      reasoning: { effort: "medium" }
+    });
+    expect(sent[1]?.input.map(item => item.type)).toEqual([
+      "message",
+      "reasoning",
+      "function_call",
+      "function_call_output"
+    ]);
 
     await app.stop();
   });

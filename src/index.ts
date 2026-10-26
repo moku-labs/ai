@@ -27,7 +27,8 @@
  * | sprite | `defaultProvider` | `"fal"` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
  * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
- * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `{}` |
+ * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `promptGenTimeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `900_000` · `{}` |
+ * | anthropic | `apiKeyEnv` · `baseUrl` · `model` · `maxTokens` · `timeoutMs` · `priceOverrides` | `"ANTHROPIC_API_KEY"` · SDK default · `"claude-opus-5-5"` · `32_000` · `900_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |
  * | claude | `bin` · `textModel` · `modelMap` · `timeoutMs` · `workDir` | `"claude"` · `""` · `{}` · `600_000` · `""` (OS temp dir) |
  * | fal | `apiKeyEnv` · `queueUrl` · `uploadUrl` · `upload` · `timeoutMs` · `priceOverrides` · `runUrl` · `imageDefaultModel` · `llmDefaultModel` · `pollIntervalMs` · `jobTimeoutMs` · `requestLog` | `"FAL_KEY"` · `"https://queue.fal.run"` · fal storage initiate URL · `"storage"` · `60_000` · `{}` · `"https://fal.run"` · `"gpt-image-2.5"` · `"anthropic/claude-opus-5.5"` · `2000` · `900_000` · `""` (off) |
@@ -38,7 +39,7 @@
  * | env (core) | `providers` | `[processEnv(), dotenv(".env.local")]`: shell first, then `.env.local` in the cwd |
  *
  * Types ship as per-plugin namespaces (`Fal.RetryableProviderError`); the
- * provider error classes ship as values in `ApimodelsErrors`, `ArkErrors`,
+ * provider error classes ship as values in `AnthropicErrors`, `ApimodelsErrors`, `ArkErrors`,
  * `ClaudeErrors`, `CodexErrors`, `ElevenlabsErrors`, `FalErrors` and
  * `OpenaiErrors` for `instanceof` checks.
  *
@@ -59,6 +60,7 @@ import { dotenv, processEnv } from "@moku-labs/common";
 import type { AnyPluginInstance } from "@moku-labs/core";
 import { coreConfig, createCore } from "./config";
 import {
+  anthropicPlugin,
   apimodelsPlugin,
   arkPlugin,
   assetPlugin,
@@ -99,6 +101,7 @@ const framework = createCore(coreConfig, {
     assetPlugin,
     elevenlabsPlugin,
     openaiPlugin,
+    anthropicPlugin,
     codexPlugin,
     claudePlugin,
     falPlugin,
@@ -110,7 +113,7 @@ const framework = createCore(coreConfig, {
   // Framework default plugin configuration.
   // Consumer apps override specific values via createApp({ pluginConfigs: { ... } }).
   pluginConfigs: {
-    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
+    // Provider keys (FAL_KEY, APIMODELS_API_KEY, ELEVENLABS_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, ARK_API_KEY, ARK_ACCESS_KEY, ARK_SECRET_KEY) and PATH:
     // the process environment first, then `.env.local` in the working directory.
     env: { providers: [processEnv(), dotenv(".env.local")] },
     // apimodels.app documents no rate limits: a conservative lane until real limits are known.
@@ -186,6 +189,7 @@ export function defineConfig<const P extends readonly AnyPluginInstance[] = read
 
 // ─── Plugins ──────────────────────────────────────────────────
 export {
+  anthropicPlugin,
   apimodelsPlugin,
   arkPlugin,
   assetPlugin,
@@ -224,6 +228,7 @@ export { runToolLoop } from "./plugins/promptGen/loop/run";
 
 // ─── Types (per-plugin namespaces: `Runner.RunResult`, `Video.VideoRequest`, …) ──
 export {
+  Anthropic,
   Apimodels,
   Ark,
   Asset,
@@ -250,6 +255,8 @@ export {
 } from "./plugins";
 
 // ─── Errors (per-provider runtime classes: `FalErrors.RetryableProviderError`, …) ──
+/** Anthropic provider error classes as runtime values, for `instanceof` checks. */
+export * as AnthropicErrors from "./plugins/anthropic/errors";
 /** Apimodels provider error classes as runtime values, for `instanceof` checks. */
 export * as ApimodelsErrors from "./plugins/apimodels/errors";
 /** Ark provider error classes as runtime values, for `instanceof` checks. */

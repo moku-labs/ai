@@ -6,11 +6,14 @@ import {
   RateLimitError
 } from "openai";
 import { describe, expect, it } from "vitest";
+import { PromptGenUnavailableError } from "../../../promptGen/contract";
 import {
   classifyOpenaiError,
   getOpenaiClient,
   missingApiKeyError,
+  redactedFailureOf,
   requestChatCompletion,
+  requestResponse,
   requestSpeech,
   toOpenaiCallOptions
 } from "../../client";
@@ -271,6 +274,58 @@ describe("openai unit: client", () => {
           controller.signal
         )
       ).rejects.toBe(abortError);
+    });
+  });
+
+  describe("requestResponse — Responses API with the prompt-gen timeout", () => {
+    const body = { model: "gpt-6-astra", input: [], store: false as const, max_output_tokens: 10 };
+
+    it("passes config.promptGenTimeoutMs and the signal on the one request", async () => {
+      const { client, responsesCalls } = createFakeOpenaiClient();
+      const ctx = createFakeOpenaiContext({
+        state: { client },
+        config: { promptGenTimeoutMs: 1234 }
+      });
+      const controller = new AbortController();
+
+      await requestResponse(ctx, body, controller.signal);
+
+      expect(responsesCalls[0]?.options).toEqual({ signal: controller.signal, timeout: 1234 });
+    });
+
+    it("classifies a thrown SDK error onto the provider taxonomy", async () => {
+      const { client } = createFakeOpenaiClient({
+        responsesImpl: async () => {
+          throw new APIError(503, {}, "Service unavailable", new Headers());
+        }
+      });
+      const ctx = createFakeOpenaiContext({ state: { client } });
+
+      await expect(requestResponse(ctx, body, undefined)).rejects.toBeInstanceOf(
+        RetryableProviderError
+      );
+    });
+
+    it("rethrows the original error unchanged when the caller's signal aborted", async () => {
+      const abortError = new APIUserAbortError();
+      const { client } = createFakeOpenaiClient({
+        responsesImpl: async () => {
+          throw abortError;
+        }
+      });
+      const ctx = createFakeOpenaiContext({ state: { client } });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(requestResponse(ctx, body, controller.signal)).rejects.toBe(abortError);
+    });
+  });
+
+  describe("redactedFailureOf", () => {
+    it("logs a missing-key unavailable error by its reason, not as unknown", () => {
+      const error = new PromptGenUnavailableError("[ai] OPENAI_API_KEY is not set.\n  x.", "auth");
+
+      expect(redactedFailureOf(error)).toEqual({ errorType: "unavailable", kind: "auth" });
     });
   });
 });

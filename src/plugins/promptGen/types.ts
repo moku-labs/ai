@@ -112,8 +112,8 @@ export type PromptGenApi = {
    * @throws {Error} The pinned unknown-provider error when that provider is unregistered.
    * @example
    * ```ts
-   * // Price a prompt before sending it; the default openai handler uses gpt-4o-mini.
-   * app.promptGen.estimate({ prompt: "Describe a sunset over the ocean." }); // { usd: 0.00000675 }
+   * // Price a prompt before sending it; the default openai handler uses gpt-4o-mini and prices 32 000 output tokens.
+   * app.promptGen.estimate({ prompt: "Describe a sunset over the ocean." }); // { usd: 0.01920135 }
    * ```
    */
   estimate(request: PromptGenRequest, opts?: { provider?: string }): { usd: number };

@@ -43,9 +43,39 @@ function fakeChatResponse(echo: string): Response {
   return Response.json(payload);
 }
 
+/** Builds a fake Responses API answer echoing the prompt back as `echo:<prompt>`. */
+function fakeResponsesResponse(echo: string): Response {
+  const payload = {
+    id: "resp-fake",
+    object: "response",
+    status: "completed",
+    model: "gpt-4o-mini",
+    output: [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: `echo:${echo}`, annotations: [] }]
+      }
+    ],
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
+  };
+  return Response.json(payload);
+}
+
+/**
+ * The text of the last user message of a Responses API `input`: a plain
+ * string, or the `input_text` parts joined.
+ */
+function lastUserText(input: Array<{ role?: string; content?: unknown }> | undefined): string {
+  const content = input?.findLast(item => item.role === "user")?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map(part => (part as { text?: string }).text ?? "").join("");
+}
+
 /**
  * Fakes the OpenAI HTTP boundary: dispatches by request path to a chat
- * response echoing the last user message (pattern copied from
+ * (translate) or Responses (prompt-gen) answer echoing the last user message (pattern copied from
  * `src/plugins/openai/__tests__/integration/openai.test.ts`).
  */
 function createFakeOpenaiFetch(): typeof fetch {
@@ -56,6 +86,12 @@ function createFakeOpenaiFetch(): typeof fetch {
         messages?: Array<{ content: string }>;
       };
       return fakeChatResponse(body.messages?.at(-1)?.content ?? "");
+    }
+    if (url.includes("/responses")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        input?: Array<{ role?: string; content?: unknown }>;
+      };
+      return fakeResponsesResponse(lastUserText(body.input));
     }
     throw new Error(`createFakeOpenaiFetch: unexpected request to ${url}`);
   }) as typeof fetch;

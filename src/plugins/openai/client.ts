@@ -12,6 +12,7 @@ import OpenAI, {
   APIUserAbortError,
   RateLimitError
 } from "openai";
+import { PromptGenUnavailableError } from "../promptGen/contract";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
 import type {
   OpenaiCallOptions,
@@ -19,6 +20,8 @@ import type {
   OpenaiChatRequestBody,
   OpenaiClient,
   OpenaiContext,
+  OpenaiResponse,
+  OpenaiResponsesRequestBody,
   OpenaiSpeechRequestBody,
   OpenaiSpeechResult
 } from "./types";
@@ -30,6 +33,20 @@ import type {
  * retry loop is disabled to avoid double-retrying the same failure.
  */
 const SDK_MAX_RETRIES = 0;
+
+/**
+ * fetch options that turn off Bun's socket idle timer
+ * (`BUN_CONFIG_HTTP_IDLE_TIMEOUT`, about 5 min): a model that reasons for
+ * minutes sends no byte, and only the configured timeout or the caller may
+ * end the call. Node ignores the field.
+ */
+const BUN_NO_IDLE_TIMEOUT: { timeout: false } = { timeout: false };
+
+/** Lowest HTTP status that counts as a server error. */
+const MIN_SERVER_ERROR = 500;
+
+/** Milliseconds per second, for a Retry-After in seconds. */
+const MS_PER_SECOND = 1000;
 
 /**
  * Creates the OpenAI SDK client lazily (constructed on first use, not at
@@ -57,6 +74,7 @@ export function createOpenaiClient(options: {
     apiKey: options.apiKey,
     timeout: options.timeoutMs,
     maxRetries: SDK_MAX_RETRIES,
+    fetchOptions: BUN_NO_IDLE_TIMEOUT,
     ...(options.baseUrl === undefined ? {} : { baseURL: options.baseUrl })
   });
   return {
@@ -70,10 +88,6 @@ export function createOpenaiClient(options: {
          * @param params - The tts request body.
          * @param callOptions - Per-request options (abort signal).
          * @returns The synthesized audio response.
-         * @example
-         * ```ts
-         * client.audio.speech.create({ model, voice, input }, { signal });
-         * ```
          */
         create: (
           params: OpenaiSpeechRequestBody,
@@ -91,16 +105,27 @@ export function createOpenaiClient(options: {
          * @param params - The chat completion request body.
          * @param callOptions - Per-request options (abort signal).
          * @returns The generated completion.
-         * @example
-         * ```ts
-         * client.chat.completions.create({ model, messages }, { signal });
-         * ```
          */
         create: (
           params: OpenaiChatRequestBody,
           callOptions?: OpenaiCallOptions
         ): Promise<OpenaiChatCompletion> => raw.chat.completions.create(params, callOptions)
       }
+    },
+    responses: {
+      /**
+       * Generates a model response via the real SDK client (Responses API),
+       * forwarding our own request/options types so overload resolution on
+       * the real client picks the non-streaming signature.
+       *
+       * @param params - The Responses request body.
+       * @param callOptions - Per-request options (abort signal, timeout).
+       * @returns The answer.
+       */
+      create: (
+        params: OpenaiResponsesRequestBody,
+        callOptions?: OpenaiCallOptions
+      ): Promise<OpenaiResponse> => raw.responses.create(params, callOptions)
     }
   };
 }
@@ -130,10 +155,6 @@ export function missingApiKeyError(envKey: string): Error {
  * @param ctx - The openai plugin context.
  * @returns The resolved SDK client.
  * @throws {Error} When `config.apiKeyEnv` is unset in the environment.
- * @example
- * ```ts
- * const client = getOpenaiClient(ctx);
- * ```
  */
 export function getOpenaiClient(ctx: OpenaiContext): OpenaiClient {
   if (ctx.state.client !== null) return ctx.state.client;
@@ -157,7 +178,7 @@ export function getOpenaiClient(ctx: OpenaiContext): OpenaiClient {
  * @returns The options object to forward to an {@link OpenaiClient} call.
  * @example
  * ```ts
- * client.chat.completions.create(params, toOpenaiCallOptions(opts.signal));
+ * toOpenaiCallOptions(undefined); // {}
  * ```
  */
 export function toOpenaiCallOptions(signal: AbortSignal | undefined): OpenaiCallOptions {
@@ -171,10 +192,6 @@ export function toOpenaiCallOptions(signal: AbortSignal | undefined): OpenaiCall
  *
  * @param error - The caught error.
  * @returns True when `error` is an `APIError` carrying a content-policy marker.
- * @example
- * ```ts
- * if (isContentPolicyError(error)) throw new FlaggedProviderError("...");
- * ```
  */
 function isContentPolicyError(error: unknown): boolean {
   if (!(error instanceof APIError)) return false;
@@ -196,7 +213,7 @@ function isContentPolicyError(error: unknown): boolean {
  * @returns The delay in ms, or undefined when no valid header is present.
  * @example
  * ```ts
- * const retryAfterMs = retryAfterMsFromHeaders(error.headers);
+ * retryAfterMsFromHeaders(new Headers({ "retry-after": "2" })); // 2000
  * ```
  */
 function retryAfterMsFromHeaders(headers: Headers): number | undefined {
@@ -205,7 +222,7 @@ function retryAfterMsFromHeaders(headers: Headers): number | undefined {
 
   // Numeric form: a delay in seconds.
   const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return seconds * 1000;
+  if (Number.isFinite(seconds)) return seconds * MS_PER_SECOND;
 
   // HTTP-date form: an absolute time — convert to a delay from now.
   const dateMs = Date.parse(raw);
@@ -226,24 +243,28 @@ function retryAfterMsFromHeaders(headers: Headers): number | undefined {
  * @returns The classified provider error to throw.
  * @example
  * ```ts
- * try {
- *   return await client.chat.completions.create(params, options);
- * } catch (error) {
- *   throw classifyOpenaiError(error);
- * }
+ * classifyOpenaiError(new APIConnectionTimeoutError()); // RetryableProviderError { kind: "timeout" }
  * ```
  */
 export function classifyOpenaiError(error: unknown): Error {
+  const status = error instanceof APIError ? error.status : undefined;
+
   // A caller-initiated abort is the runner's deliberate clean pause, not a
   // provider failure — return it unchanged so it is never classified as
   // retryable (which would penalize the circuit breaker and burn an attempt).
   if (error instanceof APIUserAbortError) return error;
+
+  // A request timeout is retryable.
   if (error instanceof APIConnectionTimeoutError) {
     return new RetryableProviderError("[ai] OpenAI request timed out.", { kind: "timeout" });
   }
+
+  // A content-policy rejection is flagged, never retried.
   if (isContentPolicyError(error)) {
     return new FlaggedProviderError("[ai] OpenAI declined the request (content policy).");
   }
+
+  // A rate limit is retryable, with the provider's Retry-After when present.
   if (error instanceof RateLimitError) {
     const retryAfterMs = retryAfterMsFromHeaders(error.headers);
     return new RetryableProviderError(
@@ -251,17 +272,20 @@ export function classifyOpenaiError(error: unknown): Error {
       retryAfterMs === undefined ? { status: 429 } : { status: 429, retryAfterMs }
     );
   }
-  if (error instanceof APIError && typeof error.status === "number" && error.status >= 500) {
-    return new RetryableProviderError(`[ai] OpenAI returned a server error (${error.status}).`, {
-      status: error.status
+
+  // A server error is retryable.
+  if (typeof status === "number" && status >= MIN_SERVER_ERROR) {
+    return new RetryableProviderError(`[ai] OpenAI returned a server error (${status}).`, {
+      status
     });
   }
-  if (error instanceof APIError && typeof error.status === "number") {
-    return new TerminalProviderError(
-      `[ai] OpenAI rejected the request (${error.status}).`,
-      error.status
-    );
+
+  // Any other HTTP status is a terminal rejection.
+  if (typeof status === "number") {
+    return new TerminalProviderError(`[ai] OpenAI rejected the request (${status}).`, status);
   }
+
+  // No status at all: a network failure, retryable.
   return new RetryableProviderError("[ai] OpenAI request failed (network error).", {
     kind: "network"
   });
@@ -271,10 +295,18 @@ export function classifyOpenaiError(error: unknown): Error {
  * Redacted, loggable fields of a thrown provider error: error class plus
  * status/kind only — never the original error message (which may embed
  * request/response text). The redaction rule (spec/11).
+ *
+ * @example
+ * ```ts
+ * const failure: RedactedFailure = { errorType: "retryable", status: 503 };
+ * ```
  */
 export type RedactedFailure = {
+  /** The error class: "retryable", "terminal", "flagged", "unavailable" or "unknown". */
   errorType: string;
+  /** The HTTP status, when the error carries one. */
   status?: number | undefined;
+  /** The failure kind (e.g. "timeout", "network") or the unavailable reason, when the error has one. */
   kind?: string | undefined;
 };
 
@@ -286,7 +318,7 @@ export type RedactedFailure = {
  * @returns The redacted fields to pass to `ctx.log`.
  * @example
  * ```ts
- * ctx.log.warn("openai:tts:failed", redactedFailureOf(error));
+ * redactedFailureOf(new TerminalProviderError("[ai] x.", 400)); // { errorType: "terminal", status: 400 }
  * ```
  */
 export function redactedFailureOf(error: unknown): RedactedFailure {
@@ -298,6 +330,9 @@ export function redactedFailureOf(error: unknown): RedactedFailure {
   }
   if (error instanceof FlaggedProviderError) {
     return { errorType: "flagged", kind: error.kind };
+  }
+  if (error instanceof PromptGenUnavailableError) {
+    return { errorType: "unavailable", kind: error.reason };
   }
   return { errorType: "unknown" };
 }
@@ -313,10 +348,6 @@ export function redactedFailureOf(error: unknown): RedactedFailure {
  * @param signal - The caller-supplied abort signal, if any.
  * @returns The chat completion response.
  * @throws {Error} When the API key is unset, or the request fails.
- * @example
- * ```ts
- * const completion = await requestChatCompletion(ctx, params, opts.signal);
- * ```
  */
 export async function requestChatCompletion(
   ctx: OpenaiContext,
@@ -342,10 +373,6 @@ export async function requestChatCompletion(
  * @param signal - The caller-supplied abort signal, if any.
  * @returns The synthesized speech response.
  * @throws {Error} When the API key is unset, or the request fails.
- * @example
- * ```ts
- * const response = await requestSpeech(ctx, params, opts.signal);
- * ```
  */
 export async function requestSpeech(
   ctx: OpenaiContext,
@@ -355,6 +382,34 @@ export async function requestSpeech(
   const client = getOpenaiClient(ctx);
   try {
     return await client.audio.speech.create(params, toOpenaiCallOptions(signal));
+  } catch (error) {
+    // Caller-initiated abort propagates unchanged (clean-pause contract).
+    if (signal?.aborted) throw error;
+    throw classifyOpenaiError(error);
+  }
+}
+
+/**
+ * Resolves the SDK client and requests a model response (Responses API) with
+ * the prompt-gen timeout, `config.promptGenTimeoutMs`, on this one request:
+ * the cached client keeps `timeoutMs` for tts and translate. Any thrown SDK
+ * error is mapped onto this plugin's provider error taxonomy.
+ *
+ * @param ctx - The openai plugin context.
+ * @param params - The Responses request body.
+ * @param signal - The caller-supplied abort signal, if any.
+ * @returns The answer.
+ * @throws {Error} When the API key is unset, or the request fails.
+ */
+export async function requestResponse(
+  ctx: OpenaiContext,
+  params: OpenaiResponsesRequestBody,
+  signal: AbortSignal | undefined
+): Promise<OpenaiResponse> {
+  const client = getOpenaiClient(ctx);
+  const options = { ...toOpenaiCallOptions(signal), timeout: ctx.config.promptGenTimeoutMs };
+  try {
+    return await client.responses.create(params, options);
   } catch (error) {
     // Caller-initiated abort propagates unchanged (clean-pause contract).
     if (signal?.aborted) throw error;

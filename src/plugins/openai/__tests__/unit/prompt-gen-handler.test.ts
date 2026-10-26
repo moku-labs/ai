@@ -1,222 +1,211 @@
-import { describe, expect, it } from "vitest";
-import type { PromptGenRequest } from "../../../promptGen/contract";
-import { PromptGenUnavailableError } from "../../../promptGen/contract";
-import { FlaggedProviderError } from "../../errors";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { RateLimitError } from "openai";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import type { ChatMessage } from "../../../promptGen/contract";
+import { isPromptGenUnavailable, PromptGenUnavailableError } from "../../../promptGen/contract";
+import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { createPromptGenHandler } from "../../prompt-gen/handler";
-import {
-  createFakeOpenaiClient,
-  createFakeOpenaiContext,
-  refusalMessage,
-  textMessage
-} from "./fixtures";
+import type { OpenaiResponse } from "../../types";
+import { createFakeOpenaiClient, createFakeOpenaiContext, textResponse } from "./fixtures";
 
-const UNSUPPORTED =
-  "[ai] OpenAI prompt-gen does not support messages or tools.\n  Use the fal provider for tool calling.";
+/** `ChatMessage.content` of a tool-only assistant turn is null by contract. */
+// eslint-disable-next-line unicorn/no-null -- see comment above
+const NO_TEXT = null;
 
-/** One request per field this provider cannot express. */
-const TOOL_REQUESTS: Array<[string, PromptGenRequest]> = [
-  ["messages", { prompt: "", messages: [{ role: "user", content: "Check shot 3." }] }],
-  [
-    "tools",
+/** USD per token of a per-million price. */
+const PER_TOKEN = 1 / 1_000_000;
+
+/** A temp dir holding the image files the requests send. */
+const imageDir = mkdtempSync(path.join(tmpdir(), "moku-openai-images-"));
+afterAll(() => rmSync(imageDir, { recursive: true, force: true }));
+
+/** A GPT-6 tool turn: a reasoning item, then one function call. */
+const TOOL_TURN: OpenaiResponse = {
+  status: "completed",
+  output: [
+    { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC_1" },
     {
-      prompt: "p",
-      tools: [{ name: "read_frame", description: "Return one frame.", inputSchema: {} }]
+      type: "function_call",
+      id: "fc_1",
+      call_id: "call_1",
+      name: "read_frame",
+      arguments: '{"shot":3}'
     }
   ],
-  ["toolChoice", { prompt: "p", toolChoice: "auto" }]
-];
+  usage: { input_tokens: 100, output_tokens: 20 }
+};
 
-/**
- * The error a synchronous call throws.
- *
- * @param call - The call expected to throw.
- * @returns The thrown value.
- */
-function thrownBy(call: () => unknown): unknown {
-  try {
-    call();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected the call to throw");
-}
-
-describe("openai unit: prompt-gen handler (prompt-gen contract)", () => {
+describe("openai unit: prompt-gen handler (Responses API)", () => {
   describe("estimate", () => {
-    it("prices a chars/4 token heuristic for prompt + system against the chat model prices", () => {
-      const ctx = createFakeOpenaiContext();
-      const handler = createPromptGenHandler(ctx);
+    it("prices chars/4 of system + prompt in and max_output_tokens out at the model's price", () => {
+      const handler = createPromptGenHandler(createFakeOpenaiContext());
 
-      const withoutSystem = handler.estimate({ prompt: "Describe a sunset." });
-      const withSystem = handler.estimate({
-        prompt: "Describe a sunset.",
-        system: "You are a poet."
+      // "abcd\nabcdefg" is 12 characters: 3 tokens in; 32 000 out by default.
+      const { usd } = handler.estimate({ prompt: "abcdefg", system: "abcd" });
+
+      expect(usd).toBeCloseTo((3 * 0.15 + 32_000 * 0.6) * PER_TOKEN, 12);
+    });
+
+    it("adds 1 600 tokens per image and prices params.max_tokens out, offline", () => {
+      const handler = createPromptGenHandler(createFakeOpenaiContext());
+      const image = { path: "/nowhere/a.png", mimeType: "image/png", hash: "h" };
+
+      const { usd } = handler.estimate({
+        prompt: "abcd",
+        model: "gpt-6-luna",
+        params: { images: [image, image], max_tokens: 1000 }
       });
 
-      expect(withoutSystem.usd).toBeGreaterThan(0);
-      expect(withSystem.usd).toBeGreaterThan(withoutSystem.usd);
+      expect(usd).toBeCloseTo(((1 + 3200) * 0.1 + 1000 * 0.5) * PER_TOKEN, 12);
+    });
+
+    it("estimates a messages + tools request instead of refusing it", () => {
+      const handler = createPromptGenHandler(createFakeOpenaiContext());
+
+      const { usd } = handler.estimate({
+        prompt: "",
+        model: "gpt-6-astra",
+        messages: [{ role: "user", content: "abcd" }],
+        tools: [{ name: "read_frame", description: "One frame.", inputSchema: {} }],
+        params: { max_tokens: 10 }
+      });
+
+      expect(usd).toBeCloseTo((1 * 10 + 10 * 50) * PER_TOKEN, 12);
     });
 
     it("never needs an API key (state.client stays null)", () => {
       const ctx = createFakeOpenaiContext();
-      const handler = createPromptGenHandler(ctx);
 
-      handler.estimate({ prompt: "Describe a sunset." });
+      createPromptGenHandler(ctx).estimate({ prompt: "Describe a sunset." });
 
       expect(ctx.state.client).toBeNull();
     });
 
-    it.each(TOOL_REQUESTS)("throws unavailable 'unsupported' for %s", (_label, request) => {
-      const handler = createPromptGenHandler(createFakeOpenaiContext());
+    it("prices an unpriced model at 0 USD and logs openai:prompt-gen:unpriced once per model", async () => {
+      const { client } = createFakeOpenaiClient();
+      const ctx = createFakeOpenaiContext({ state: { client } });
+      const handler = createPromptGenHandler(ctx);
 
-      const error = thrownBy(() => handler.estimate(request));
+      const first = handler.estimate({ prompt: "hi", model: "gpt-9-custom" });
+      handler.estimate({ prompt: "hi", model: "openai/gpt-9-custom" });
+      const result = await handler.execute({ prompt: "hi", model: "gpt-9-custom" }, {});
+      handler.estimate({ prompt: "hi", model: "gpt-9-other" });
 
-      expect(error).toBeInstanceOf(PromptGenUnavailableError);
-      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
-      expect((error as Error).message).toBe(UNSUPPORTED);
+      expect(first.usd).toBe(0);
+      expect(result.costUsd).toBe(0);
+      expect(ctx.log.warn).toHaveBeenCalledTimes(2);
+      expect(ctx.log.warn).toHaveBeenNthCalledWith(1, "openai:prompt-gen:unpriced", {
+        model: "gpt-9-custom"
+      });
+      expect(ctx.log.warn).toHaveBeenNthCalledWith(2, "openai:prompt-gen:unpriced", {
+        model: "gpt-9-other"
+      });
     });
   });
 
   describe("execute", () => {
-    it("sends the caller's system + prompt as chat messages", async () => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
+    it("calls responses.create with store false, the prompt-gen timeout and the caller's signal", async () => {
+      const { client, responsesCalls } = createFakeOpenaiClient();
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+      const custom = createPromptGenHandler(
+        createFakeOpenaiContext({ state: { client }, config: { promptGenTimeoutMs: 5000 } })
+      );
+      const controller = new AbortController();
+
+      await handler.execute({ prompt: "hi" }, { signal: controller.signal });
+      await custom.execute({ prompt: "hi" }, {});
+
+      expect(responsesCalls[0]?.params.store).toBe(false);
+      expect(responsesCalls[0]?.options).toEqual({ signal: controller.signal, timeout: 900_000 });
+      expect(responsesCalls[1]?.options).toEqual({ timeout: 5000 });
+    });
+
+    it("sends the system text as a developer message and the prompt as user input_text", async () => {
+      const { client, responsesCalls } = createFakeOpenaiClient();
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
 
       await handler.execute({ prompt: "Describe a sunset.", system: "You are a poet." }, {});
 
-      expect(chatCalls[0]?.params.messages).toEqual([
-        { role: "system", content: "You are a poet." },
-        { role: "user", content: "Describe a sunset." }
-      ]);
-    });
-
-    it("omits the system message entirely when none is given", async () => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
-
-      await handler.execute({ prompt: "Describe a sunset." }, {});
-
-      expect(chatCalls[0]?.params.messages).toEqual([
-        { role: "user", content: "Describe a sunset." }
-      ]);
-    });
-
-    it("forwards a caller-supplied temperature, and omits it entirely when absent", async () => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
-
-      await handler.execute({ prompt: "hi", temperature: 0.7 }, {});
-      await handler.execute({ prompt: "hi" }, {});
-
-      expect(chatCalls[0]?.params.temperature).toBe(0.7);
-      expect(Object.hasOwn(chatCalls[1]?.params ?? {}, "temperature")).toBe(false);
-    });
-
-    it("returns the completion text and usage-based actual cost", async () => {
-      const { client } = createFakeOpenaiClient({
-        chatResult: {
-          choices: [{ message: textMessage("A fiery orange sunset.") }],
-          usage: { prompt_tokens: 15, completion_tokens: 8 }
+      expect(responsesCalls[0]?.params.input).toEqual([
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "You are a poet." }]
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Describe a sunset." }]
         }
+      ]);
+    });
+
+    it("sends params.images as base64 data URLs read from disk, after the prompt text", async () => {
+      const file = path.join(imageDir, "frame.png");
+      writeFileSync(file, new Uint8Array([137, 80, 78, 71]));
+      const { client, responsesCalls } = createFakeOpenaiClient();
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+
+      await handler.execute(
+        {
+          prompt: "Rate this frame.",
+          params: { images: { path: file, mimeType: "image/png", hash: "h" } }
+        },
+        {}
+      );
+
+      expect(responsesCalls[0]?.params.input).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Rate this frame." },
+            { type: "input_image", image_url: "data:image/png;base64,iVBORw==", detail: "auto" }
+          ]
+        }
+      ]);
+    });
+
+    it("returns the answer text, usage-based cost, typed usage and redacted meta", async () => {
+      const { client } = createFakeOpenaiClient({
+        responsesResult: textResponse("A fiery orange sunset.", {
+          input_tokens: 15,
+          output_tokens: 8,
+          input_tokens_details: { cached_tokens: 4 }
+        })
       });
-      const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
 
       const result = await handler.execute({ prompt: "Describe a sunset." }, {});
 
       expect(result.text).toBe("A fiery orange sunset.");
-      expect(result.costUsd).toBeCloseTo((15 / 1_000_000) * 0.15 + (8 / 1_000_000) * 0.6, 10);
+      expect(result.costUsd).toBeCloseTo((11 * 0.15 + 4 * 0.075 + 8 * 0.6) * PER_TOKEN, 12);
       expect(result.toolCalls).toEqual([]);
       expect(result.finishReason).toBe("stop");
       expect(result.usage).toStrictEqual({
         promptTokens: 15,
         completionTokens: 8,
-        cachedTokens: 0,
-        cacheWriteTokens: 0
+        cachedTokens: 4,
+        cacheWriteTokens: 0,
+        cachedReadTokens: 4
       });
       expect(result.meta).toEqual({ model: "gpt-4o-mini", promptTokens: 15, completionTokens: 8 });
     });
 
-    it("reads cached prompt tokens into the typed usage", async () => {
+    it("prices by chars/4 of what was sent and received when no usage is reported", async () => {
       const { client } = createFakeOpenaiClient({
-        chatResult: {
-          choices: [{ message: textMessage("ok"), finish_reason: "stop" }],
-          usage: {
-            prompt_tokens: 2400,
-            completion_tokens: 120,
-            prompt_tokens_details: { cached_tokens: 1800 }
-          }
+        responsesResult: {
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "abcdefgh" }] }]
         }
       });
       const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
 
-      const result = await handler.execute({ prompt: "hi" }, {});
+      const result = await handler.execute({ prompt: "abcd" }, {});
 
-      expect(result.usage).toStrictEqual({
-        promptTokens: 2400,
-        completionTokens: 120,
-        cachedTokens: 1800,
-        cacheWriteTokens: 0,
-        cachedReadTokens: 1800
-      });
-    });
-
-    it("keeps a reported cached count of 0 as cachedReadTokens", async () => {
-      const { client } = createFakeOpenaiClient({
-        chatResult: {
-          choices: [{ message: textMessage("ok"), finish_reason: "stop" }],
-          usage: {
-            prompt_tokens: 2400,
-            completion_tokens: 120,
-            prompt_tokens_details: { cached_tokens: 0 }
-          }
-        }
-      });
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
-
-      const result = await handler.execute({ prompt: "hi" }, {});
-
-      expect(result.usage).toStrictEqual({
-        promptTokens: 2400,
-        completionTokens: 120,
-        cachedTokens: 0,
-        cacheWriteTokens: 0,
-        cachedReadTokens: 0
-      });
-    });
-
-    it("leaves cachedReadTokens out when the details carry no cached count", async () => {
-      const { client } = createFakeOpenaiClient({
-        chatResult: {
-          choices: [{ message: textMessage("ok"), finish_reason: "stop" }],
-          usage: { prompt_tokens: 2400, completion_tokens: 120, prompt_tokens_details: {} }
-        }
-      });
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
-
-      const result = await handler.execute({ prompt: "hi" }, {});
-
-      expect(result.usage).toStrictEqual({
-        promptTokens: 2400,
-        completionTokens: 120,
-        cachedTokens: 0,
-        cacheWriteTokens: 0
-      });
-      expect(result.usage).not.toHaveProperty("cachedReadTokens");
-      expect(result.usage).not.toHaveProperty("cachedWriteTokens");
-    });
-
-    it("reports zero usage when the provider sends none", async () => {
-      const { client } = createFakeOpenaiClient({
-        chatResult: { choices: [{ message: textMessage("ok") }] }
-      });
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
-
-      const result = await handler.execute({ prompt: "hi" }, {});
-
+      expect(result.costUsd).toBeCloseTo((1 * 0.15 + 2 * 0.6) * PER_TOKEN, 12);
       expect(result.usage).toStrictEqual({
         promptTokens: 0,
         completionTokens: 0,
@@ -225,85 +214,99 @@ describe("openai unit: prompt-gen handler (prompt-gen contract)", () => {
       });
     });
 
-    it("maps finish_reason length to length, anything else to stop", async () => {
-      const { client } = createFakeOpenaiClient({
-        chatResult: { choices: [{ message: textMessage("cut"), finish_reason: "length" }] }
-      });
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
-      const { client: filtered } = createFakeOpenaiClient({
-        chatResult: { choices: [{ message: textMessage("x"), finish_reason: "content_filter" }] }
-      });
-      const filteredHandler = createPromptGenHandler(
-        createFakeOpenaiContext({ state: { client: filtered } })
+    it("sends a tool turn's reasoning back before its function call on the next request", async () => {
+      const { client, responsesCalls } = createFakeOpenaiClient({ responsesResult: TOOL_TURN });
+      const ctx = createFakeOpenaiContext({ state: { client } });
+      const handler = createPromptGenHandler(ctx);
+      const tools = [
+        { name: "read_frame", description: "One frame.", inputSchema: { type: "object" } }
+      ];
+      const asked: ChatMessage[] = [{ role: "user", content: "Check shot 3." }];
+
+      const first = await handler.execute(
+        { prompt: "", model: "gpt-6-astra", messages: asked, tools },
+        {}
       );
+      const next: ChatMessage[] = [
+        ...asked,
+        { role: "assistant", content: NO_TEXT, toolCalls: first.toolCalls },
+        { role: "tool", toolCallId: "call_1", content: "Subject is cut at the chin." }
+      ];
+      await handler.execute({ prompt: "", model: "gpt-6-astra", messages: next, tools }, {});
 
-      const cut = await handler.execute({ prompt: "hi" }, {});
-      const other = await filteredHandler.execute({ prompt: "hi" }, {});
-
-      expect(cut.finishReason).toBe("length");
-      expect(other.finishReason).toBe("stop");
+      expect(first.toolCalls).toEqual([{ id: "call_1", name: "read_frame", input: { shot: 3 } }]);
+      expect(first.finishReason).toBe("tool_calls");
+      expect(responsesCalls[1]?.params.input).toEqual([
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Check shot 3." }] },
+        { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "ENC_1" },
+        { type: "function_call", call_id: "call_1", name: "read_frame", arguments: '{"shot":3}' },
+        { type: "function_call_output", call_id: "call_1", output: "Subject is cut at the chin." }
+      ]);
     });
 
-    it("ignores cacheSystem alone: same SDK body as without it", async () => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+    it("refuses a missing API key as unavailable 'auth' so promptGen falls back, building no client", async () => {
+      const ctx = createFakeOpenaiContext();
+      const handler = createPromptGenHandler(ctx);
 
-      await handler.execute({ prompt: "hi", system: "Be terse." }, {});
-      await handler.execute({ prompt: "hi", system: "Be terse.", cacheSystem: true }, {});
-
-      expect(chatCalls[1]?.params).toEqual(chatCalls[0]?.params);
-    });
-
-    it.each(
-      TOOL_REQUESTS
-    )("throws unavailable 'unsupported' for %s before any SDK call", async (_label, request) => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
-
-      const error = await handler.execute(request, {}).catch((error_: unknown) => error_);
+      const error = await handler.execute({ prompt: "hi" }, {}).catch((error_: unknown) => error_);
 
       expect(error).toBeInstanceOf(PromptGenUnavailableError);
-      expect((error as PromptGenUnavailableError).reason).toBe("unsupported");
-      expect((error as Error).message).toBe(UNSUPPORTED);
-      expect(chatCalls).toEqual([]);
+      expect(isPromptGenUnavailable(error)).toBe(true);
+      expect((error as PromptGenUnavailableError).reason).toBe("auth");
+      expect((error as Error).message).toBe(
+        "[ai] OPENAI_API_KEY is not set.\n  Export it, or use another prompt-gen provider."
+      );
+      expect(ctx.state.client).toBeNull();
     });
 
-    it("throws FlaggedProviderError when the model refuses to answer", async () => {
+    it("refuses a bad request with a terminal 400 before any SDK call", async () => {
+      const { client, responsesCalls } = createFakeOpenaiClient();
+      const handler = createPromptGenHandler(createFakeOpenaiContext({ state: { client } }));
+
+      const error = await handler
+        .execute({ prompt: "hi", params: { reasoning: "max" } }, {})
+        .catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(TerminalProviderError);
+      expect((error as TerminalProviderError).status).toBe(400);
+      expect(responsesCalls).toEqual([]);
+    });
+
+    it("logs a classified SDK failure as openai:prompt-gen:failed, redacted, and rethrows it", async () => {
       const { client } = createFakeOpenaiClient({
-        chatResult: {
-          choices: [{ message: refusalMessage("I can't help with that.") }]
+        responsesImpl: async () => {
+          throw new RateLimitError(429, {}, "PROMPT_SECRET", new Headers());
         }
       });
       const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
 
-      await expect(handler.execute({ prompt: "hi" }, {})).rejects.toBeInstanceOf(
-        FlaggedProviderError
-      );
+      const error = await createPromptGenHandler(ctx)
+        .execute({ prompt: "PROMPT_SECRET" }, {})
+        .catch((error_: unknown) => error_);
+
+      expect(error).toBeInstanceOf(RetryableProviderError);
+      expect(ctx.log.warn).toHaveBeenCalledWith("openai:prompt-gen:failed", {
+        errorType: "retryable",
+        status: 429,
+        kind: undefined
+      });
     });
 
-    it("forwards the abort signal to the SDK call", async () => {
-      const { client, chatCalls } = createFakeOpenaiClient();
-      const ctx = createFakeOpenaiContext({ state: { client } });
-      const handler = createPromptGenHandler(ctx);
-      const controller = new AbortController();
-
-      await handler.execute({ prompt: "hi" }, { signal: controller.signal });
-
-      expect(chatCalls[0]?.signal).toBe(controller.signal);
-    });
-
-    it("never includes the prompt or completion text in meta (redaction)", async () => {
+    it("never includes the prompt or the answer text in meta or logs (redaction)", async () => {
       const { client } = createFakeOpenaiClient({
-        chatResult: { choices: [{ message: textMessage("GENERATED_SECRET") }] }
+        responsesResult: textResponse("GENERATED_SECRET")
       });
       const ctx = createFakeOpenaiContext({ state: { client } });
       const handler = createPromptGenHandler(ctx);
 
       const result = await handler.execute({ prompt: "PROMPT_SECRET" }, {});
 
-      expect(JSON.stringify(result.meta)).not.toContain("PROMPT_SECRET");
-      expect(JSON.stringify(result.meta)).not.toContain("GENERATED_SECRET");
+      const logged = JSON.stringify([
+        vi.mocked(ctx.log.info).mock.calls,
+        vi.mocked(ctx.log.warn).mock.calls
+      ]);
+      expect(JSON.stringify(result.meta)).not.toMatch(/PROMPT_SECRET|GENERATED_SECRET/);
+      expect(logged).not.toMatch(/PROMPT_SECRET|GENERATED_SECRET/);
     });
   });
 });
