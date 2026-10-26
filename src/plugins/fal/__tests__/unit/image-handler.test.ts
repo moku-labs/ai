@@ -123,6 +123,14 @@ describe("estimate", () => {
     expect(handler.estimate(at4k)).toEqual({ usd: 0.3 });
   });
 
+  it.each([
+    ["2K", 0.15],
+    ["4K", 0.3]
+  ])("prices nano-banana-2.1 at %s from its own row", (resolution, usd) => {
+    const request = { prompt: "p", model: "nano-banana-2.1", params: { resolution } };
+    expect(createImageHandler(createTestCtx()).estimate(request)).toEqual({ usd });
+  });
+
   it("counts refs that are still $ref objects, without reading them", () => {
     const handler = createImageHandler(createTestCtx());
     const unresolved = { $ref: "s01.face" } as unknown as ImageFile;

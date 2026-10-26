@@ -136,7 +136,22 @@ const NANO_ASPECTS: readonly string[] = [
 ];
 
 /** Nano Banana 2.1 aspect ratios: Pro's plus the extreme ones (fal schema, checked 2026-10-26). */
-const NANO_21_ASPECTS: readonly string[] = [...NANO_ASPECTS, "4:1", "1:4", "8:1", "1:8"];
+const NANO_21_ASPECTS: readonly string[] = [
+  "21:9",
+  "16:9",
+  "3:2",
+  "4:3",
+  "5:4",
+  "1:1",
+  "4:5",
+  "3:4",
+  "2:3",
+  "9:16",
+  "4:1",
+  "1:4",
+  "8:1",
+  "1:8"
+];
 
 /** Nano Banana resolution mapping: native `1K` / `2K` / `4K`; `1080` → `1K`. */
 const NANO_RESOLUTIONS: Readonly<Record<string, string>> = {
