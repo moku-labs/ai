@@ -10,7 +10,7 @@
 the `registry`.
 
 It reads the same request contract as fal's prompt-gen (`messages`, `tools`, `toolChoice`,
-`cacheSystem`, part `cache: true`, and `params.reasoning`, `params.max_tokens`,
+`cacheSystem`, `cacheTtl`, part `cache: true`, and `params.reasoning`, `params.max_tokens`,
 `params.responseSchema`, `params.images`). A consumer moves a call from fal to Anthropic by the
 provider and model name only.
 
@@ -101,6 +101,7 @@ createApp({
 | `system` | `system: string` | With `cacheSystem`: one text block with `cache_control`. |
 | `prompt` (no `messages`) | one user message | With `params.images`: the image blocks first, then the text. |
 | `messages` | user / assistant turns | `prompt` is ignored. |
+| `cacheTtl` | `ttl` of every `cache_control` | `"1h"` → `ttl: "1h"`; unset or `"5m"` → no `ttl` (5 minutes); other → 400. |
 | `tools` | `{ name, description, input_schema }` | Sent only when there is at least one tool. |
 | `toolChoice` | auto → `auto`, none → `none`, required → `any`, `{ name }` → `tool` | Opus 5.5, Sonnet 5.5 and Fable 5.1 answer a forced choice with a terminal 400. |
 | `params.reasoning` | `output_config.effort` | off → low, low → low, medium → medium, high → high; unset → medium; other → 400. No `thinking` field. |
@@ -110,18 +111,31 @@ createApp({
 | `temperature` | never sent | Current models reject it. |
 
 Requests refused with a terminal 400 before any I/O: empty `messages`, an empty prompt without
-`messages`, a model without a price, a bad `params.reasoning` or `params.responseSchema`,
+`messages`, a model without a price, a bad `params.reasoning`, `params.responseSchema` or `cacheTtl`,
 `params.images` with `messages`, an image that is not a local file, an image type the API cannot
 read.
 
 ## Prompt cache
 
 - Marks: `cacheSystem` on the system text, and every text part with `cache: true` (user and tool
-  messages). Each becomes `cache_control: { type: "ephemeral" }` (5 minutes).
+  messages). Each becomes a `cache_control` on its block.
+- Lifetime: `cacheTtl` sets it for every mark of the request. No `cacheTtl` or `"5m"`:
+  `{ type: "ephemeral" }` (5 minutes), as before. `"1h"`: `{ type: "ephemeral", ttl: "1h" }`. Any
+  other value is a 400. One TTL per request: the API needs longer-lived marks before shorter ones.
+  No beta header.
+- When to use `"1h"`: calls that share a prefix but start more than 5 minutes apart. A 1-hour write
+  costs 2× input, a 5-minute write 1.25×; a read costs the same on both. Calls less than 5 minutes
+  apart keep the 5-minute cache warm on their own, so `"1h"` only adds write cost there.
+- Cost: `usage.cache_creation.ephemeral_1h_input_tokens` is priced at `cacheWrite1hPerM`, the
+  5-minute writes at `cacheWrite5mPerM` (see "Models and prices").
 - The API takes at most 4 marks. The first 4 in request order keep `cache_control`; the rest are sent
   without it.
 - `usage.cachedTokens` / `cachedReadTokens` are the cache reads, `cacheWriteTokens` /
   `cachedWriteTokens` the writes. `promptTokens` is every input token: uncached, written and read.
+
+| `claude-opus-5-5`, per 1M tokens | Input | 5-minute write | 1-hour write | Read |
+| --- | --- | --- | --- | --- |
+| Bundled price | $4 | $5 | $8 | $0.20 |
 
 ## Tools and thinking
 

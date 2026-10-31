@@ -64,6 +64,8 @@ type PromptGenRequest = {
   toolChoice?: "auto" | "none" | "required" | { name: string };
   /** A prompt-cache breakpoint after the system text. */
   cacheSystem?: boolean;
+  /** Lifetime of every cache mark of the request. Default "5m". */
+  cacheTtl?: "5m" | "1h";
 };
 
 type PromptGenResult = {
@@ -148,6 +150,13 @@ Who serves the new fields:
 | `claude` | `PromptGenUnavailableError` `"unsupported"` | ignored | `promptTokens` = input + cache read + cache write; cached and cache-write tokens |
 | `codex` | `PromptGenUnavailableError` `"unsupported"` | ignored | all 0. The CLI reports none |
 | `openai` | `PromptGenUnavailableError` `"unsupported"` | ignored | prompt, completion, cached tokens |
+
+`cacheTtl` sets the lifetime of every cache mark of one request: `"5m"` (the default) or `"1h"`.
+Only `anthropic` sends it. A `"1h"` request writes its cache at the 1-hour rate (2× input, 1.25× for
+5 minutes) and keeps it for an hour, for calls that share a prefix but start more than 5 minutes apart.
+One TTL per request, because Anthropic needs longer-lived marks before shorter ones. `fal`, `openai`,
+`claude` and `codex` ignore it; `runToolLoop` does not set it (its steps start seconds apart).
+See [anthropic: cache](../anthropic/README.md).
 
 The three throw in `estimate()` and in `execute()`, before any spawn or call. So `generate`
 falls back to the next provider of its chain. Put `"fal"` in `fallback`, or pass

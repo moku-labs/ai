@@ -192,6 +192,7 @@ alias is sent as `<id>`.
   `prompt_cache_breakpoint: { mode: "explicit" }` on GPT-6 models.
 - A text part with `cache: true` gets the same breakpoint on GPT-6 (ignored on gpt-4o models).
   More than 4 marks in one request: the first 4 in request order are kept, the system first.
+- `cacheTtl` is ignored on openai.
 - `prompt` → a user message; with `messages` the prompt is ignored and the turns are sent:
   user parts, assistant text, `function_call { call_id, name, arguments }` (without ids), and
   `function_call_output { call_id, output }` with a string or `input_text` / `input_image` parts.

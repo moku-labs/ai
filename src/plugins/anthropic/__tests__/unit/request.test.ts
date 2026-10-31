@@ -253,6 +253,99 @@ describe("anthropic prompt-gen request: cache marks", () => {
       { type: "tool_result", tool_use_id: "toolu_01", content: [{ type: "text", text: "four" }] }
     ]);
   });
+
+  it('sends ttl "1h" on the system mark and on a marked text part with cacheTtl "1h"', async () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Bible.", cache: true },
+          { type: "text", text: "Check it." }
+        ]
+      }
+    ];
+
+    const body = await sentBody({
+      prompt: "",
+      system: "sys",
+      cacheSystem: true,
+      cacheTtl: "1h",
+      messages
+    });
+
+    const mark = { type: "ephemeral", ttl: "1h" };
+    expect(body.system).toStrictEqual([{ type: "text", text: "sys", cache_control: mark }]);
+    expect(body.messages[0]?.content).toStrictEqual([
+      { type: "text", text: "Bible.", cache_control: mark },
+      { type: "text", text: "Check it." }
+    ]);
+  });
+
+  it('keeps the 4-mark cap with cacheTtl "1h": the 5th mark goes without cache_control', async () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "one", cache: true },
+          { type: "text", text: "two", cache: true },
+          { type: "text", text: "three", cache: true }
+        ]
+      },
+      {
+        role: "tool",
+        toolCallId: "toolu_01",
+        content: [{ type: "text", text: "four", cache: true }]
+      }
+    ];
+
+    const body = await sentBody({
+      prompt: "",
+      system: "sys",
+      cacheSystem: true,
+      cacheTtl: "1h",
+      messages
+    });
+
+    const mark = { type: "ephemeral", ttl: "1h" };
+    expect(body.system).toStrictEqual([{ type: "text", text: "sys", cache_control: mark }]);
+    expect(body.messages[0]?.content).toStrictEqual([
+      { type: "text", text: "one", cache_control: mark },
+      { type: "text", text: "two", cache_control: mark },
+      { type: "text", text: "three", cache_control: mark }
+    ]);
+    expect(body.messages[1]?.content).toStrictEqual([
+      { type: "tool_result", tool_use_id: "toolu_01", content: [{ type: "text", text: "four" }] }
+    ]);
+  });
+
+  it.each([
+    [undefined],
+    ["5m"]
+  ] as const)("sends cache_control with no ttl key for cacheTtl %s", async cacheTtl => {
+    const request: PromptGenRequest = {
+      prompt: "",
+      system: "sys",
+      cacheSystem: true,
+      messages: [{ role: "user", content: [{ type: "text", text: "Bible.", cache: true }] }]
+    };
+
+    const body = await sentBody(cacheTtl === undefined ? request : { ...request, cacheTtl });
+
+    // toStrictEqual: a `ttl: undefined` key would fail here, toEqual would pass it.
+    const mark = { type: "ephemeral" };
+    expect(body.system).toStrictEqual([{ type: "text", text: "sys", cache_control: mark }]);
+    expect(body.messages[0]?.content).toStrictEqual([
+      { type: "text", text: "Bible.", cache_control: mark }
+    ]);
+  });
+
+  it('refuses a cacheTtl other than "5m" or "1h"', async () => {
+    const request = { prompt: "Judge.", cacheTtl: "2h" } as unknown as PromptGenRequest;
+
+    const error = await refusal(request);
+
+    expectBadRequest(error, "cacheTtl");
+  });
 });
 
 describe("anthropic prompt-gen request: assistant and tool turns", () => {

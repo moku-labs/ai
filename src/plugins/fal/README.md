@@ -343,7 +343,8 @@ With `messages` the request is a multi-turn chat and `prompt` is ignored (it may
 | `toolChoice` | `tool_choice`: `"auto"` / `"none"` / `"required"` as is, `{ name }` as `{ type: "function", function: { name } }`; not sent when unset |
 
 `cache_control` is for Anthropic models; other model families ignore it. Whether it passes through fal is not
-confirmed, see "Does fal pass `cache_control` through" below. `messages: []` and `params.images` together with
+confirmed, see "Does fal pass `cache_control` through" below. `cacheTtl` is ignored on fal: every mark is sent
+without `ttl` (5 minutes), because the pass-through of `cache_control` itself is not confirmed. `messages: []` and `params.images` together with
 `messages` are a terminal 400 before any upload.
 
 The answer's `choices[0].message.tool_calls` become `toolCalls`: `arguments` is parsed, `""` or missing is `{}`, text

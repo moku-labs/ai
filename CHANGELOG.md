@@ -7,6 +7,14 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **promptGen, anthropic: a 1-hour prompt cache per request.** `PromptGenRequest.cacheTtl` is
+  `"5m"` (the default) or `"1h"`. With `"1h"` the anthropic provider sends
+  `cache_control: { type: "ephemeral", ttl: "1h" }` on every cache mark of the request (system and
+  `cache: true` parts); without it or with `"5m"` the request is sent exactly as before. Any other
+  value is a 400 before any call. `costUsd` already prices 1-hour writes at their own rate
+  (`cacheWrite1hPerM`, Opus 5.5: $8 per 1M against $5 for 5 minutes). fal, openai, claude and
+  codex ignore the field.
+
 - **fal: image model `nano-banana-2.1`.** Google's Nano Banana 2.1 on `fal-ai/nano-banana-2.1` and
   `fal-ai/nano-banana-2.1/edit`. Up to 14 refs, native `1K` / `2K` / `4K`, Pro's aspects plus
   `4:1 1:4 8:1 1:8`. `thinking_level`, `safety_tolerance`, `seed` and `system_prompt` pass through
