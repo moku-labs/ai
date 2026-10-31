@@ -1,9 +1,10 @@
 /**
  * @file anthropic prompt-gen request — the plan of a prompt-gen request
  * (every check before any I/O: input, model and price, effort, answer
- * schema, max tokens, images), the Messages API body built from it, and the
- * offline input-token estimate. The body is built in request order: the
- * system text, then the turns, so the first 4 cache marks are the ones kept.
+ * schema, cache TTL, max tokens, images), the Messages API body built from
+ * it, and the offline input-token estimate. The body is built in request
+ * order: the system text, then the turns, so the first 4 cache marks are the
+ * ones kept, each with the request's one TTL.
  */
 import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema";
 import type {
@@ -19,6 +20,7 @@ import { imageFileOf } from "../images";
 import { resolveModelId } from "../models";
 import { getPrices, priceOf } from "../prices";
 import type {
+  AnthropicCacheControl,
   AnthropicContentBlock,
   AnthropicContext,
   AnthropicEffort,
@@ -34,14 +36,7 @@ import type {
   JsonSchema
 } from "../types";
 
-/**
- * Everything checked before any I/O.
- *
- * @example
- * ```ts
- * planRequest(ctx, { prompt: "Judge." }).outputConfig; // => { effort: "medium" }
- * ```
- */
+/** Everything checked before any I/O. */
 export type RequestPlan = {
   /** Native model id. */
   model: string;
@@ -51,14 +46,19 @@ export type RequestPlan = {
   maxTokens: number;
   /** Effort and answer schema. */
   outputConfig: AnthropicOutputConfig;
+  /** The `cache_control` of every kept cache mark: `request.cacheTtl` as sent. */
+  cacheControl: AnthropicCacheControl;
   /** Images to read, in the order their blocks go into the body. */
   images: ImageFile[];
 };
 
+/** Takes one of the request's cache marks: its `cache_control`, or undefined once they are used up. */
+type TakeMark = () => AnthropicCacheControl | undefined;
+
 /** What the turn mapping reads besides the messages. */
 type TurnSources = {
-  /** Takes one of the request's cache marks; false once they are used up. */
-  takeMark: () => boolean;
+  /** Takes one of the request's cache marks. */
+  takeMark: TakeMark;
   /** The next image block, in message order. */
   nextImage: () => AnthropicImageBlock | undefined;
   /** Remembered answer blocks by first tool_use id. */
@@ -135,6 +135,26 @@ function effortOf(reasoning: unknown): AnthropicEffort {
   if (effort !== undefined) return effort;
   throw badRequest(
     '[ai] Anthropic params.reasoning must be "off", "low", "medium" or "high".\n  Pass one of the four levels.'
+  );
+}
+
+/**
+ * The `cache_control` of `request.cacheTtl`: unset and `"5m"` → the plain
+ * mark (the API's 5-minute default, so no `ttl` is sent), `"1h"` → `ttl: "1h"`.
+ *
+ * @param value - `request.cacheTtl`, untrusted.
+ * @returns The mark every kept cache breakpoint carries.
+ * @throws {TerminalProviderError} A 400 for any other value.
+ * @example
+ * ```ts
+ * cacheControlOf("1h"); // => { type: "ephemeral", ttl: "1h" }
+ * ```
+ */
+function cacheControlOf(value: unknown): AnthropicCacheControl {
+  if (value === undefined || value === "5m") return { type: "ephemeral" };
+  if (value === "1h") return { type: "ephemeral", ttl: "1h" };
+  throw badRequest(
+    '[ai] Anthropic cacheTtl must be "5m" or "1h".\n  Pass one of the two, or leave it out for 5 minutes.'
   );
 }
 
@@ -261,13 +281,13 @@ function requestImages(request: PromptGenRequest): ImageFile[] {
 
 /**
  * Plans a request without I/O: input, model (default `config.model`) and
- * its price, max tokens, effort and answer schema, images. No other param
- * is read: `temperature` is never sent.
+ * its price, max tokens, effort and answer schema, the cache mark of
+ * `cacheTtl`, images. No other param is read: `temperature` is never sent.
  *
  * @param ctx - Plugin context (config, price table).
  * @param request - The prompt-gen request.
  * @returns The plan.
- * @throws {TerminalProviderError} A 400 for an empty prompt or messages, a model without a price, a bad param or image.
+ * @throws {TerminalProviderError} A 400 for an empty prompt or messages, a model without a price, a bad param, cacheTtl or image.
  */
 export function planRequest(ctx: AnthropicContext, request: PromptGenRequest): RequestPlan {
   assertHasInput(request);
@@ -283,26 +303,28 @@ export function planRequest(ctx: AnthropicContext, request: PromptGenRequest): R
     price,
     maxTokens: maxTokensOf(params?.max_tokens, ctx.config.maxTokens),
     outputConfig: outputConfigOf(params),
+    cacheControl: cacheControlOf(request.cacheTtl),
     images: requestImages(request)
   };
 }
 
 /**
- * A counter of the request's cache marks: each call takes one while any is left.
+ * The request's cache marks: each call takes one while any is left.
  *
  * @param limit - Marks the request may carry.
- * @returns A function that takes a mark, true while one was left.
+ * @param mark - The `cache_control` every taken mark carries.
+ * @returns A function that takes a mark: `mark` while one was left, then undefined.
  * @example
  * ```ts
- * const takeMark = cacheMarks(1); takeMark(); // => true, then false
+ * const takeMark = cacheMarks(1, { type: "ephemeral", ttl: "1h" }); takeMark(); // => { type: "ephemeral", ttl: "1h" }, then undefined
  * ```
  */
-function cacheMarks(limit: number): () => boolean {
+function cacheMarks(limit: number, mark: AnthropicCacheControl): TakeMark {
   let left = limit;
-  return (): boolean => {
-    if (left === 0) return false;
+  return (): AnthropicCacheControl | undefined => {
+    if (left === 0) return undefined;
     left -= 1;
-    return true;
+    return mark;
   };
 }
 
@@ -310,16 +332,16 @@ function cacheMarks(limit: number): () => boolean {
  * A text block, with `cache_control` when it carries a cache mark.
  *
  * @param text - The text.
- * @param cached - Whether a cache breakpoint follows the block.
+ * @param mark - The cache mark after the block; undefined for none.
  * @returns The block.
  * @example
  * ```ts
- * textBlock("Bible.", true); // => { type: "text", text: "Bible.", cache_control: { type: "ephemeral" } }
+ * textBlock("Bible.", { type: "ephemeral", ttl: "1h" }); // => { type: "text", text: "Bible.", cache_control: { type: "ephemeral", ttl: "1h" } }
  * ```
  */
-function textBlock(text: string, cached: boolean): AnthropicTextBlock {
-  if (!cached) return { type: "text", text };
-  return { type: "text", text, cache_control: { type: "ephemeral" } };
+function textBlock(text: string, mark: AnthropicCacheControl | undefined): AnthropicTextBlock {
+  if (mark === undefined) return { type: "text", text };
+  return { type: "text", text, cache_control: mark };
 }
 
 /**
@@ -332,13 +354,13 @@ function textBlock(text: string, cached: boolean): AnthropicTextBlock {
  * @returns The field, or nothing.
  * @example
  * ```ts
- * systemField("Be brief.", false, () => true); // => { system: "Be brief." }
+ * systemField("Be brief.", false, cacheMarks(4, { type: "ephemeral" })); // => { system: "Be brief." }
  * ```
  */
 function systemField(
   system: string | undefined,
   cacheSystem: boolean,
-  takeMark: () => boolean
+  takeMark: TakeMark
 ): { system?: string | AnthropicTextBlock[] } {
   if (system === undefined) return {};
   if (!cacheSystem) return { system };
@@ -378,7 +400,7 @@ function contentOf(content: string | readonly ContentPart[], sources: TurnSource
   if (typeof content === "string") return content;
   return content.flatMap((part): Array<AnthropicTextBlock | AnthropicImageBlock> => {
     if (part.type === "text")
-      return [textBlock(part.text, part.cache === true && sources.takeMark())];
+      return [textBlock(part.text, part.cache === true ? sources.takeMark() : undefined)];
     const image = sources.nextImage();
     return image === undefined ? [] : [image];
   });
@@ -515,8 +537,9 @@ function toolFields(request: Pick<PromptGenRequest, "tools" | "toolChoice">): {
 
 /**
  * Builds the Messages API body in request order: the system text (the
- * first cache mark), then the prompt message or the turns. A remembered
- * tool turn goes back unchanged. No `temperature`, no `thinking`.
+ * first cache mark), then the prompt message or the turns. Every kept mark
+ * carries `plan.cacheControl`. A remembered tool turn goes back unchanged.
+ * No `temperature`, no `thinking`.
  *
  * @param request - The prompt-gen request.
  * @param plan - Its plan.
@@ -530,7 +553,7 @@ export function buildRequestBody(
   imageBlocks: readonly AnthropicImageBlock[],
   turns: ReadonlyMap<string, AnthropicContentBlock[]>
 ): AnthropicRequestBody {
-  const takeMark = cacheMarks(MAX_CACHE_MARKS);
+  const takeMark = cacheMarks(MAX_CACHE_MARKS, plan.cacheControl);
   const system = systemField(request.system, request.cacheSystem === true, takeMark);
 
   // The prompt request is one user message; a conversation takes its image blocks in order.

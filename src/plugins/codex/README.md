@@ -87,7 +87,7 @@ codex exec [-m <model>] -c model_reasoning_effort="<effort>" --sandbox read-only
 - The answer is `last-message.txt`, trimmed.
 - `estimate()` validates the params and returns `{ usd: 0 }`.
 - `toolCalls` is `[]`, `finishReason` is `"stop"`, and every `usage` count is 0: the CLI reports no tokens.
-  `cacheSystem` is ignored.
+  `cacheSystem` and `cacheTtl` are ignored.
 - `meta` is `Codex.CodexPromptMeta`: `{ provider: "codex", model?, modelRequested?, effort, ignored? }`. `effort` is the key claude uses too.
 
 ```ts

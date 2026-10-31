@@ -160,7 +160,7 @@ function metaOf(request: PromptGenRequest, plan: PromptPlan): CodexPromptMeta {
  * `finishReason: "stop"` and zero `usage` (the CLI reports none). Never logs
  * the prompt or the answer. Both throw `PromptGenUnavailableError` with reason
  * "unsupported" for `messages`, `tools` or `toolChoice`, before any other
- * work; `cacheSystem` alone is ignored. Both throw `Error` when `images`,
+ * work; `cacheSystem` and `cacheTtl` alone are ignored. Both throw `Error` when `images`,
  * `responseSchema` or `reasoning` has a bad shape. `execute()` also throws `PromptGenUnavailableError` when
  * the CLI is missing, not logged in, or out of plan or rate limit;
  * `TerminalProviderError` on a non-zero exit, no answer, or an answer that

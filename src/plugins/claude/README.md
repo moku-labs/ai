@@ -97,7 +97,7 @@ A bad `images`, `responseSchema` or `reasoning` throws a plain `Error` before an
 `cache_creation_input_tokens`. A count the CLI does not report is 0. `meta.usage` keeps its old keys.
 `cachedReadTokens` and `cachedWriteTokens` hold the same two cache counts only when the CLI reports them; otherwise the key is absent.
 
-`toolCalls` is always `[]` and `finishReason` always `"stop"`. `cacheSystem` is ignored.
+`toolCalls` is always `[]` and `finishReason` always `"stop"`. `cacheSystem` and `cacheTtl` are ignored.
 
 ## API
 

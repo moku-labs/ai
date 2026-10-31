@@ -135,7 +135,7 @@ function buildMeta(
  * and returns the answer with typed `usage` (cache tokens included), no tool
  * calls and `finishReason: "stop"`. Both throw `PromptGenUnavailableError`
  * with reason "unsupported" for `messages`, `tools` or `toolChoice`, before
- * any other work. `temperature` and `cacheSystem` are ignored; `temperature`
+ * any other work. `temperature`, `cacheSystem` and `cacheTtl` are ignored; `temperature`
  * is listed in `meta.ignored`. Logs `claude:prompt-gen:done` with the model
  * and the answer length only.
  *

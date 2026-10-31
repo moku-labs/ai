@@ -119,11 +119,12 @@ export type ToolDefinition = {
  * @example
  * ```ts
  * const request: PromptGenRequest = { prompt: "Describe a sunset over the ocean." };
- * // A tool turn: messages replace prompt, the system text is cached.
+ * // A tool turn: messages replace prompt, the system text is cached for an hour.
  * const toolTurn: PromptGenRequest = {
  *   prompt: "",
  *   system: "You review storyboard frames.",
  *   cacheSystem: true,
+ *   cacheTtl: "1h",
  *   messages: [{ role: "user", content: "Check the framing of shot 3." }],
  *   tools: [{ name: "read_frame", description: "Return one frame.", inputSchema: { type: "object" } }]
  * };
@@ -148,6 +149,11 @@ export type PromptGenRequest = {
   toolChoice?: "auto" | "none" | "required" | { name: string };
   /** A prompt-cache breakpoint after the system text. */
   cacheSystem?: boolean;
+  /**
+   * Lifetime of every cache mark of the request: `"5m"` (the default) or
+   * `"1h"`. Only the anthropic provider sends it; the others ignore it.
+   */
+  cacheTtl?: "5m" | "1h";
 };
 
 /**
@@ -356,7 +362,8 @@ export function isPromptGenUnavailable(error: unknown): boolean {
  * Throws when a request asks for a conversation or tool calling
  * (`messages`, `tools` or `toolChoice`), for a provider that maps only one
  * turn. The error is "unsupported", so `promptGen` falls back to the next
- * provider. `cacheSystem` alone does not count: such a provider ignores it.
+ * provider. `cacheSystem` and `cacheTtl` alone do not count: such a provider
+ * ignores them.
  *
  * @param request - The prompt-gen request.
  * @param providerLabel - The provider name for the message, e.g. `"Claude"`.
