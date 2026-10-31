@@ -86,16 +86,20 @@ export type Config = {
 export type JsonSchema = Record<string, unknown>;
 
 /**
- * The prompt-cache marker of a block: a cache breakpoint after it.
+ * The prompt-cache marker of a block: a cache breakpoint after it, kept for
+ * 5 minutes, or for one hour with `ttl: "1h"`.
  *
  * @example
  * ```ts
  * const mark: AnthropicCacheControl = { type: "ephemeral" };
+ * const hourMark: AnthropicCacheControl = { type: "ephemeral", ttl: "1h" };
  * ```
  */
 export type AnthropicCacheControl = {
-  /** The only kind: kept for the default 5-minute lifetime. */
+  /** The only kind of mark. */
   type: "ephemeral";
+  /** One hour; absent = the API's 5-minute default. */
+  ttl?: "1h";
 };
 
 /**
