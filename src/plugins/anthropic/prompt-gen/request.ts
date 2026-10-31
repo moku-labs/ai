@@ -36,15 +36,7 @@ import type {
   JsonSchema
 } from "../types";
 
-/**
- * Everything checked before any I/O.
- *
- * @example
- * ```ts
- * planRequest(ctx, { prompt: "Judge." }).outputConfig; // => { effort: "medium" }
- * planRequest(ctx, { prompt: "Judge.", cacheTtl: "1h" }).cacheControl; // => { type: "ephemeral", ttl: "1h" }
- * ```
- */
+/** Everything checked before any I/O. */
 export type RequestPlan = {
   /** Native model id. */
   model: string;

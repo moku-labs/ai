@@ -144,12 +144,13 @@ classes without a `depends` edge.
 
 Who serves the new fields:
 
-| Provider | `messages` / `tools` / `toolChoice` | `cacheSystem` | `usage` |
-| --- | --- | --- | --- |
-| `fal` | served. See [fal: Tool calling and cache](../fal/README.md#tool-calling-and-cache) | `cache_control` on the system text | prompt, completion, cached, cache-write tokens; `cachedReadTokens` / `cachedWriteTokens` when fal reports them |
-| `claude` | `PromptGenUnavailableError` `"unsupported"` | ignored | `promptTokens` = input + cache read + cache write; cached and cache-write tokens |
-| `codex` | `PromptGenUnavailableError` `"unsupported"` | ignored | all 0. The CLI reports none |
-| `openai` | `PromptGenUnavailableError` `"unsupported"` | ignored | prompt, completion, cached tokens |
+| Provider | `messages` / `tools` / `toolChoice` | `cacheSystem` | `cacheTtl` | `usage` |
+| --- | --- | --- | --- | --- |
+| `anthropic` | served. See [anthropic](../anthropic/README.md) | `cache_control` on the system text | `ttl: "1h"` on every mark with `"1h"` | prompt, completion, cached, cache-write tokens |
+| `fal` | served. See [fal: Tool calling and cache](../fal/README.md#tool-calling-and-cache) | `cache_control` on the system text | ignored | prompt, completion, cached, cache-write tokens; `cachedReadTokens` / `cachedWriteTokens` when fal reports them |
+| `claude` | `PromptGenUnavailableError` `"unsupported"` | ignored | ignored | `promptTokens` = input + cache read + cache write; cached and cache-write tokens |
+| `codex` | `PromptGenUnavailableError` `"unsupported"` | ignored | ignored | all 0. The CLI reports none |
+| `openai` | `PromptGenUnavailableError` `"unsupported"` | ignored | ignored | prompt, completion, cached tokens |
 
 `cacheTtl` sets the lifetime of every cache mark of one request: `"5m"` (the default) or `"1h"`.
 Only `anthropic` sends it. A `"1h"` request writes its cache at the 1-hour rate (2× input, 1.25× for

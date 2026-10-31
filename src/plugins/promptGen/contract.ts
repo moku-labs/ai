@@ -362,7 +362,8 @@ export function isPromptGenUnavailable(error: unknown): boolean {
  * Throws when a request asks for a conversation or tool calling
  * (`messages`, `tools` or `toolChoice`), for a provider that maps only one
  * turn. The error is "unsupported", so `promptGen` falls back to the next
- * provider. `cacheSystem` alone does not count: such a provider ignores it.
+ * provider. `cacheSystem` and `cacheTtl` alone do not count: such a provider
+ * ignores them.
  *
  * @param request - The prompt-gen request.
  * @param providerLabel - The provider name for the message, e.g. `"Claude"`.
