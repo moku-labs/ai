@@ -280,5 +280,21 @@ describe("journal attempts", () => {
       expect(artifact).not.toHaveProperty("outputs");
       expect(mustExist(getItem(state, runId, "pk-2")).outputs).toBeNull();
     });
+
+    it("commitDone keeps output names, and reuse carries them to the reusing item", () => {
+      const named: DoneOutput[] = [
+        { contentHash: "ch-1", mimeType: "audio/mpeg" },
+        { contentHash: "ch-2", mimeType: "audio/mpeg", name: "ep02-signAlice-ru" },
+        { contentHash: "ch-3", mimeType: "audio/mpeg", name: "ep02-signBob-ru" }
+      ];
+      const runId = commitGroup(named);
+      const [second] = insertItems(state, runId, [intent("pk-2", { artifactKey: "ak-1" })]);
+
+      const artifact = mustExist(findDoneArtifact(state, "ak-1"));
+      reuseDone(state, mustExist(second).id, artifact);
+
+      expect(mustExist(getItem(state, runId, "pk-1")).outputs).toEqual(named);
+      expect(mustExist(getItem(state, runId, "pk-2")).outputs).toEqual(named);
+    });
   });
 });

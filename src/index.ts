@@ -18,6 +18,7 @@
  * | buildfile | `defaultGlob` · `schemaPath` | `"**\/*.moku.yaml"` · `".moku/build.schema.json"` |
  * | runner | `maxAttempts` · `retryBaseMs` · `eventBufferSize` · `pollIntervalMs` · `jobTimeoutMs` · `maxActiveRuns` | `3` · `1000` · `10_000` · `5000` · `1_800_000` · `1` |
  * | voiceover | `defaultProvider` · `defaultFormat` | `"elevenlabs"` · `"mp3"` |
+ * | dialogue | `defaultProvider` | `"elevenlabs"` |
  * | translate | `defaultProvider` | `"openai"` |
  * | promptGen | `defaultProvider` · `fallback` | `"openai"` · `[]` |
  * | image | `defaultProvider` | `"codex"` |
@@ -69,6 +70,7 @@ import {
   cliPlugin,
   codexPlugin,
   composePlugin,
+  dialoguePlugin,
   elevenlabsPlugin,
   falPlugin,
   imagePlugin,
@@ -91,6 +93,7 @@ const framework = createCore(coreConfig, {
     buildfilePlugin,
     runnerPlugin,
     voiceoverPlugin,
+    dialoguePlugin,
     translatePlugin,
     promptGenPlugin,
     imagePlugin,
@@ -198,6 +201,7 @@ export {
   cliPlugin,
   codexPlugin,
   composePlugin,
+  dialoguePlugin,
   elevenlabsPlugin,
   falPlugin,
   imagePlugin,
@@ -237,6 +241,7 @@ export {
   Cli,
   Codex,
   Compose,
+  Dialogue,
   Elevenlabs,
   Fal,
   Image,

@@ -171,3 +171,35 @@ describe("normalizeOutputs", () => {
     expect(normalizeOutputs(result)).toEqual([{ bytes: FIRST, mimeType: OCTET_STREAM }]);
   });
 });
+
+describe("normalizeOutputs — generic outputs", () => {
+  const MIX = new Uint8Array([1]);
+  const LINE = new Uint8Array([2]);
+  const PICTURE = new Uint8Array([9]);
+
+  it("takes outputs over images, keeping each name and writing no name key where there is none", () => {
+    const result = {
+      outputs: [
+        { bytes: MIX, mimeType: "audio/mpeg" },
+        { bytes: LINE, mimeType: "", name: "ep02-signAlice-ru" }
+      ],
+      images: [{ image: PICTURE, mimeType: "image/png" }],
+      costUsd: 0.02
+    };
+
+    expect(normalizeOutputs(result)).toStrictEqual([
+      { bytes: MIX, mimeType: "audio/mpeg" },
+      { bytes: LINE, mimeType: OCTET_STREAM, name: "ep02-signAlice-ru" }
+    ]);
+  });
+
+  it("uses images when outputs is empty", () => {
+    const result = {
+      outputs: [],
+      images: [{ image: PICTURE, mimeType: "image/png" }],
+      costUsd: 0
+    };
+
+    expect(normalizeOutputs(result)).toStrictEqual([{ bytes: PICTURE, mimeType: "image/png" }]);
+  });
+});

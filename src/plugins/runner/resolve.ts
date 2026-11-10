@@ -7,7 +7,7 @@
  */
 import path from "node:path";
 import { isFileValue, isReferenceValue } from "../buildfile";
-import type { FileMimeType, HandlerResult, ResolvedFile } from "./types";
+import type { FileMimeType, HandlerOutput, HandlerResult, ResolvedFile } from "./types";
 
 /** Fallback mime type for bytes of unknown kind. */
 export const OCTET_STREAM = "application/octet-stream";
@@ -231,27 +231,45 @@ function requireResolved(
 }
 
 /**
- * Every image of a multi-image handler result, in order, as bytes to store
- * and their mime types. An entry's empty `mimeType` falls back to
- * `application/octet-stream`. A group of one is still a list of one, so the
- * caller sees the count.
+ * The stored mime type of one output: an empty one falls back to `application/octet-stream`.
+ *
+ * @param mimeType - The handler's mime type.
+ * @returns The mime type to store.
+ */
+function outputMimeTypeOf(mimeType: string): string {
+  return mimeType === "" ? OCTET_STREAM : mimeType;
+}
+
+/**
+ * Every output of a multi-output handler result, in order, as bytes to
+ * store, their mime types and, for a named output, its name. A non-empty
+ * `outputs` wins over `images`. An entry's empty `mimeType` falls back to
+ * `application/octet-stream`; an unnamed entry gets no `name` key. A group
+ * of one is still a list of one, so the caller sees the count.
  *
  * @param result - What the handler returned.
- * @returns The outputs in order, or undefined when `images` is absent or empty.
+ * @returns The outputs in order, or undefined when both `outputs` and `images` are absent or empty.
  * @example
  * ```ts
  * normalizeOutputs({ images: [{ image: new Uint8Array([1]), mimeType: "" }], costUsd: 0 });
  * // => [{ bytes: Uint8Array [1], mimeType: "application/octet-stream" }]
+ * normalizeOutputs({ outputs: [{ bytes: mp3, mimeType: "audio/mpeg", name: "l1" }], costUsd: 0 });
+ * // => [{ bytes: mp3, mimeType: "audio/mpeg", name: "l1" }]
  * ```
  */
-export function normalizeOutputs(
-  result: HandlerResult
-): { bytes: Uint8Array; mimeType: string }[] | undefined {
+export function normalizeOutputs(result: HandlerResult): HandlerOutput[] | undefined {
+  if (result.outputs !== undefined && result.outputs.length > 0) {
+    return result.outputs.map(({ bytes, mimeType, name }) => ({
+      bytes,
+      mimeType: outputMimeTypeOf(mimeType),
+      ...(name === undefined ? {} : { name })
+    }));
+  }
   if (result.images === undefined || result.images.length === 0) return undefined;
 
   return result.images.map(entry => ({
     bytes: entry.image,
-    mimeType: entry.mimeType === "" ? OCTET_STREAM : entry.mimeType
+    mimeType: outputMimeTypeOf(entry.mimeType)
   }));
 }
 

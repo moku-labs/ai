@@ -13,6 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { localizeItems } from "./localize";
 import { checkReferenceGraph } from "./references";
 import { buildItemSchema, buildSpecSchema, firstIssueMessage } from "./schema";
 import type {
@@ -202,13 +203,19 @@ async function compileSource(source: BuildfileSource): Promise<CompiledBuild> {
       ? result.data.items
       : [...result.data.items, ...(await expandItemsFrom(itemsFrom, dir, label))];
 
+  // Locales and cast: one item per locale, `$cast` members merged in.
+  const localized = localizeItems(result.data, items);
+  if ("problem" in localized) {
+    throw buildFileInvalidError(label, localized.problem);
+  }
+
   // $ref graph: unique ids, known targets, well-formed values, no cycle.
-  const refProblem = checkReferenceGraph(items);
+  const refProblem = checkReferenceGraph(localized.items);
   if (refProblem) {
     throw buildFileInvalidError(label, refProblem);
   }
 
-  return { file: label, spec: { ...result.data, items } };
+  return { file: label, spec: { ...result.data, items: localized.items } };
 }
 
 /**
@@ -289,6 +296,9 @@ version: 1
 name: ${quotedName}
 items: []
 
+# One scene in several languages: add a top-level \`locales: [ru, en]\` and a \`cast:\` of named
+# voices, then give an item \`locales: true\`, \`\${locale}\` in its ids and \`$cast: alice\` in its lines.
+
 # Example items — uncomment and edit to use:
 #
 # - task: voiceover
@@ -347,6 +357,17 @@ items: []
 #     source: { $ref: button-raw }
 #     size: { width: 128, height: 64 }
 #     padding: 2
+#
+# - task: dialogue
+#   id: voices/quarrel
+#   input:
+#     model: "eleven_v4"
+#     language: "en"
+#     seed: 7
+#     settings: { stability: 0.5, similarity: 0.75 }
+#     lines:
+#       - { id: "quarrel-alice", voice: "VOICE_ID_A", text: "[tense] I never signed anything!" }
+#       - { id: "quarrel-daniel", voice: "VOICE_ID_B", text: "[bitterly] You haven't lived here in years." }
 `;
 }
 

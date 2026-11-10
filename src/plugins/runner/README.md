@@ -241,30 +241,43 @@ const app = createApp({ plugins: [reporterPlugin] });
    journal.
 9. **Persist** — the result is normalized (`body` / `audio` / `image` / `video` bytes, or `text`),
    `store.put(bytes)` → `journal.commitDone(itemId, { actualCostUsd, artifactKey, contentHash,
-   mimeType })`. A result with `images` stores every entry and journals them as `outputs` (see
-   [Multi-output items](#multi-output-items)).
+   mimeType })`. A result with `outputs` or `images` stores every entry and journals them as
+   `outputs` (see [Multi-output items](#multi-output-items)).
 10. **Report** — item record, stamped with its `runId`, to the `events()` consumers that follow
     the run; coalesced `run:progress` on the bus.
 
 ### Multi-output items
 
-A handler may return `images: { image, mimeType }[]` next to `image` (an image group, such as ark
-Seedream with `params.images`). When `images` is present and not empty:
+A handler may return several files for one item, in one of two fields:
+
+- `outputs: { bytes, mimeType, name? }[]`, for any task (a dialogue scene: the whole mix, then one
+  named file per line);
+- `images: { image, mimeType }[]` next to `image` (an image group, such as ark Seedream with
+  `params.images`).
+
+When both are non-empty, `outputs` wins and `images` is ignored. When the one used is present and
+not empty:
 
 - the runner `store.put`s every entry, in order, and calls `commitDone` with `contentHash` /
-  `mimeType` of the first entry and `outputs` = every entry `{ contentHash, mimeType }`. An entry
-  with an empty `mimeType` is stored as `application/octet-stream`;
+  `mimeType` of the first entry and `outputs` = every entry `{ contentHash, mimeType, name? }`
+  (`name` only on an entry that has one). An entry with an empty `mimeType` is stored as
+  `application/octet-stream`;
 - `item:done` carries `contentHashes`, every output hash in order. A group that came back with one
   image still journals one output and `contentHashes` of length 1, so the caller sees the count;
 - a `$ref` to the item resolves to the first output. A `$ref` to the k-th output does not exist yet;
 - reuse needs every output in the store; the reused `item:done` carries `contentHashes` too;
-- `export` writes one file per output: `<label>.<ext>`, then `<label>-2.<ext>` … `<label>-N.<ext>`,
-  each extension from that output's mime type. The item cost is on the first file, 0 on the others.
-  An item whose file this export already wrote (an item `x-2` next to a group `x`) is skipped and
-  listed in `skipped`, never overwritten;
+- `export` writes one file per output, each extension from that output's mime type. Output 1 is
+  `<label>.<ext>`. A later output with a `name` goes beside it, in the label's folder:
+  `path.join(path.dirname(label), name).<ext>` (label `voices/ep02-quarrel-ru`, name
+  `ep02-signAlice-ru` → `voices/ep02-signAlice-ru.mp3`). A later output without a name is
+  `<label>-<k>.<ext>` (`-2`, `-3` …). The item cost is on the first file, 0 on the others;
+- an item is skipped and listed in `skipped`, never written, when a name is empty, contains `/` or
+  `\`, or is `.` / `..`; when two of its own files land on one path (a line named like the label's
+  basename); or when one of its files is one this export already wrote (an item `x-2` next to a
+  group `x`, a named line next to an item with that label).
 
-Without `images` (or with an empty list), nothing changes: one artifact, no `outputs`, no
-`contentHashes`.
+Without `outputs` and `images` (or with empty lists), nothing changes: one artifact, no `outputs`,
+no `contentHashes`.
 
 A retryable failure returns the item to `queued` (`markFailed` with `terminal: false`) and
 re-enters admit + gate after the backoff delay, until it settles or exhausts `maxAttempts`.
@@ -396,6 +409,7 @@ type HandlerRequest = Record<string, unknown>; // { ...item.input, params }
 type HandlerResult = {
   body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
   mimeType?: string; costUsd: number; meta?: Record<string, unknown>;
+  outputs?: { bytes: Uint8Array; mimeType: string; name?: string }[]; // every output, in order; wins over images
   images?: { image: Uint8Array; mimeType: string }[]; // every image of a group, in order
 };
 type JobPoll =
@@ -422,9 +436,11 @@ Copies every `done` artifact of a run (default: the newest run) to
 `<outDir>/<build name>/<label>.<ext>` (default `outDir`: `"out"`), or to `<outDir>/<label>.<ext>`
 with `flat: true` (default `false`). The extension comes from the
 stored mime type. Labels with `..` or an absolute path are skipped and listed in `skipped`. A
-multi-output item writes one file per output: `<label>.<ext>`, `<label>-2.<ext>` …
-`<label>-N.<ext>`; the extra files have `label` `<label>-<k>` and `costUsd` 0. An item whose file
-this export already wrote is skipped and listed in `skipped`: one export never overwrites its own file.
+multi-output item writes one file per output: `<label>.<ext>`, then for each later output
+`<label folder>/<name>.<ext>` when it is named, else `<label>-<k>.<ext>`; the extra files have that
+path (without extension) as `label`, and `costUsd` 0. An unsafe name (empty, with `/` or `\`, `.`,
+`..`) or two files of the item on one path skips the item. An item whose file this export already
+wrote is skipped and listed in `skipped`: one export never overwrites its own file.
 With `flat`, the same label in two builds is such a file: the first one is kept, the second is skipped.
 `flat` writes no build folder, so the build name is not checked.
 
@@ -432,6 +448,8 @@ With `flat`, the same label in two builds is such a file: the first one is kept,
 const { files } = await app.runner.export({ outDir: "out" });
 // [{ label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }]
 // a group of 3 keyframes: e01.keys.jpg, e01.keys-2.jpg, e01.keys-3.jpg
+// a dialogue "voices/ep02-quarrel-ru" with named lines:
+//   voices/ep02-quarrel-ru.mp3, voices/ep02-signAlice-ru.mp3, voices/ep02-signBob-ru.mp3
 
 // Straight into the game's asset folder, no build folder.
 const icons = await app.runner.export({ outDir: "assets/icons", flat: true });

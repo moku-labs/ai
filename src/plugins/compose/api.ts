@@ -18,6 +18,7 @@ import type { ComposeApi, ComposeContext } from "./types";
 const TASK_INPUT_DOCS = [
   'Per-task "input" documentation for the available M0 tasks (task -> required input fields):',
   "- voiceover: { text: string, voice: string }",
+  '- dialogue: { lines: [{ id?: string, text: string, voice: string }] (≤ 2000 chars, ≤ 10 voices), model?: "eleven_v4", language?: string, settings?: { stability?, similarity? }, seed?: number, outputFormat?: string } -> the scene mp3 + one mp3 per line',
   "- translate: { text: string, targetLang: string }",
   "- prompt-gen: { prompt: string }",
   '- sfx: { prompt: string, model: "eleven_text_to_sound_v2" (or "elevenlabs-sfx-v2" with provider fal), durationMs?: number, promptInfluence?: number (0..1), loop?: boolean } -> mp3',

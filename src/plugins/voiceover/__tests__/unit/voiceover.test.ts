@@ -105,6 +105,53 @@ describe("standard tier: voiceover plugin", () => {
   });
 
   // -------------------------------------------------------------------------
+  // api: provider-scoped request fields pass through resolveRequest untouched
+  // -------------------------------------------------------------------------
+
+  describe("api: request field pass-through", () => {
+    it("hands settings, seed, previousText, nextText and outputFormat to the handler unchanged", async () => {
+      const seen: VoiceoverRequest[] = [];
+      const registry = createFakeRegistry();
+      registry.register("voiceover", "elevenlabs", {
+        estimate: (request: VoiceoverRequest) => {
+          seen.push(request);
+          return { usd: 0 };
+        },
+        execute: async (request: VoiceoverRequest) => {
+          seen.push(request);
+          return { audio: referenceAudio, mimeType: "audio/mpeg", costUsd: 0 };
+        }
+      } satisfies VoiceoverHandler);
+      const api = createVoiceoverApi(createTestCtx({ registry }));
+      const request: VoiceoverRequest = {
+        text: "Line two.",
+        voice: "v1",
+        format: "wav",
+        settings: { stability: 0.4, similarity: 0.8, style: 0.1, speakerBoost: true, speed: 1.1 },
+        seed: 7,
+        previousText: "Line one.",
+        nextText: "Line three.",
+        outputFormat: "mp3_44100_192"
+      };
+
+      await api.generate(request);
+      api.estimate(request);
+
+      expect(seen).toHaveLength(2);
+      for (const received of seen) {
+        expect(received).toMatchObject({
+          settings: request.settings,
+          seed: 7,
+          previousText: "Line one.",
+          nextText: "Line three.",
+          outputFormat: "mp3_44100_192",
+          format: "wav"
+        });
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // api: default-provider fallback
   // -------------------------------------------------------------------------
 

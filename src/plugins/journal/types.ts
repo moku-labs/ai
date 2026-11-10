@@ -92,12 +92,13 @@ export type LiveJob = {
 };
 
 /**
- * One stored output of a multi-output item: its CAS hash and mime type.
+ * One stored output of a multi-output item: its CAS hash, mime type and,
+ * when the handler named it, its file name (a dialogue line's file).
  * Metadata only, never the bytes.
  *
  * @example
  * ```ts
- * const output: DoneOutput = { contentHash: "2cf24dba…", mimeType: "image/jpeg" };
+ * const output: DoneOutput = { contentHash: "2cf24dba…", mimeType: "audio/mpeg", name: "ep02-signAlice-ru" };
  * ```
  */
 export type DoneOutput = {
@@ -105,6 +106,8 @@ export type DoneOutput = {
   contentHash: string;
   /** MIME type of the output. */
   mimeType: string;
+  /** File name the output exports under, without extension; absent for an unnamed output. */
+  name?: string;
 };
 
 /**

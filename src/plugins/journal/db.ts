@@ -24,17 +24,21 @@ export const SQL_NULL = null;
  * Whether one entry of a parsed `outputs` array is well formed.
  *
  * @param value - One parsed entry.
- * @returns True for `{ contentHash: string, mimeType: string }`.
+ * @returns True for `{ contentHash: string, mimeType: string, name?: string }`.
  * @example
  * ```ts
  * isDoneOutput({ contentHash: "ch-1", mimeType: "image/png" }); // => true
+ * isDoneOutput({ contentHash: "ch-1", mimeType: "audio/mpeg", name: 5 }); // => false
  * ```
  */
 function isDoneOutput(value: unknown): value is DoneOutput {
   if (typeof value !== "object" || value === null) return false;
 
-  const entry = value as { contentHash?: unknown; mimeType?: unknown };
-  return typeof entry.contentHash === "string" && typeof entry.mimeType === "string";
+  const entry = value as { contentHash?: unknown; mimeType?: unknown; name?: unknown };
+  const hasValidName = entry.name === undefined || typeof entry.name === "string";
+  return (
+    typeof entry.contentHash === "string" && typeof entry.mimeType === "string" && hasValidName
+  );
 }
 
 /**
@@ -56,7 +60,7 @@ function parseJsonColumn(text: string): unknown {
 }
 
 /**
- * Reads the `outputs` column: a non-empty JSON array of `{ contentHash, mimeType }`.
+ * Reads the `outputs` column: a non-empty JSON array of `{ contentHash, mimeType, name? }`.
  * Anything else maps to null: NULL, missing (a reader on an un-migrated file),
  * unparsable, not an array, empty, or with a malformed entry. An older or damaged
  * row so stays a single-artifact item.
@@ -79,8 +83,9 @@ export function parseOutputs(text: string | null | undefined): DoneOutput[] | nu
 }
 
 /**
- * The `outputs` column value to write: JSON of hashes and mime types only,
- * or NULL when there are no outputs.
+ * The `outputs` column value to write: JSON of hashes, mime types and the
+ * names of named outputs, or NULL when there are no outputs. An unnamed
+ * output gets no `name` key, so a journal without names keeps its old text.
  *
  * @param outputs - Every output of a multi-output item, or undefined.
  * @returns JSON text, or null.
@@ -88,13 +93,20 @@ export function parseOutputs(text: string | null | undefined): DoneOutput[] | nu
  * ```ts
  * outputsColumn(undefined); // => null
  * outputsColumn([{ contentHash: "ch-1", mimeType: "image/png" }]); // => '[{"contentHash":"ch-1","mimeType":"image/png"}]'
+ * outputsColumn([{ contentHash: "ch-2", mimeType: "audio/mpeg", name: "l1" }]); // => '[{"contentHash":"ch-2","mimeType":"audio/mpeg","name":"l1"}]'
  * ```
  */
 export function outputsColumn(outputs: readonly DoneOutput[] | undefined): string | null {
   if (outputs === undefined || outputs.length === 0) return SQL_NULL;
 
-  // Only the two metadata fields: never a payload, whatever else the caller's objects carry.
-  return JSON.stringify(outputs.map(({ contentHash, mimeType }) => ({ contentHash, mimeType })));
+  // Only the metadata fields: never a payload, whatever else the caller's objects carry.
+  return JSON.stringify(
+    outputs.map(({ contentHash, mimeType, name }) => ({
+      contentHash,
+      mimeType,
+      ...(name === undefined ? {} : { name })
+    }))
+  );
 }
 
 /**

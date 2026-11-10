@@ -278,3 +278,67 @@ items:
     provider: fake
     input: { prompt: "bakery at dawn" }
 `;
+
+/** Build file: one dialogue scene whose handler returns the mix and one named file per line. */
+const DIALOGUE_YAML = `version: 1
+name: ep02
+items:
+  - id: voices/ep02-quarrel-ru
+    task: dialogue
+    provider: fake
+    input: { lines: 2 }
+`;
+
+/**
+ * A dialogue handler returning the mix first, then one named file per line.
+ *
+ * @returns The handler.
+ */
+function dialogueHandler(): ExecutableHandler {
+  const encoder = new TextEncoder();
+  const encode = encoder.encode.bind(encoder);
+  return {
+    estimate: () => ({ usd: 0.02 }),
+    execute: async () => ({
+      outputs: [
+        { bytes: encode("mix"), mimeType: "audio/mpeg" },
+        { bytes: encode("alice"), mimeType: "audio/mpeg", name: "ep02-signAlice-ru" },
+        { bytes: encode("bob"), mimeType: "audio/mpeg", name: "ep02-signBob-ru" }
+      ],
+      costUsd: 0.02
+    })
+  };
+}
+
+describe("runner: a handler that returns named outputs", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "moku-runner-named-"));
+    await writeFile(path.join(tempDir, "ep02.moku.yaml"), DIALOGUE_YAML);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("exports the mix at the label and each named line beside it", async () => {
+    const app = await startApp(tempDir, [["dialogue", "fake", dialogueHandler()]]);
+    try {
+      await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
+
+      const exported = await app.runner.export({ outDir: path.join(tempDir, "out") });
+
+      const voices = path.join(tempDir, "out", "ep02", "voices");
+      expect(exported.files.map(file => file.path)).toEqual([
+        path.join(voices, "ep02-quarrel-ru.mp3"),
+        path.join(voices, "ep02-signAlice-ru.mp3"),
+        path.join(voices, "ep02-signBob-ru.mp3")
+      ]);
+      expect(await readFile(path.join(voices, "ep02-signAlice-ru.mp3"), "utf8")).toBe("alice");
+      expect(await readFile(path.join(voices, "ep02-quarrel-ru.mp3"), "utf8")).toBe("mix");
+    } finally {
+      await app.stop();
+    }
+  });
+});

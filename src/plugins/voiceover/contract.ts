@@ -9,6 +9,28 @@
  */
 
 /**
+ * Per-request voice settings. Every field is optional; a provider maps the
+ * ones it supports onto its own parameter names and ignores the rest.
+ *
+ * @example
+ * ```ts
+ * const settings: VoiceSettings = { stability: 0.4, similarity: 0.8, speed: 1.1 };
+ * ```
+ */
+export type VoiceSettings = {
+  /** Delivery stability, 0 (more expressive) to 1 (more consistent). */
+  stability?: number;
+  /** How closely the output follows the original voice, 0 to 1. */
+  similarity?: number;
+  /** Style exaggeration, 0 to 1. */
+  style?: number;
+  /** Boosts similarity to the original speaker, at some latency cost. */
+  speakerBoost?: boolean;
+  /** Speaking rate multiplier (1 is normal speed). */
+  speed?: number;
+};
+
+/**
  * A single voiceover generation request: the text to speak, the
  * provider-scoped voice, and optional language/model/format hints plus
  * resolved template-pack params.
@@ -29,6 +51,16 @@ export type VoiceoverRequest = {
   model?: string;
   /** Output audio container format. */
   format?: "mp3" | "wav" | "ogg";
+  /** Per-request voice settings; providers map them to their own names and ignore what they lack. */
+  settings?: VoiceSettings;
+  /** Integer >= 0 for best-effort reproducibility; providers without seed support ignore it. */
+  seed?: number;
+  /** Text spoken before this line, giving the provider intonation context. */
+  previousText?: string;
+  /** Text spoken after this line, giving the provider intonation context. */
+  nextText?: string;
+  /** Provider-scoped output encoding (e.g. "mp3_44100_192"); wins over `format` when both are set. */
+  outputFormat?: string;
   /** Resolved pack values merged upstream — providers receive final text/params only. */
   params?: Record<string, unknown>;
 };

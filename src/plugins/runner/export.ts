@@ -1,8 +1,9 @@
 /**
  * @file runner export — copies a run's `done` artifacts out of the
  * content-addressed store to named files: `<outDir>/<build>/<label>.<ext>` (D9),
- * or `<outDir>/<label>.<ext>` with `flat`, and `<label>-<k>.<ext>` for output
- * k ≥ 2 of a multi-output item.
+ * or `<outDir>/<label>.<ext>` with `flat`; for a multi-output item, a named
+ * output goes beside the label as `<name>.<ext>` and an unnamed one as
+ * `<label>-<k>.<ext>` (k ≥ 2).
  */
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
@@ -57,6 +58,23 @@ function pickRun(ctx: RunnerContext, runId: string | undefined): RunRow {
   return run;
 }
 
+/**
+ * Whether an output name is safe as a file name beside the label: not empty,
+ * no slash or backslash, not `.` or `..`.
+ *
+ * @param name - An output's name.
+ * @returns True when it names one file in the label's folder.
+ * @example
+ * ```ts
+ * isSafeOutputName("ep02-signAlice-ru"); // => true
+ * isSafeOutputName("../x"); // => false
+ * ```
+ */
+function isSafeOutputName(name: string): boolean {
+  const isDotName = name === "." || name === "..";
+  return name.length > 0 && !isDotName && !/[/\\]/.test(name);
+}
+
 /** One file to write for a done item: its label, stored bytes, mime type and the cost it carries. */
 type ExportEntry = {
   label: string;
@@ -66,30 +84,68 @@ type ExportEntry = {
 };
 
 /**
+ * The export label of output `index` of a multi-output item: the item's label
+ * for output 0, `<label folder>/<name>` for a named later output, else
+ * `<label>-<index+1>`.
+ *
+ * @param output - The output.
+ * @param output.name - Its name, when the handler gave one.
+ * @param index - Its 0-based position.
+ * @param label - The item's export label.
+ * @returns The output's label, or undefined when its name is unsafe.
+ * @example
+ * ```ts
+ * outputLabelOf({ name: "ep02-signAlice-ru" }, 1, "voices/ep02-quarrel-ru"); // => "voices/ep02-signAlice-ru"
+ * outputLabelOf({}, 2, "keys"); // => "keys-3"
+ * ```
+ */
+function outputLabelOf(
+  output: { name?: string },
+  index: number,
+  label: string
+): string | undefined {
+  if (index === 0) return label;
+  if (output.name === undefined) return `${label}-${index + 1}`;
+  if (!isSafeOutputName(output.name)) return undefined;
+
+  return path.join(path.dirname(label), output.name);
+}
+
+/**
  * The files a done item exports to: one for a single artifact; one per
- * output for a multi-output item, `<label>` then `<label>-2` … `<label>-N`.
- * The item cost is on the first file and 0 on the others, so the sum stays right.
+ * output for a multi-output item, `<label>` first, then each named output
+ * beside it and each unnamed one as `<label>-<k>`. The item cost is on the
+ * first file and 0 on the others, so the sum stays right.
  *
  * @param item - A `done` item with a content hash.
  * @param label - The item's export label.
- * @returns The entries, in output order.
+ * @returns The entries, in output order, or undefined when an output name is unsafe.
  * @example
  * ```ts
- * exportEntriesOf({ ...item, outputs: [first, second] }, "x").map(entry => entry.label); // => ["x", "x-2"]
+ * exportEntriesOf({ ...item, outputs: [first, second] }, "x")?.map(entry => entry.label); // => ["x", "x-2"]
  * ```
  */
-function exportEntriesOf(item: ItemRow & { contentHash: string }, label: string): ExportEntry[] {
+function exportEntriesOf(
+  item: ItemRow & { contentHash: string },
+  label: string
+): ExportEntry[] | undefined {
   const costUsd = item.actualCostUsd ?? 0;
   if (item.outputs === null) {
     return [{ label, contentHash: item.contentHash, mimeType: item.mimeType, costUsd }];
   }
 
-  return item.outputs.map((output, index) => ({
-    label: index === 0 ? label : `${label}-${index + 1}`,
-    contentHash: output.contentHash,
-    mimeType: output.mimeType,
-    costUsd: index === 0 ? costUsd : 0
-  }));
+  const entries: ExportEntry[] = [];
+  for (const [index, output] of item.outputs.entries()) {
+    const outputLabel = outputLabelOf(output, index, label);
+    if (outputLabel === undefined) return undefined;
+    entries.push({
+      label: outputLabel,
+      contentHash: output.contentHash,
+      mimeType: output.mimeType,
+      costUsd: index === 0 ? costUsd : 0
+    });
+  }
+  return entries;
 }
 
 /**
@@ -163,9 +219,10 @@ type ExportTarget = { outputDirectory: string; flat: boolean };
  * @param item - A `done` item with a content hash.
  * @param target - Absolute export directory and the `flat` switch.
  * @param taken - Target paths already written by this export; the item's targets are added.
- * @returns The written files, or undefined when the item's names are unsafe or one of its
- *   files would overwrite a file this export already wrote (a group's `x-2` next to an item
- *   `x-2`, or with `flat` the same label in two builds).
+ * @returns The written files, or undefined when the item's names are unsafe, two of its own
+ *   files map to one path (a line named like the label), or one of its files would overwrite a
+ *   file this export already wrote (a group's `x-2` next to an item `x-2`, or with `flat` the
+ *   same label in two builds).
  */
 async function exportItem(
   ctx: RunnerContext,
@@ -177,13 +234,14 @@ async function exportItem(
   const buildName = item.buildName ?? UNNAMED_BUILD;
   const itemDirectory = itemDirectoryOf(target.outputDirectory, buildName, target.flat);
   if (itemDirectory === undefined || !isSafeRelativeName(label)) return undefined;
+  const entries = exportEntriesOf(item, label);
+  if (entries === undefined) return undefined;
 
-  // Never overwrite a file this export already wrote.
-  const writes = exportEntriesOf(item, label).map(entry => ({
-    entry,
-    target: targetOf(entry, itemDirectory)
-  }));
-  if (writes.some(write => taken.has(write.target))) return undefined;
+  // Never overwrite a file this export already wrote, nor one of the item's own files.
+  const writes = entries.map(entry => ({ entry, target: targetOf(entry, itemDirectory) }));
+  const targets = new Set(writes.map(write => write.target));
+  const collidesWithItself = targets.size !== writes.length;
+  if (collidesWithItself || writes.some(write => taken.has(write.target))) return undefined;
   for (const write of writes) taken.add(write.target);
 
   // One file per output, in order, so `<label>-2` never lands before `<label>`.
@@ -195,10 +253,11 @@ async function exportItem(
 /**
  * Copies every `done` artifact of a run to `<outDir>/<build>/<label>.<ext>`,
  * or to `<outDir>/<label>.<ext>` with `flat`, the extension coming from the
- * stored mime type. A multi-output item adds `<label>-2.<ext>` …
- * `<label>-N.<ext>`. Files from earlier exports are overwritten. Labels that
- * would escape `outDir`, and items whose file this export already wrote, are
- * skipped and listed.
+ * stored mime type. A multi-output item adds, per later output, `<name>.<ext>`
+ * in the label's folder when the output is named, else `<label>-<k>.<ext>`.
+ * Files from earlier exports are overwritten. Labels or names that would
+ * escape their folder, items with two files on one path, and items whose
+ * file this export already wrote are skipped and listed.
  *
  * @param ctx - Runner domain context.
  * @param opts - Optional run id (default: the newest run), output directory (default "out") and `flat`.

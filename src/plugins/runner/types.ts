@@ -157,11 +157,30 @@ export type HandlerRequest = Record<string, unknown>;
 export type ResolvedFile = { path: string; mimeType: string; hash: string };
 
 /**
+ * One output of a multi-output handler result: its bytes, mime type and,
+ * optionally, the file name it exports under (no extension, no folder).
+ *
+ * @example
+ * ```ts
+ * const line: HandlerOutput = { bytes: mp3, mimeType: "audio/mpeg", name: "ep02-signAlice-ru" };
+ * ```
+ */
+export type HandlerOutput = {
+  /** The output's bytes. */
+  bytes: Uint8Array;
+  /** Its MIME type; empty stores as `application/octet-stream`. */
+  mimeType: string;
+  /** Export file name beside the item's label; absent exports as `<label>-<k+1>`. */
+  name?: string;
+};
+
+/**
  * What a handler may return: the bytes under the field its task contract
  * names (`body`, `audio`, `image`, `video`) or `text`, plus cost and mime.
- * The runner normalizes it before storing. A non-empty `images` makes the
- * item multi-output: every entry is stored, in order, and the first is the
- * item's artifact.
+ * The runner normalizes it before storing. A non-empty `outputs` (any task)
+ * or `images` (image groups) makes the item multi-output: every entry is
+ * stored, in order, and the first is the item's artifact. `outputs` wins
+ * over `images` when both are non-empty.
  */
 export type HandlerResult = {
   body?: Uint8Array;
@@ -170,6 +189,8 @@ export type HandlerResult = {
   video?: Uint8Array;
   text?: string;
   mimeType?: string;
+  /** Every output of a multi-output result, in order. The runner stores each one, with its name. */
+  outputs?: HandlerOutput[];
   /** Every image of a multi-image result, in order. The runner stores each one. */
   images?: { image: Uint8Array; mimeType: string }[];
   costUsd: number;

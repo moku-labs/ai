@@ -89,7 +89,8 @@ export type BuildfileSource = { path: string } | { text: string; lang: "yaml" };
 export type BuildfileApi = {
   /**
    * Parses and validates one source into the `BuildSpec` IR. Expands
-   * `itemsFrom` NDJSON (if present) into `spec.items`.
+   * `itemsFrom` NDJSON (if present) into `spec.items`, then expands every
+   * item with `locales` into one item per locale and resolves `$cast`.
    *
    * @param source - A file path (YAML or TS) or inline YAML text.
    * @returns The source's label and its validated `BuildSpec`.
