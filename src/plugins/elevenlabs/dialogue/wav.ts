@@ -36,6 +36,18 @@ const HEADER = {
 /** Absorbs floating-point noise when a window edge falls on a sample boundary. */
 const EPSILON = 1e-9;
 
+/** The format tag of WAVE_FORMAT_EXTENSIBLE: the real code is the sub-format's first two bytes. */
+const WAVE_FORMAT_EXTENSIBLE = 0xff_fe;
+
+/** Offset of the sub-format GUID inside an extensible `fmt ` body. */
+const SUB_FORMAT_OFFSET = 24;
+
+/** Length of a RIFF four-character id. */
+const FOUR_CC_LENGTH = 4;
+
+/** Offset of the size field inside a RIFF chunk header (after the id). */
+const CHUNK_SIZE_OFFSET = FOUR_CC_LENGTH;
+
 /** The `fmt ` fields a cut copies into its header. */
 type WavFormat = {
   audioFormat: number;
@@ -54,14 +66,8 @@ type WavFormat = {
  * @returns The id as text.
  */
 function fourCcAt(bytes: Uint8Array, offset: number): string {
-  return String.fromCodePoint(...bytes.subarray(offset, offset + 4));
+  return String.fromCodePoint(...bytes.subarray(offset, offset + FOUR_CC_LENGTH));
 }
-
-/** The format tag of WAVE_FORMAT_EXTENSIBLE: the real code is the sub-format's first two bytes. */
-const WAVE_FORMAT_EXTENSIBLE = 0xff_fe;
-
-/** Offset of the sub-format GUID inside an extensible `fmt ` body. */
-const SUB_FORMAT_OFFSET = 24;
 
 /**
  * Reads the `fmt ` chunk body. For WAVE_FORMAT_EXTENSIBLE the format code is
@@ -101,6 +107,43 @@ function readFmtChunk(view: DataView, body: number, size: number): WavFormat | u
   return isWhole ? formatAt(view, body, size) : undefined;
 }
 
+/** A `fmt ` or `data` chunk handled: keep walking, give up, or finish with the result. */
+type ChunkStep =
+  | { kind: "next"; format: WavFormat | undefined }
+  | { kind: "stop" }
+  | { kind: "done"; result: { format: WavFormat; data: Uint8Array } };
+
+/**
+ * Handles one chunk: `fmt ` records the format, `data` ends the walk, any
+ * other chunk changes nothing.
+ *
+ * @param bytes - The whole file.
+ * @param view - A view over the whole file.
+ * @param chunk - The chunk to handle.
+ * @param chunk.id - The chunk id.
+ * @param chunk.body - Where the chunk body starts.
+ * @param chunk.size - The declared body size.
+ * @param format - The format found so far.
+ * @returns What the walk does next.
+ */
+function stepChunk(
+  bytes: Uint8Array,
+  view: DataView,
+  chunk: { id: string; body: number; size: number },
+  format: WavFormat | undefined
+): ChunkStep {
+  const { id, body, size } = chunk;
+  if (id === "fmt ") {
+    const read = readFmtChunk(view, body, size);
+    return read === undefined ? { kind: "stop" } : { kind: "next", format: read };
+  }
+  if (id === "data") {
+    const data = bytes.subarray(body, Math.min(body + size, bytes.length));
+    return format === undefined ? { kind: "stop" } : { kind: "done", result: { format, data } };
+  }
+  return { kind: "next", format };
+}
+
 /**
  * Walks the RIFF chunks to the format and the sample data. A `data` size past
  * the end of the file (a streamed wav) is cut to the bytes present.
@@ -110,7 +153,7 @@ function readFmtChunk(view: DataView, body: number, size: number): WavFormat | u
  */
 function chunksOf(bytes: Uint8Array): { format: WavFormat; data: Uint8Array } | undefined {
   // The container: "RIFF" ... "WAVE".
-  const isWave = fourCcAt(bytes, 0) === "RIFF" && fourCcAt(bytes, 8) === "WAVE";
+  const isWave = fourCcAt(bytes, 0) === "RIFF" && fourCcAt(bytes, HEADER.waveTag) === "WAVE";
   if (!isWave) return undefined;
 
   // Walk the chunks; the format must come before the data.
@@ -119,17 +162,13 @@ function chunksOf(bytes: Uint8Array): { format: WavFormat; data: Uint8Array } | 
   let offset = RIFF_HEADER_LENGTH;
   while (offset + CHUNK_HEADER_LENGTH <= bytes.length) {
     const id = fourCcAt(bytes, offset);
-    const size = view.getUint32(offset + 4, true);
+    const size = view.getUint32(offset + CHUNK_SIZE_OFFSET, true);
     const body = offset + CHUNK_HEADER_LENGTH;
 
-    if (id === "fmt ") {
-      format = readFmtChunk(view, body, size);
-      if (format === undefined) return undefined;
-    }
-    if (id === "data") {
-      const data = bytes.subarray(body, Math.min(body + size, bytes.length));
-      return format === undefined ? undefined : { format, data };
-    }
+    const step = stepChunk(bytes, view, { id, body, size }, format);
+    if (step.kind === "stop") return undefined;
+    if (step.kind === "done") return step.result;
+    format = step.format;
 
     // Chunks are word-aligned: an odd size carries one pad byte.
     offset = body + size + (size % 2);

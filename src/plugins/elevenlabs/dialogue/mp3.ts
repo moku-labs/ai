@@ -64,6 +64,24 @@ const FRAME_HEADER_LENGTH = 4;
 /** Absorbs floating-point noise when a window edge falls on a frame boundary. */
 const EPSILON = 1e-9;
 
+/** The "ID3" bytes that open an ID3v2 tag. */
+const ID3_MAGIC = [0x49, 0x44, 0x33] as const;
+
+/** Flag bit of an ID3v2 header that announces a 10-byte footer after the tag. */
+const ID3_FOOTER_FLAG = 0x10;
+
+/** Bits one syncsafe byte carries (its top bit is always 0). */
+const SYNCSAFE_BITS = 7;
+
+/** Length of the "Xing" or "Info" tag id. */
+const XING_TAG_LENGTH = 4;
+
+/** Bits in a byte. */
+const BITS_PER_BYTE = 8;
+
+/** Bits in a kilobit: kbps to bps. */
+const BITS_PER_KILOBIT = 1000;
+
 /** One parsed MPEG audio frame. */
 type Frame = {
   /** Byte offset of the frame header. */
@@ -85,13 +103,16 @@ type Frame = {
  * @returns Bytes to skip before the first frame; 0 without a tag.
  */
 function id3Length(bytes: Uint8Array): number {
-  const hasTag = bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33;
+  const hasTag = ID3_MAGIC.every((byte, index) => bytes[index] === byte);
   if (!hasTag || bytes.length < ID3_HEADER_LENGTH) return 0;
 
   const flags = bytes[5] ?? 0;
   const size =
-    ((bytes[6] ?? 0) << 21) | ((bytes[7] ?? 0) << 14) | ((bytes[8] ?? 0) << 7) | (bytes[9] ?? 0);
-  const footer = (flags & 0x10) === 0 ? 0 : ID3_HEADER_LENGTH;
+    ((bytes[6] ?? 0) << (3 * SYNCSAFE_BITS)) |
+    ((bytes[7] ?? 0) << (2 * SYNCSAFE_BITS)) |
+    ((bytes[8] ?? 0) << SYNCSAFE_BITS) |
+    (bytes[9] ?? 0);
+  const footer = (flags & ID3_FOOTER_FLAG) === 0 ? 0 : ID3_HEADER_LENGTH;
   return ID3_HEADER_LENGTH + size + footer;
 }
 
@@ -131,7 +152,8 @@ function frameAt(bytes: Uint8Array, offset: number): Frame | undefined {
   // Size the frame: samples per frame set its byte length and its duration.
   const padding = (b2 >> 1) & ONE_BIT;
   const samples = isMpeg1 ? SAMPLES_PER_FRAME_MPEG1 : SAMPLES_PER_FRAME_MPEG2;
-  const length = Math.floor(((samples / 8) * kbps * 1000) / sampleRate) + padding;
+  const length =
+    Math.floor(((samples / BITS_PER_BYTE) * kbps * BITS_PER_KILOBIT) / sampleRate) + padding;
 
   // Locate where a Xing/Info tag would start, which depends on the channel layout.
   const isMono = ((b3 >> 6) & TWO_BITS) === MONO;
@@ -154,7 +176,7 @@ function frameAt(bytes: Uint8Array, offset: number): Frame | undefined {
  */
 function isInfoFrame(bytes: Uint8Array, frame: Frame): boolean {
   const start = frame.offset + frame.tagOffset;
-  const tag = String.fromCodePoint(...bytes.subarray(start, start + 4));
+  const tag = String.fromCodePoint(...bytes.subarray(start, start + XING_TAG_LENGTH));
   return tag === "Xing" || tag === "Info";
 }
 
@@ -174,6 +196,7 @@ function framesOf(bytes: Uint8Array): Frame[] {
   while (offset + FRAME_HEADER_LENGTH <= bytes.length) {
     const frame = frameAt(bytes, offset);
     const isWhole = frame !== undefined && frame.offset + frame.length <= bytes.length;
+    // A header of another stream than the first frame's is junk: resync past it.
     const isSameStream = frame?.stream === (frames[0]?.stream ?? frame?.stream);
     if (!isWhole || !isSameStream) {
       offset += 1;

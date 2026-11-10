@@ -503,6 +503,14 @@ export type RunnerApi = {
    * of its own files map to one path, or when a file this export already wrote
    * would be overwritten (with `flat`: the same label in two builds).
    *
+   * Without `flat` the files land in `<outDir>/<build>/`, and the first file of a
+   * multi-output item carries the item cost (a group of 3 keyframes "e01.keys"
+   * writes "e01.keys", "e01.keys-2", "e01.keys-3"). With `flat` they land in
+   * `outDir` itself (`flat` into "assets/icons" writes "assets/icons/sword.png";
+   * a second build with a "sword" label is listed in `skipped`, the first file
+   * is kept). An output named "../x", or named like the label itself, puts the
+   * item in `skipped`.
+   *
    * @param opts - Run id (default: newest run), output directory (default "out") and `flat` (default false).
    * @param opts.runId - Run to export.
    * @param opts.outDir - Export root directory.
@@ -510,21 +518,10 @@ export type RunnerApi = {
    * @returns The files written and the labels skipped.
    * @example
    * ```ts
-   * // Hand the newest run's clips to the editor.
-   * const { files, skipped } = await app.runner.export({ outDir: "out" });
-   * // files[0]: { label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }
-   * // a group of 3 keyframes "e01.keys": labels "e01.keys", "e01.keys-2", "e01.keys-3"; costUsd 0.105, 0, 0
-   *
-   * // Drop the icons straight into the game's asset folder, no build folder.
-   * const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
-   * // icons.files[0].path: "/repo/assets/icons/sword.png"
-   * // a second build with a "sword" label: icons.skipped is ["sword"], the first file is kept
-   *
-   * // A dialogue scene labelled "voices/ep02-quarrel-ru" whose second output is named "ep02-signAlice-ru".
-   * const scenes = await app.runner.export({ outDir: "out" });
-   * // scenes.files[0].label: "voices/ep02-quarrel-ru", path: "/repo/out/ep02/voices/ep02-quarrel-ru.mp3"
-   * // scenes.files[1].label: "voices/ep02-signAlice-ru", path: "/repo/out/ep02/voices/ep02-signAlice-ru.mp3", costUsd: 0
-   * // an output named "../x", or named like the label itself: the item is in scenes.skipped
+   * // A dialogue scene "voices/ep02-quarrel-ru" whose second output is named "ep02-signAlice-ru".
+   * const { files } = await app.runner.export({ outDir: "out" });
+   * // files[0].path: "/repo/out/ep02/voices/ep02-quarrel-ru.mp3"
+   * // files[1].path: "/repo/out/ep02/voices/ep02-signAlice-ru.mp3", costUsd: 0
    * ```
    */
   export(opts?: { runId?: string; outDir?: string; flat?: boolean }): Promise<ExportResult>;

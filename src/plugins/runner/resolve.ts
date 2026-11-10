@@ -182,7 +182,7 @@ export function extensionOfMimeType(mimeType: string | null): string {
  * @throws {Error} When a reference has no resolved file (a planning bug).
  * @example
  * ```ts
- * const request = resolveReferences(plan.request, refFiles, plan.files);
+ * resolveReferences({ image: { $file: "refs/a.png" } }, new Map(), files); // => { image: { path, mimeType, hash } }
  * ```
  */
 export function resolveReferences(

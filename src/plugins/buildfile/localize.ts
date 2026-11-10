@@ -181,10 +181,6 @@ function withValues(item: BuildItem, index: number, scope: Scope): BuildItem {
  * @param scope - The locale scope.
  * @returns The walked section.
  * @throws {LocalizeProblem} When the walk turned the section into something that is not an object.
- * @example
- * ```ts
- * walkSection({ text: "hi" }, ["items", "0", "input"], scope);
- * ```
  */
 function walkSection(
   section: Record<string, unknown>,
@@ -204,10 +200,6 @@ function walkSection(
  * @param path - Where it was found, for error messages.
  * @param scope - The locale scope.
  * @returns The resolved value.
- * @example
- * ```ts
- * walkValue("voice-${locale}", ["items", "0", "input", "voice"], scope);
- * ```
  */
 function walkValue(value: unknown, path: string[], scope: Scope): unknown {
   if (typeof value === "string") return substitute(value, scope);
@@ -226,10 +218,6 @@ function walkValue(value: unknown, path: string[], scope: Scope): unknown {
  * @param path - Where it was found.
  * @param scope - The locale scope.
  * @returns The resolved value (a localized value becomes its picked entry).
- * @example
- * ```ts
- * walkObject({ ru: "Да", en: "Yes" }, path, scope);
- * ```
  */
 function walkObject(object: Record<string, unknown>, path: string[], scope: Scope): unknown {
   if (isLocalizedValue(object, scope))
@@ -249,10 +237,6 @@ function walkObject(object: Record<string, unknown>, path: string[], scope: Scop
  * @param text - The string.
  * @param scope - The locale scope.
  * @returns The string for the scope's locale.
- * @example
- * ```ts
- * substitute("voice-${locale}", scope); // => "voice-ru"
- * ```
  */
 function substitute(text: string, scope: Scope): string {
   if (scope.locale === undefined) return text;
@@ -265,11 +249,6 @@ function substitute(text: string, scope: Scope): string {
  * @param object - The object.
  * @param scope - The locale scope.
  * @returns True when the object is keyed only by locales (and the scope has a locale).
- * @example
- * ```ts
- * isLocalizedValue({ ru: "Да", en: "Yes" }, scope); // => true
- * isLocalizedValue({ width: 1 }, scope); // => false
- * ```
  */
 function isLocalizedValue(object: Record<string, unknown>, scope: Scope): boolean {
   if (scope.locale === undefined) return false;
@@ -285,10 +264,6 @@ function isLocalizedValue(object: Record<string, unknown>, scope: Scope): boolea
  * @param scope - The locale scope (its locale is set).
  * @returns The entry for the scope's locale.
  * @throws {LocalizeProblem} When the locale has no entry.
- * @example
- * ```ts
- * pickLocale({ ru: "Да", en: "Yes" }, path, scope);
- * ```
  */
 function pickLocale(object: Record<string, unknown>, path: string[], scope: Scope): unknown {
   const locale = scope.locale ?? "";
@@ -304,10 +279,6 @@ function pickLocale(object: Record<string, unknown>, path: string[], scope: Scop
  * @param scope - The locale scope.
  * @returns The merged object, without the `$cast` key.
  * @throws {LocalizeProblem} When the cast has no such member.
- * @example
- * ```ts
- * mergeCast({ $cast: "alice", text: "hi" }, path, scope);
- * ```
  */
 function mergeCast(
   object: Record<string, unknown>,
@@ -350,10 +321,6 @@ function castFields(entry: CastEntry, locale: string | undefined): Record<string
  * @param path - The path of the value.
  * @param scope - The locale scope.
  * @throws {LocalizeProblem} When the key is `id`, the value a string, and the placeholder is missing or misplaced.
- * @example
- * ```ts
- * requireLocaleInId("id", "line-1", path, scope);
- * ```
  */
 function requireLocaleInId(key: string, child: unknown, path: string[], scope: Scope): void {
   const isIdString = key === "id" && typeof child === "string";
