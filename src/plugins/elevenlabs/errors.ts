@@ -104,3 +104,30 @@ export class FlaggedProviderError extends Error {
     this.name = "FlaggedProviderError";
   }
 }
+
+/**
+ * The plugin's own machine failed after a successful response (e.g. the
+ * dialogue audio could not be cut) — terminal after one attempt, never
+ * retried. Carries `kind: "local-failure"`, the field `runner/retry.ts`'s
+ * `classifyError` reads, and a `publicMessage` the runner may show (the same
+ * two-line text: no keys, no request text).
+ */
+export class LocalFailureError extends Error {
+  readonly kind: "local-failure" = "local-failure";
+  readonly publicMessage: string;
+
+  /**
+   * Creates a local-failure error whose message is also its public message.
+   *
+   * @param message - Two-line `[ai]` message, safe to show (never request text or response bodies).
+   * @example
+   * ```ts
+   * throw new LocalFailureError("[ai] Could not cut the ElevenLabs dialogue audio.\n  The response audio has no readable mp3 frames or wav data.");
+   * ```
+   */
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalFailureError";
+    this.publicMessage = message;
+  }
+}

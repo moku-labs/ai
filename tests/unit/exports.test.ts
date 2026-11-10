@@ -35,10 +35,12 @@ describe("framework exports: provider type namespaces", () => {
 });
 
 describe("framework exports: provider error namespaces", () => {
-  it("expose the three error classes for apimodels, ark, elevenlabs, fal and openai", () => {
+  it("expose the three error classes for apimodels, ark, fal and openai, and elevenlabs' four", () => {
     expect(Object.keys(ApimodelsErrors).toSorted()).toEqual(THREE_CLASSES);
     expect(Object.keys(ArkErrors).toSorted()).toEqual(THREE_CLASSES);
-    expect(Object.keys(ElevenlabsErrors).toSorted()).toEqual(THREE_CLASSES);
+    expect(Object.keys(ElevenlabsErrors).toSorted()).toEqual(
+      [...THREE_CLASSES, "LocalFailureError"].toSorted()
+    );
     expect(Object.keys(FalErrors).toSorted()).toEqual(THREE_CLASSES);
     expect(Object.keys(OpenaiErrors).toSorted()).toEqual(THREE_CLASSES);
   });

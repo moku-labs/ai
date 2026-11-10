@@ -135,7 +135,7 @@ describe("createVoiceoverHandler", () => {
       const result = await handler.execute({ text: "hi", voice: "v1", format: "wav" }, {});
 
       const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-      expect(url).toContain("output_format=pcm_44100");
+      expect(url).toContain("output_format=wav_44100");
       expect(result.mimeType).toBe("audio/wav");
     });
 
@@ -151,18 +151,129 @@ describe("createVoiceoverHandler", () => {
       expect(result.mimeType).toBe("audio/mpeg");
     });
 
-    it("includes language as language_code when the request gives one", async () => {
+    it("includes language as language_code (primary subtag) when the request gives one", async () => {
       const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
       vi.stubGlobal("fetch", fetchMock);
       const handler = createVoiceoverHandler(
         createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }) })
       );
 
-      await handler.execute({ text: "hi", voice: "v1", language: "es-ES" }, {});
+      await handler.execute({ text: "hi", voice: "v1", language: "es-ES", model: "eleven_v4" }, {});
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
-      expect(body.language_code).toBe("es-ES");
+      expect(body.language_code).toBe("es");
+    });
+
+    it("does not send language_code for eleven_multilingual_v2, which does not support it", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const handler = createVoiceoverHandler(
+        createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }) })
+      );
+
+      await handler.execute({ text: "hi", voice: "v1", language: "ru" }, {});
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).not.toHaveProperty("language_code");
+    });
+
+    it("maps voice settings, seed and neighbour text onto ElevenLabs' names, only the ones set", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const handler = createVoiceoverHandler(
+        createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }) })
+      );
+
+      await handler.execute(
+        {
+          text: "hi",
+          voice: "v1",
+          settings: {
+            stability: 0.3,
+            similarity: 0.75,
+            style: 0.45,
+            speakerBoost: true,
+            speed: 1.1
+          },
+          seed: 7,
+          previousText: "before",
+          nextText: "after"
+        },
+        {}
+      );
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string)).toEqual({
+        text: "hi",
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.3,
+          similarity_boost: 0.75,
+          style: 0.45,
+          use_speaker_boost: true,
+          speed: 1.1
+        },
+        seed: 7,
+        previous_text: "before",
+        next_text: "after"
+      });
+    });
+
+    it("drops style, speakerBoost and speed for a v4 model and warns with the key names only", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const log = createFakeLog();
+      const handler = createVoiceoverHandler(
+        createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }), log })
+      );
+      const settings = {
+        stability: 0.3,
+        similarity: 0.75,
+        style: 0.45,
+        speakerBoost: true,
+        speed: 1.1
+      };
+
+      await handler.execute({ text: "SECRET", voice: "v1", model: "eleven_v4", settings }, {});
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body.voice_settings).toEqual({ stability: 0.3, similarity_boost: 0.75 });
+      expect(log.warn).toHaveBeenCalledWith("elevenlabs:voiceover:settings-ignored", {
+        model: "eleven_v4",
+        keys: ["style", "speakerBoost", "speed"]
+      });
+    });
+
+    it("lets params override a mapped field (params are spread last)", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const handler = createVoiceoverHandler(
+        createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }) })
+      );
+
+      await handler.execute({ text: "hi", voice: "v1", seed: 7, params: { seed: 1 } }, {});
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((JSON.parse(init.body as string) as Record<string, unknown>).seed).toBe(1);
+    });
+
+    it("puts an explicit outputFormat in the URL, over the legacy format", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(fakeAudioResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const handler = createVoiceoverHandler(
+        createTestCtx({ env: createFakeEnv({ ELEVENLABS_API_KEY: "test-key" }) })
+      );
+
+      const result = await handler.execute(
+        { text: "hi", voice: "v1", format: "wav", outputFormat: "mp3_44100_192" },
+        {}
+      );
+
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toContain("output_format=mp3_44100_192");
+      expect(result.mimeType).toBe("audio/mpeg");
     });
 
     it("spreads request.params into the body, on top of text/model_id", async () => {

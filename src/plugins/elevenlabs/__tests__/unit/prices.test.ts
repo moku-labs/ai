@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TerminalProviderError } from "../../errors";
 import {
   bundledPrices,
+  characterPriceOf,
   isMusicPriceKey,
   isSfxPriceKey,
   mergePrices,
@@ -9,6 +10,7 @@ import {
   resolvePrices,
   sfxPriceOf
 } from "../../prices";
+import { createVoiceoverHandler } from "../../voiceover/handler";
 import { createTestCtx } from "./fixtures";
 
 describe("bundledPrices", () => {
@@ -115,5 +117,31 @@ describe("music prices", () => {
     expect(isMusicPriceKey("music:music_v2_5")).toBe(true);
     expect(isMusicPriceKey("eleven_multilingual_v2")).toBe(false);
     expect(isMusicPriceKey("sfx:eleven_text_to_sound_v2#auto")).toBe(false);
+  });
+});
+
+describe("voice prices (https://elevenlabs.io/pricing/api, checked 2026-11-10)", () => {
+  it.each([
+    ["eleven_v4", 0.08],
+    ["eleven_v3", 0.08],
+    ["eleven_multilingual_v2", 0.08],
+    ["eleven_v4_turbo", 0.04],
+    ["eleven_v3_conversational", 0.04],
+    ["eleven_flash_v2_5", 0.04],
+    ["eleven_turbo_v2_5", 0.04]
+  ])("estimates 1000 characters of %s at $%s", (model, usd) => {
+    const handler = createVoiceoverHandler(createTestCtx());
+
+    expect(handler.estimate({ text: "a".repeat(1000), voice: "v1", model }).usd).toBeCloseTo(
+      usd,
+      10
+    );
+  });
+
+  it("characterPriceOf throws a terminal 400 for a model with no row", () => {
+    expect(() => characterPriceOf(bundledPrices, "eleven_v9")).toThrow(TerminalProviderError);
+    expect(() => characterPriceOf(bundledPrices, "constructor")).toThrow(
+      /No price for ElevenLabs model/
+    );
   });
 });

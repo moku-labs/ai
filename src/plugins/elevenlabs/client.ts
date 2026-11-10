@@ -143,7 +143,7 @@ async function classifyHttpFailure(response: Response): Promise<Error> {
 
 /**
  * Merges the caller's abort signal (if any) with an internal timeout
- * signal, so `elevenlabsRequest` enforces `timeoutMs` regardless of whether
+ * signal, so `send` enforces `timeoutMs` regardless of whether
  * a caller signal was supplied.
  *
  * @param external - The caller-supplied abort signal, if any.
@@ -159,23 +159,20 @@ function mergeSignals(external: AbortSignal | undefined, timeout: AbortSignal): 
 }
 
 /**
- * Performs one ElevenLabs API request and returns the binary response body,
+ * Sends one ElevenLabs API request and returns the successful response,
  * throwing the provider error taxonomy on failure. Enforces `timeoutMs` via
  * an internal `AbortSignal.timeout`, merged with the caller's own `signal`
  * (clean-pause propagation — a caller abort cancels the in-flight fetch and
- * propagates unchanged, rather than being reclassified as a timeout).
+ * propagates unchanged, rather than being reclassified as a timeout). The
+ * one place both response variants share.
  *
  * @param options - Request options (URL, key, body, timeout, signal).
- * @returns The response body as raw bytes.
+ * @returns The `ok` response, body not yet read.
  * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, or a network failure.
  * @throws {TerminalProviderError} On any other HTTP 4xx.
  * @throws {FlaggedProviderError} On a content-policy rejection.
- * @example
- * ```ts
- * const audio = await elevenlabsRequest(options);
- * ```
  */
-export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Promise<Uint8Array> {
+async function send(options: ElevenlabsRequestOptions): Promise<Response> {
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
   const signal = mergeSignals(options.signal, timeoutSignal);
 
@@ -196,6 +193,50 @@ export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Prom
   }
 
   if (!response.ok) throw await classifyHttpFailure(response);
+  return response;
+}
 
+/**
+ * Performs one ElevenLabs API request and returns the binary response body,
+ * throwing the provider error taxonomy on failure (see `send`).
+ *
+ * @param options - Request options (URL, key, body, timeout, signal).
+ * @returns The response body as raw bytes.
+ * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, or a network failure.
+ * @throws {TerminalProviderError} On any other HTTP 4xx.
+ * @throws {FlaggedProviderError} On a content-policy rejection.
+ * @example
+ * ```ts
+ * const audio = await elevenlabsRequest(options);
+ * ```
+ */
+export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Promise<Uint8Array> {
+  const response = await send(options);
   return new Uint8Array(await response.arrayBuffer());
+}
+
+/**
+ * Performs one ElevenLabs API request that answers JSON (e.g.
+ * `/v1/text-to-dialogue/with-timestamps`), with the same fetch, timeout and
+ * error taxonomy as {@link elevenlabsRequest}. The body is an untrusted
+ * boundary: the caller checks its shape.
+ *
+ * @param options - Request options (URL, key, body, timeout, signal).
+ * @returns The parsed JSON body, or undefined when the body is not JSON.
+ * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, or a network failure.
+ * @throws {TerminalProviderError} On any other HTTP 4xx.
+ * @throws {FlaggedProviderError} On a content-policy rejection.
+ * @example
+ * ```ts
+ * const json = await elevenlabsJsonRequest(options); // the caller narrows it
+ * ```
+ */
+export async function elevenlabsJsonRequest(options: ElevenlabsRequestOptions): Promise<unknown> {
+  const response = await send(options);
+  try {
+    return await response.json();
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return undefined;
+  }
 }

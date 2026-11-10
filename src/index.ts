@@ -27,7 +27,7 @@
  * | sfx | `defaultProvider` | `"elevenlabs"` |
  * | sprite | `defaultProvider` | `"fal"` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
- * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `timeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `60_000` · `{}` |
+ * | elevenlabs | `apiKeyEnv` · `baseUrl` · `defaultModel` · `defaultDialogueModel` · `dialogueMaxChars` · `timeoutMs` · `musicTimeoutMs` · `dialogueTimeoutMs` · `priceOverrides` | `"ELEVENLABS_API_KEY"` · `"https://api.elevenlabs.io"` · `"eleven_multilingual_v2"` · `"eleven_v4"` · `2000` · `60_000` · `600_000` · `180_000` · `{}` |
  * | openai | `apiKeyEnv` · `baseUrl` · `models` · `timeoutMs` · `promptGenTimeoutMs` · `priceOverrides` | `"OPENAI_API_KEY"` · SDK default · `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` · `60_000` · `900_000` · `{}` |
  * | anthropic | `apiKeyEnv` · `baseUrl` · `model` · `maxTokens` · `timeoutMs` · `priceOverrides` | `"ANTHROPIC_API_KEY"` · SDK default · `"claude-opus-5-5"` · `32_000` · `900_000` · `{}` |
  * | codex | `bin` · `model` · `reasoningEffort` · `timeoutMs` · `workDir` · `priceOverrides` · `textModel` · `modelMap` | `"codex"` · `"gpt-6-astra"` · `"low"` · `600_000` · `".moku/tmp"` · `{}` · `""` · `{}` |

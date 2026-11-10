@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
+import {
+  FlaggedProviderError,
+  LocalFailureError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../../errors";
 import { redactedFailureOf, resolveApiKey } from "../../support";
 import { createFakeEnv, createTestCtx } from "./fixtures";
 
@@ -25,6 +30,12 @@ describe("redactedFailureOf", () => {
     const error = new FlaggedProviderError("[ai] ElevenLabs rejected the request.");
 
     expect(redactedFailureOf(error)).toEqual({ errorType: "flagged", kind: "content-policy" });
+  });
+
+  it("names a local failure (a dialogue cut) instead of logging it as unknown", () => {
+    const error = new LocalFailureError("[ai] Could not cut the ElevenLabs dialogue audio.\n  x.");
+
+    expect(redactedFailureOf(error)).toEqual({ errorType: "local-failure", kind: "local-failure" });
   });
 
   it("drops everything from an unknown error, including its message", () => {

@@ -1,21 +1,27 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { EnvProvider } from "@moku-labs/common";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import { createApp as createFrameworkApp } from "../../../../index";
+import { dialoguePlugin } from "../../../dialogue";
+import type { DialogueHandler } from "../../../dialogue/contract";
 import { musicPlugin } from "../../../music";
 import type { MusicHandler } from "../../../music/contract";
 import { registryPlugin } from "../../../registry";
 import type { SfxHandler } from "../../../sfx/contract";
 import { voiceoverPlugin } from "../../../voiceover";
 import type { VoiceoverHandler } from "../../../voiceover/types";
+import { createDialogueHandler } from "../../dialogue/handler";
 import { FlaggedProviderError, RetryableProviderError } from "../../errors";
 import { elevenlabsPlugin } from "../../index";
 import { createMusicHandler } from "../../music/handler";
 import { createSfxHandler } from "../../sfx/handler";
 import type { ElevenlabsContext } from "../../types";
 import { createVoiceoverHandler } from "../../voiceover/handler";
+import { concatBytes, dialogueBody, fakeJsonResponse, syntheticMp3 } from "../audio-fixtures";
 
 // ---------------------------------------------------------------------------
 // Integration test: elevenlabs provider through the real createApp lifecycle
@@ -77,7 +83,7 @@ const fixtureEnvProvider: EnvProvider = {
  */
 function buildFramework(dbPath: string) {
   return createCore(coreConfig, {
-    plugins: [registryPlugin, voiceoverPlugin, musicPlugin, elevenlabsPlugin],
+    plugins: [registryPlugin, voiceoverPlugin, musicPlugin, dialoguePlugin, elevenlabsPlugin],
     pluginConfigs: {
       journal: { path: dbPath },
       env: { providers: [fixtureEnvProvider] }
@@ -120,9 +126,20 @@ describe("elevenlabs integration", () => {
 
     await app.start();
 
-    expect(app.registry.tasks()).toEqual(["voiceover", "sfx", "music"]);
+    expect(app.registry.tasks()).toEqual(["voiceover", "sfx", "music", "dialogue"]);
     expect(app.registry.providers("sfx")).toEqual(["elevenlabs"]);
     expect(app.registry.providers("music")).toEqual(["elevenlabs"]);
+
+    await app.stop();
+  });
+
+  it("registers under the dialogue task, visible in app.dialogue.providers()", async () => {
+    const { createApp } = buildFramework(dbPath);
+    const app = createApp();
+
+    await app.start();
+
+    expect(app.dialogue.providers()).toEqual(["elevenlabs"]);
 
     await app.stop();
   });
@@ -279,6 +296,75 @@ describe("elevenlabs integration", () => {
   // Types: the registered handler satisfies VoiceoverHandler structurally
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Runtime: a dialogue build item through the runner, stored, exported, reused
+  // -------------------------------------------------------------------------
+
+  it("runs a dialogue item, exports the mix + one named file per line, and reuses it with no fetch", async () => {
+    const mp3 = syntheticMp3(100);
+    const response = dialogueBody(mp3.bytes, [
+      { dialogue_input_index: 0, start_time_seconds: 0.1, end_time_seconds: 1 },
+      { dialogue_input_index: 1, start_time_seconds: 1.2, end_time_seconds: 2 }
+    ]);
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(fakeJsonResponse(response)));
+    vi.stubGlobal("fetch", fetchMock);
+    // Audited cast: createApp's type lists only regular plugins, but the kernel
+    // also applies the core plugins' (journal, store, env) overrides at runtime.
+    const pluginConfigs = {
+      journal: { path: dbPath },
+      store: { dir: path.join(tempDir, "store") },
+      env: { providers: [fixtureEnvProvider] }
+    } as unknown as NonNullable<
+      NonNullable<Parameters<typeof createFrameworkApp>[0]>["pluginConfigs"]
+    >;
+    const app = createFrameworkApp({ pluginConfigs });
+    await app.start();
+    const buildFile = path.join(tempDir, "scene.moku.yaml");
+    await writeFile(
+      buildFile,
+      [
+        "version: 1",
+        "name: scene",
+        "items:",
+        "  - id: voices/quarrel",
+        "    task: dialogue",
+        "    provider: elevenlabs",
+        "    input:",
+        "      lines:",
+        "        - { id: signAlice, text: First line, voice: v-alice }",
+        "        - { text: Second line, voice: v-daniel }",
+        ""
+      ].join("\n")
+    );
+
+    const first = await app.runner.run({ files: buildFile });
+    const exported = await app.runner.export({
+      runId: first.runId,
+      outDir: path.join(tempDir, "out")
+    });
+
+    expect(first.status).toBe("done");
+    expect(exported.files.map(file => file.label)).toEqual([
+      "voices/quarrel",
+      "voices/signAlice",
+      "voices/quarrel-3"
+    ]);
+    const [mix, alice] = exported.files;
+    expect(new Uint8Array(await readFile(mix?.path ?? ""))).toEqual(mp3.bytes);
+    // Line 0 at 0.1–1.0 s, next line at 1.2 s: frames 1 (0.05 s) to 44 (1.15 s, ceil of 44.02 → 45).
+    expect(new Uint8Array(await readFile(alice?.path ?? ""))).toEqual(
+      concatBytes(mp3.frames.slice(1, 45))
+    );
+
+    const second = await app.runner.run({ files: buildFile });
+
+    expect(second.status).toBe("done");
+    expect(second.totals).toMatchObject({ done: 1, spendUsd: 0 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await app.stop();
+  });
+
   describe("types", () => {
     it("createVoiceoverHandler's return value satisfies VoiceoverHandler structurally", () => {
       expectTypeOf(createVoiceoverHandler).returns.toEqualTypeOf<VoiceoverHandler>();
@@ -292,6 +378,11 @@ describe("elevenlabs integration", () => {
     it("createMusicHandler's return value satisfies MusicHandler structurally", () => {
       expectTypeOf(createMusicHandler).returns.toEqualTypeOf<MusicHandler>();
       expectTypeOf(createMusicHandler).parameter(0).toEqualTypeOf<ElevenlabsContext>();
+    });
+
+    it("createDialogueHandler's return value satisfies DialogueHandler structurally", () => {
+      expectTypeOf(createDialogueHandler).returns.toEqualTypeOf<DialogueHandler>();
+      expectTypeOf(createDialogueHandler).parameter(0).toEqualTypeOf<ElevenlabsContext>();
     });
 
     it("createVoiceoverHandler accepts an ElevenlabsContext", () => {
