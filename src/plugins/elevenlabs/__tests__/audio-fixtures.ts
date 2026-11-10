@@ -74,8 +74,34 @@ export function syntheticMp3(
   return { bytes: concatBytes([...prefix, ...frames]), frames };
 }
 
+/**
+ * A WAVE_FORMAT_EXTENSIBLE `fmt ` chunk (40-byte body, sub-format PCM) for a
+ * mono 16-bit stream, ready to replace the plain one.
+ */
+function extensibleFmt(sampleRate: number): Uint8Array {
+  const chunk = new Uint8Array(48);
+  const view = new DataView(chunk.buffer);
+  chunk.set([0x66, 0x6d, 0x74, 0x20], 0);
+  view.setUint32(4, 40, true);
+  view.setUint16(8, 0xff_fe, true);
+  view.setUint16(10, 1, true);
+  view.setUint32(12, sampleRate, true);
+  view.setUint32(16, sampleRate * 2, true);
+  view.setUint16(20, 2, true);
+  view.setUint16(22, 16, true);
+  view.setUint16(24, 22, true);
+  view.setUint16(26, 16, true);
+  view.setUint32(28, 4, true);
+  view.setUint16(32, 1, true); // sub-format GUID starts with the PCM code
+  return chunk;
+}
+
 /** A mono 16-bit PCM wav at `sampleRate` with `frames` samples (sample k = k), a LIST chunk before data. */
-export function syntheticWav(sampleRate: number, frames: number): Uint8Array {
+export function syntheticWav(
+  sampleRate: number,
+  frames: number,
+  extras: { extensible?: boolean } = {}
+): Uint8Array {
   const list = new Uint8Array([0x4c, 0x49, 0x53, 0x54, 4, 0, 0, 0, 0x49, 0x4e, 0x46, 0x4f]);
   const header = new Uint8Array(36);
   const view = new DataView(header.buffer);
@@ -96,6 +122,12 @@ export function syntheticWav(sampleRate: number, frames: number): Uint8Array {
   const dataView = new DataView(data.buffer);
   for (let index = 0; index < frames; index += 1)
     dataView.setUint16(index * 2, index % 65_536, true);
+  if (extras.extensible) {
+    const fmt = extensibleFmt(sampleRate);
+    const riff = header.slice(0, 12);
+    new DataView(riff.buffer).setUint32(4, 4 + fmt.length + list.length + 8 + data.length, true);
+    return concatBytes([riff, fmt, list, dataHeader, data]);
+  }
   return concatBytes([header, list, dataHeader, data]);
 }
 

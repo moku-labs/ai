@@ -22,25 +22,25 @@ export type VoiceSegment = {
 };
 
 /**
- * Which edges of a cut window are clamped by a neighbour's speech. A clamped
- * edge rounds inward (never a frame that overlaps the neighbour); a free edge
- * rounds outward.
+ * Hard bounds of a cut: the neighbours' speech. Whatever the rounding, a cut
+ * starts at or after `from` and ends at or before `to`, so it never holds a
+ * frame or sample that overlaps a neighbour's speech.
  *
  * @example
  * ```ts
- * const edges: CutEdges = { clampedFrom: false, clampedTo: true };
+ * const hard: CutBounds = { from: 2.2, to: 4.3 }; // previous line's end, next line's start
  * ```
  */
-export type CutEdges = {
-  /** The start is the previous line's speech end: round it up. */
-  clampedFrom: boolean;
-  /** The end is the next line's speech start: round it down. */
-  clampedTo: boolean;
+export type CutBounds = {
+  /** The previous line's speech end (0 without one), seconds. */
+  from: number;
+  /** The next line's speech start (the duration without one), seconds. */
+  to: number;
 };
 
 /**
- * The cut window of one line, seconds from the scene start, with its
- * clamped edges and the raw speech span to fall back to.
+ * The cut window of one line, seconds from the scene start, with its hard
+ * bounds and the raw speech span to fall back to.
  *
  * @example
  * ```ts
@@ -48,7 +48,7 @@ export type CutEdges = {
  *   index: 1,
  *   from: 2.25,
  *   to: 4.1,
- *   edges: { clampedFrom: true, clampedTo: false },
+ *   hard: { from: 2.2, to: 4.3 },
  *   speech: { from: 2.3, to: 3.95 }
  * };
  * ```
@@ -60,9 +60,9 @@ export type CutWindow = {
   from: number;
   /** End of the window, seconds. */
   to: number;
-  /** Which edges are clamped by a neighbour. */
-  edges: CutEdges;
-  /** The line's raw speech span, used when the rounded window is empty. */
+  /** The neighbours' speech, which no rounding crosses. */
+  hard: CutBounds;
+  /** The line's raw speech span, used when the bounded window is empty. */
   speech: { from: number; to: number };
 };
 
@@ -96,6 +96,6 @@ export type AudioPiece = {
 export type CuttableAudio = {
   /** Length of the audio, seconds (mp3: audio frames only, Xing/Info frame excluded). */
   durationSeconds: number;
-  /** Cuts `[from, to)` seconds, aligned to whole frames or samples: outward, or inward on a clamped edge. */
-  cut(from: number, to: number, edges?: CutEdges): AudioPiece;
+  /** Cuts `[from, to)` seconds, rounded outward to whole frames or samples, then clipped inside `hard`. */
+  cut(from: number, to: number, hard?: CutBounds): AudioPiece;
 };

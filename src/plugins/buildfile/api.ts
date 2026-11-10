@@ -210,7 +210,7 @@ async function compileSource(source: BuildfileSource): Promise<CompiledBuild> {
   }
 
   // $ref graph: unique ids, known targets, well-formed values, no cycle.
-  const refProblem = checkReferenceGraph(localized.items);
+  const refProblem = checkReferenceGraph(localized.items, localized.sources);
   if (refProblem) {
     throw buildFileInvalidError(label, refProblem);
   }

@@ -10,7 +10,7 @@ import type { BuildItem, BuildSpec } from "./types";
 export type LocalizeSpec = Pick<BuildSpec, "locales" | "cast">;
 
 /** Either the expanded items, or the first problem as `"<path>: <message>"` (no trailing period). */
-export type LocalizeResult = { items: BuildItem[] } | { problem: string };
+export type LocalizeResult = { items: BuildItem[]; sources: number[] } | { problem: string };
 
 /** One cast member: base fields plus per-locale overrides under `locales`. */
 type CastEntry = NonNullable<BuildSpec["cast"]>[string];
@@ -22,8 +22,11 @@ type Scope = {
   /** Every locale a localized value may be keyed by (top-level list plus the item's own). */
   localeSet: ReadonlySet<string>;
   cast: Record<string, CastEntry>;
-  /** Whether `id` strings in this section must carry the locale placeholder. */
-  checkIds: boolean;
+  /**
+   * What `id` strings in this section must do about the locale placeholder: `require` it
+   * (an expanding item's input), `forbid` it (a non-expanding item's input), or `ignore` it.
+   */
+  ids: "require" | "forbid" | "ignore";
 };
 
 /** The ONE internal failure the walk throws; `localizeItems` turns it into a `problem`. */
@@ -39,7 +42,8 @@ const TRAILING_NINE_HINT = /\{nine=\d+,\d+,\d+,\d+\}$/;
  * @param spec - The build file's top-level `locales` and `cast`.
  * @param items - The build file's items, `itemsFrom` already merged in.
  * @returns The expanded items in order (each expanding item replaced in place by
- *   its locales), or `{ problem }` with the first error.
+ *   its locales) with `sources`, the index in `items` each output item came from, or
+ *   `{ problem }` with the first error.
  * @example
  * ```ts
  * const result = localizeItems(
@@ -51,7 +55,11 @@ const TRAILING_NINE_HINT = /\{nine=\d+,\d+,\d+,\d+\}$/;
  */
 export function localizeItems(spec: LocalizeSpec, items: readonly BuildItem[]): LocalizeResult {
   try {
-    return { items: items.flatMap((item, index) => expandItem(item, index, spec)) };
+    const expanded = items.map((item, index) => expandItem(item, index, spec));
+    return {
+      items: expanded.flat(),
+      sources: expanded.flatMap((group, index) => group.map(() => index))
+    };
   } catch (error) {
     if (error instanceof LocalizeProblem) return { problem: error.message };
     throw error;
@@ -76,7 +84,8 @@ function expandItem(source: BuildItem, index: number, spec: LocalizeSpec): Build
   const locales = localesOf(own, index, spec);
 
   if (locales === undefined) {
-    const scope: Scope = { locale: undefined, localeSet: new Set(), cast, checkIds: false };
+    if (item.id?.includes(LOCALE_PLACEHOLDER)) throw placeholderWithoutLocales(`items.${index}.id`);
+    const scope: Scope = { locale: undefined, localeSet: new Set(), cast, ids: "forbid" };
     return [withValues(item, index, scope)];
   }
 
@@ -85,7 +94,7 @@ function expandItem(source: BuildItem, index: number, spec: LocalizeSpec): Build
 
   const localeSet = new Set([...(spec.locales ?? []), ...locales]);
   return locales.map(locale => {
-    const scope: Scope = { locale, localeSet, cast, checkIds: true };
+    const scope: Scope = { locale, localeSet, cast, ids: "require" };
     return { ...withValues(item, index, scope), id: localizedId(id, locale) };
   });
 }
@@ -162,7 +171,7 @@ function withValues(item: BuildItem, index: number, scope: Scope): BuildItem {
   const output: BuildItem = { ...rest, input: walkSection(input, [base, "input"], scope) };
   if (params === undefined) return output;
 
-  const paramsScope = { ...scope, checkIds: false };
+  const paramsScope: Scope = { ...scope, ids: "ignore" };
   return { ...output, params: walkSection(params, [base, "params"], paramsScope) };
 }
 
@@ -335,37 +344,60 @@ function castFields(entry: CastEntry, locale: string | undefined): Record<string
 }
 
 /**
- * Refuses an `id` string in a localized item's input that has no locale placeholder:
- * every locale would export it to the same file.
+ * Checks an `id` string inside `input` against the locale placeholder: in a localized item it
+ * must carry it (every locale would otherwise export to the same file), in an item that does
+ * not expand it must not (no locale exists to fill it).
  *
  * @param key - The object key.
  * @param child - The value at that key (before the walk).
  * @param path - The path of the value.
  * @param scope - The locale scope.
- * @throws {LocalizeProblem} When the key is `id`, the value a string, and it lacks the placeholder.
+ * @throws {LocalizeProblem} When the key is `id`, the value a string, and the placeholder is missing or misplaced.
  * @example
  * ```ts
  * requireLocaleInId("id", "line-1", path, scope);
  * ```
  */
 function requireLocaleInId(key: string, child: unknown, path: string[], scope: Scope): void {
-  if (!scope.checkIds || key !== "id" || typeof child !== "string") return;
-  if (child.includes(LOCALE_PLACEHOLDER)) return;
-  throw problemAt(path.join("."), `an id inside a localized item needs ${LOCALE_PLACEHOLDER}`);
+  if (scope.ids === "ignore" || key !== "id" || typeof child !== "string") return;
+
+  const hasPlaceholder = child.includes(LOCALE_PLACEHOLDER);
+  if (scope.ids === "forbid" && hasPlaceholder) throw placeholderWithoutLocales(path.join("."));
+  if (scope.ids === "require" && !hasPlaceholder) {
+    throw problemAt(path.join("."), `an id inside a localized item needs ${LOCALE_PLACEHOLDER}`);
+  }
 }
 
 /**
- * Whether a value is a plain (non-array, non-null) object.
+ * The failure for a locale placeholder in an item that has no `locales`.
+ *
+ * @param path - The path of the id.
+ * @returns The error to throw.
+ * @example
+ * ```ts
+ * throw placeholderWithoutLocales("items.0.id");
+ * ```
+ */
+function placeholderWithoutLocales(path: string): LocalizeProblem {
+  return problemAt(path, `${LOCALE_PLACEHOLDER} needs locales on the item`);
+}
+
+/**
+ * Whether a value is a plain object: a literal or a null-prototype object. Arrays, typed
+ * arrays, dates and class instances are not, so a `.ts` build file's values pass through whole.
  *
  * @param value - Any value.
  * @returns True for `{...}`.
  * @example
  * ```ts
  * isPlainObject({}); // => true
+ * isPlainObject(new Uint8Array(2)); // => false
  * ```
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**

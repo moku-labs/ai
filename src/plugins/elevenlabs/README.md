@@ -317,12 +317,14 @@ keeps a cut from carrying the next line's first syllable: a plain +0.150 s tail 
 that starts sooner. When the clamp leaves nothing (overlapping speech), the raw speech span is
 used. The cut is done in TypeScript, without ffmpeg and without re-encoding: an mp3 by whole
 MPEG frames (an ID3v2 tag and a Xing/Info first frame are skipped; a frame is about 26 ms at
-44.1 kHz), a wav by whole samples with a fresh 44-byte header. A free edge rounds outward (the
-start down, the end up), inside the padding. An edge set by a neighbour rounds inward: the end
-down to the last frame that ends at or before the next line's start, the start up to the first
-frame that starts at or after the previous line's end, so no frame that overlaps a neighbour's
-speech is included. When inward rounding leaves no whole frame, the raw speech span is cut,
-rounded outward.
+44.1 kHz), a wav by whole samples with a fresh 44-byte header (a WAVE_FORMAT_EXTENSIBLE source
+gets its PCM or float sub-format code). The window rounds outward to whole frames, inside the
+padding, and is then clipped so it never crosses a neighbour's speech: it starts at or after the
+first frame that starts at or after the previous line's end, and ends at or before the last frame
+that ends at or before the next line's start. No cut holds a frame of another line's speech, also
+when a neighbour lies within one frame of the padding. When the clipping leaves no whole frame,
+the raw speech span is cut, rounded outward. An mp3 frame of another stream (another MPEG
+version or sample rate than the first frame) is skipped as junk.
 
 **Result:** `outputs[0]` is the whole scene, then one output per line that has speech, in line
 order, with `name` = the line's `id` (a line without an id gives an unnamed output, exported as

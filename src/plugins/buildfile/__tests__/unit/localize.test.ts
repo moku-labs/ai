@@ -299,7 +299,7 @@ describe("localize unit: $cast", () => {
     const items: BuildItem[] = [
       {
         task: "voiceover",
-        id: `keep-\${locale}`,
+        id: `keep`,
         input: { $cast: "mira", text: `t-\${locale}`, alt: { ru: "a", en: "b" } }
       }
     ];
@@ -308,7 +308,7 @@ describe("localize unit: $cast", () => {
 
     expect(only).toEqual({
       task: "voiceover",
-      id: `keep-\${locale}`,
+      id: `keep`,
       input: {
         voice: "mira-ru",
         settings: { stability: 0.5 },
@@ -364,5 +364,62 @@ describe("localize unit: ids inside a localized item", () => {
     ];
 
     expect(expand(BOTH, items)[0]?.input).toEqual({ lines: [{ id: "plain", text: "x" }] });
+  });
+});
+
+describe("localize unit: placeholder without locales", () => {
+  it("refuses an item id with the placeholder when the item has no locales", () => {
+    const items: BuildItem[] = [{ task: "voiceover", id: `a-\${locale}`, input: {} }];
+
+    expect(problemOf(BOTH, items)).toBe(`items.0.id: \${locale} needs locales on the item`);
+  });
+
+  it("refuses an `id` string inside input with the placeholder when the item has no locales", () => {
+    const items: BuildItem[] = [
+      {
+        task: "dialogue",
+        id: "d",
+        input: {
+          lines: [
+            { id: "ok", text: "x" },
+            { id: `l-\${locale}`, text: "y" }
+          ]
+        }
+      }
+    ];
+
+    expect(problemOf(BOTH, items)).toBe(
+      `items.0.input.lines.1.id: \${locale} needs locales on the item`
+    );
+  });
+});
+
+describe("localize unit: non-plain values and source indexes", () => {
+  it("passes a Uint8Array and a Date through untouched, in both kinds of item", () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const when = new Date(0);
+    const items: BuildItem[] = [
+      { task: "image", id: "plain", input: { data: bytes, when } },
+      { task: "image", id: "loc", locales: ["en"], input: { data: bytes, when } }
+    ];
+
+    const [plain, localized] = expand(BOTH, items);
+
+    expect(plain?.input.data).toBe(bytes);
+    expect(plain?.input.when).toBe(when);
+    expect(localized?.input.data).toBe(bytes);
+    expect(localized?.input.when).toBe(when);
+  });
+
+  it("reports the source index of every output item", () => {
+    const items: BuildItem[] = [
+      { task: "image", id: "a", input: {} },
+      { task: "voiceover", id: "b", locales: true, input: {} },
+      { task: "image", id: "c", input: {} }
+    ];
+
+    const result = localizeItems(BOTH, items);
+
+    expect("sources" in result && result.sources).toEqual([0, 1, 1, 2]);
   });
 });

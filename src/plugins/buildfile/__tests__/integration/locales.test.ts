@@ -107,6 +107,38 @@ items:
     await expect(api.compile({ text, lang: "yaml" })).rejects.toThrow('duplicate id "a-ru"');
   });
 
+  it("points reference errors at the source item, not the expanded position", async () => {
+    const head = `version: 1
+name: x
+locales: [ru, en]
+items:
+  - { id: a, task: voiceover, locales: true, input: {} }
+`;
+    const unknownRef = `${head}  - { id: b, task: video, input: { image: { $ref: nope } } }\n`;
+    const duplicate = `${head}  - { id: b, task: voiceover, input: {} }\n  - { id: b, task: voiceover, input: {} }\n`;
+
+    await expect(api.compile({ text: unknownRef, lang: "yaml" })).rejects.toThrow(
+      'items.1.input: unknown $ref "nope"'
+    );
+    await expect(api.compile({ text: duplicate, lang: "yaml" })).rejects.toThrow(
+      'items.2.id: duplicate id "b"'
+    );
+  });
+
+  it("refuses the locale placeholder in an item that has no locales", async () => {
+    const text = `version: 1
+name: x
+items:
+  - { id: "a-\${locale}", task: voiceover, input: {} }
+`;
+
+    await expect(api.compile({ text, lang: "yaml" })).rejects.toThrow(
+      new Error(
+        `[ai] Build file "<inline>" is invalid.\n  items.0.id: \${locale} needs locales on the item.`
+      )
+    );
+  });
+
   it("compiles a build file without cast or locales to the spec it always did", async () => {
     const text = `version: 1
 name: plain

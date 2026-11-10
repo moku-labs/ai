@@ -5,7 +5,13 @@ import { openMp3 } from "../../dialogue/mp3";
 import type { VoiceSegment } from "../../dialogue/types";
 import { openWav } from "../../dialogue/wav";
 import { LocalFailureError } from "../../errors";
-import { concatBytes, FRAME_SECONDS, syntheticMp3, syntheticWav } from "../audio-fixtures";
+import {
+  concatBytes,
+  FRAME_SECONDS,
+  mp3Frame,
+  syntheticMp3,
+  syntheticWav
+} from "../audio-fixtures";
 
 /** A voice segment of line `lineIndex`. */
 function segment(lineIndex: number, startSeconds: number, endSeconds: number): VoiceSegment {
@@ -121,12 +127,98 @@ describe("cutDialogue — wav", () => {
   });
 });
 
+describe("cutDialogue — free edges never cross a neighbour", () => {
+  it("ends a free edge before the next line when it starts within one frame after the tail", () => {
+    // Tail 1.15 s rounds up to frame 45 (1.1755 s), past line 1's start at 1.16 s.
+    const { cuts } = cutDialogue(
+      syntheticMp3(200).bytes,
+      "mp3_44100_128",
+      [segment(0, 0.2, 1), segment(1, 1.16, 2)],
+      2
+    );
+
+    expect(cuts[0]?.piece.endSeconds).toBeLessThanOrEqual(1.16);
+  });
+
+  it("starts a free edge after the previous line when it ends within one frame before the lead", () => {
+    // Lead 1.01 s rounds down to frame 38 (0.9927 s), before line 0's end at 1.0 s.
+    const { cuts } = cutDialogue(
+      syntheticMp3(200).bytes,
+      "mp3_44100_128",
+      [segment(0, 0.2, 1), segment(1, 1.06, 2)],
+      2
+    );
+
+    expect(cuts[1]?.piece.startSeconds).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
+    ["mp3", syntheticMp3(200).bytes, "mp3_44100_128"],
+    ["wav", syntheticWav(1000, 5000), "wav_44100"]
+  ])("keeps every %s cut off every other line's speech over a sweep of gaps", (_, audio, format) => {
+    for (let step = 0; step <= 60; step += 1) {
+      const gap = step * 0.0045;
+      const spans = [
+        [0.2, 1],
+        [1 + gap, 2],
+        [2 + 2 * gap, 3]
+      ] as const;
+      const segments = spans.map(([start, end], index) => segment(index, start, end));
+
+      const { cuts } = cutDialogue(audio, format, segments, 3);
+
+      for (const cut of cuts) {
+        for (const [index, [start, end]] of spans.entries()) {
+          if (index === cut.index) continue;
+          const overlaps =
+            cut.piece.startSeconds < end - 1e-9 && cut.piece.endSeconds > start + 1e-9;
+          expect(overlaps, `gap ${gap}: line ${cut.index} overlaps line ${index}`).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+describe("openMp3 — stream consistency", () => {
+  it("skips a frame whose sample rate differs from the first audio frame's", () => {
+    const good = syntheticMp3(10);
+    const odd = mp3Frame(7, false);
+    odd.set([0xff, 0xfb, 0x94, 0x00]); // MPEG-1 Layer III 128 kbps at 48 kHz: 384 bytes
+    const junk = odd.subarray(0, 384);
+    const bytes = concatBytes([...good.frames.slice(0, 5), junk, ...good.frames.slice(5)]);
+
+    const audio = openMp3(bytes);
+
+    expect(audio?.durationSeconds).toBeCloseTo(10 * FRAME_SECONDS, 9);
+    expect(audio?.cut(0, 10 * FRAME_SECONDS).bytes).toEqual(concatBytes(good.frames));
+  });
+});
+
+describe("openWav — malformed and extensible headers", () => {
+  it("treats a fmt chunk cut short by the end of the file as unreadable, not a RangeError", () => {
+    const truncated = syntheticWav(1000, 10).subarray(0, 28);
+
+    expect(() => cutDialogue(truncated, "wav_44100", [segment(0, 0, 0.005)], 1)).toThrow(
+      LocalFailureError
+    );
+  });
+
+  it("writes the PCM sub-format code into the header of a cut from WAVE_FORMAT_EXTENSIBLE audio", () => {
+    const audio = openWav(syntheticWav(1000, 3000, { extensible: true }));
+
+    const piece = audio?.cut(1, 2);
+
+    expect(audio?.durationSeconds).toBe(3);
+    expect(new DataView(piece?.bytes.buffer ?? new ArrayBuffer(0)).getUint16(20, true)).toBe(1);
+  });
+});
+
 describe("planCutWindows", () => {
   it("uses the raw speech span when the clamp leaves nothing (overlapping speech)", () => {
     const { windows } = planCutWindows([segment(0, 1, 3), segment(1, 1.5, 2.5)], 2, 10);
 
     expect(windows[1]).toMatchObject({ index: 1, from: 1.5, to: 2.5 });
-    expect(windows[1]?.edges).toEqual({ clampedFrom: false, clampedTo: false });
+    expect(windows[1]?.hard).toEqual({ from: 0, to: 10 });
   });
 });
 

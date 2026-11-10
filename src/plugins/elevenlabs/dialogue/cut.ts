@@ -6,7 +6,7 @@
  */
 import { LocalFailureError } from "../errors";
 import { openMp3 } from "./mp3";
-import type { AudioPiece, CutEdges, CuttableAudio, CutWindow, VoiceSegment } from "./types";
+import type { AudioPiece, CuttableAudio, CutWindow, VoiceSegment } from "./types";
 import { openWav } from "./wav";
 
 /** Padding before a line's first word, seconds. */
@@ -18,9 +18,6 @@ const TAIL_SECONDS = 0.15;
 /** The message of an audio that cannot be cut. */
 const UNREADABLE_AUDIO =
   "[ai] Could not cut the ElevenLabs dialogue audio.\n  The response audio has no readable mp3 frames or wav data.";
-
-/** Edges that round outward: neither is clamped by a neighbour. */
-const FREE_EDGES: CutEdges = { clampedFrom: false, clampedTo: false };
 
 /** Where one line's speech starts and ends, seconds. */
 type Speech = { start: number; end: number };
@@ -86,34 +83,14 @@ function neighbourSpeech(
 }
 
 /**
- * Which edges a neighbour sets: the previous line's speech end at or after
- * the lead, the next line's speech start at or before the tail.
- *
- * @param lead - The padded start, seconds.
- * @param tail - The padded end, seconds.
- * @param previous - The previous line's speech, if any.
- * @param next - The next line's speech, if any.
- * @returns The clamped edges.
- */
-function clampedEdges(
-  lead: number,
-  tail: number,
-  previous: Speech | undefined,
-  next: Speech | undefined
-): CutEdges {
-  return {
-    clampedFrom: previous !== undefined && previous.end >= lead,
-    clampedTo: next !== undefined && next.start <= tail
-  };
-}
-
-/**
  * Plans the cut window of every line. Window of line i:
  * `from = max(start_i − 0.050, end_prev, 0)`,
  * `to = min(end_i + 0.150, start_next, duration)`, where prev/next are the
- * nearest lines by index that have speech. An edge set by a neighbour is
- * marked clamped, so the cutter rounds it inward. When the clamp leaves
- * nothing (`to ≤ from`, overlapping speech), the raw speech span is used.
+ * nearest lines by index that have speech. Their speech is also the
+ * window's hard bound: the cutter rounds outward, then clips inside it, so
+ * no cut holds a frame of a neighbour's speech. When the clamp leaves
+ * nothing (`to ≤ from`, overlapping speech), the raw speech span is used,
+ * unbounded.
  *
  * @param segments - The response's voice segments.
  * @param lineCount - How many lines the request had.
@@ -122,7 +99,7 @@ function clampedEdges(
  * @example
  * ```ts
  * planCutWindows([{ lineIndex: 0, startSeconds: 0.2, endSeconds: 1 }], 2, 3);
- * // => { windows: [{ index: 0, from: 0.15, to: 1.15, edges: { clampedFrom: false, clampedTo: false }, speech: { from: 0.2, to: 1 } }], missing: [1] }
+ * // => { windows: [{ index: 0, from: 0.15, to: 1.15, hard: { from: 0, to: 3 }, speech: { from: 0.2, to: 1 } }], missing: [1] }
  * ```
  */
 export function planCutWindows(
@@ -141,16 +118,15 @@ export function planCutWindows(
     }
     const previous = neighbourSpeech(spans, index, -1);
     const next = neighbourSpeech(spans, index, 1);
-    const lead = Math.max(span.start - LEAD_SECONDS, 0);
-    const tail = Math.min(span.end + TAIL_SECONDS, durationSeconds);
-    const from = Math.max(lead, previous?.end ?? 0);
-    const to = Math.min(tail, next?.start ?? durationSeconds);
+    const hard = { from: previous?.end ?? 0, to: next?.start ?? durationSeconds };
+    const from = Math.max(span.start - LEAD_SECONDS, hard.from, 0);
+    const to = Math.min(span.end + TAIL_SECONDS, hard.to, durationSeconds);
     const speech = { from: span.start, to: span.end };
     const isClampedAway = to <= from;
     windows.push(
       isClampedAway
-        ? { index, ...speech, edges: FREE_EDGES, speech }
-        : { index, from, to, edges: clampedEdges(lead, tail, previous, next), speech }
+        ? { index, ...speech, hard: { from: 0, to: durationSeconds }, speech }
+        : { index, from, to, hard, speech }
     );
   }
   return { windows, missing };
@@ -171,15 +147,15 @@ function openAudio(audio: Uint8Array, formatCode: string): CuttableAudio {
 }
 
 /**
- * Cuts one window: clamped edges rounded inward; when that leaves no whole
- * frame or sample, the raw speech span rounded outward.
+ * Cuts one window inside its hard bounds; when that leaves no whole frame or
+ * sample, the raw speech span, rounded outward and unbounded.
  *
  * @param opened - The cuttable scene audio.
  * @param window - The line's window.
  * @returns The cut piece.
  */
 function cutWindow(opened: CuttableAudio, window: CutWindow): AudioPiece {
-  const piece = opened.cut(window.from, window.to, window.edges);
+  const piece = opened.cut(window.from, window.to, window.hard);
   const isEmpty = piece.endSeconds <= piece.startSeconds;
   return isEmpty ? opened.cut(window.speech.from, window.speech.to) : piece;
 }

@@ -167,12 +167,15 @@ function mergeSignals(external: AbortSignal | undefined, timeout: AbortSignal): 
  * one place both response variants share.
  *
  * @param options - Request options (URL, key, body, timeout, signal).
- * @returns The `ok` response, body not yet read.
+ * @returns The `ok` response (body not yet read) and the timeout signal, so a
+ * body read can tell a timeout from a broken body.
  * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, or a network failure.
  * @throws {TerminalProviderError} On any other HTTP 4xx.
  * @throws {FlaggedProviderError} On a content-policy rejection.
  */
-async function send(options: ElevenlabsRequestOptions): Promise<Response> {
+async function send(
+  options: ElevenlabsRequestOptions
+): Promise<{ response: Response; timeoutSignal: AbortSignal }> {
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs);
   const signal = mergeSignals(options.signal, timeoutSignal);
 
@@ -193,7 +196,7 @@ async function send(options: ElevenlabsRequestOptions): Promise<Response> {
   }
 
   if (!response.ok) throw await classifyHttpFailure(response);
-  return response;
+  return { response, timeoutSignal };
 }
 
 /**
@@ -211,7 +214,7 @@ async function send(options: ElevenlabsRequestOptions): Promise<Response> {
  * ```
  */
 export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Promise<Uint8Array> {
-  const response = await send(options);
+  const { response } = await send(options);
   return new Uint8Array(await response.arrayBuffer());
 }
 
@@ -223,7 +226,7 @@ export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Prom
  *
  * @param options - Request options (URL, key, body, timeout, signal).
  * @returns The parsed JSON body, or undefined when the body is not JSON.
- * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, or a network failure.
+ * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout (also while the body is read), or a network failure.
  * @throws {TerminalProviderError} On any other HTTP 4xx.
  * @throws {FlaggedProviderError} On a content-policy rejection.
  * @example
@@ -232,11 +235,14 @@ export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Prom
  * ```
  */
 export async function elevenlabsJsonRequest(options: ElevenlabsRequestOptions): Promise<unknown> {
-  const response = await send(options);
+  const { response, timeoutSignal } = await send(options);
   try {
     return await response.json();
   } catch (error) {
     if (options.signal?.aborted) throw error;
+    if (timeoutSignal.aborted) {
+      throw new RetryableProviderError("[ai] ElevenLabs request timed out.", { kind: "timeout" });
+    }
     return undefined;
   }
 }

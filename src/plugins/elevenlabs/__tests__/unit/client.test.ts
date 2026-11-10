@@ -224,6 +224,13 @@ describe("elevenlabsRequest", () => {
   });
 });
 
+/** A JSON body read that fails 40 ms later, after a short request timeout has fired. */
+function slowBody(): Promise<unknown> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new DOMException("The operation timed out.", "TimeoutError")), 40);
+  });
+}
+
 describe("elevenlabsJsonRequest", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -248,6 +255,20 @@ describe("elevenlabsJsonRequest", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
 
     await expect(elevenlabsJsonRequest(BASE_OPTIONS)).resolves.toBeUndefined();
+  });
+
+  it("throws a retryable timeout when the timeout fires while the JSON body is read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ...fakeResponse({ status: 200 }), json: slowBody })
+    );
+
+    const error = await elevenlabsJsonRequest({ ...BASE_OPTIONS, timeoutMs: 5 }).catch(
+      (error_: unknown) => error_
+    );
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect((error as RetryableProviderError).kind).toBe("timeout");
   });
 
   it.each([

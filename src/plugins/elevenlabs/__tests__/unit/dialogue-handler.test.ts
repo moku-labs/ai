@@ -224,6 +224,17 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
     );
   });
 
+  it("refuses a null or non-object line with the terminal 400, not a TypeError", () => {
+    // eslint-disable-next-line unicorn/no-null -- a YAML build file can hold null in lines; that is the case under test
+    for (const line of [null, "text", 5]) {
+      const lines = [line] as unknown as DialogueRequest["lines"];
+      const error = estimateError({ lines });
+
+      expect(error).toBeInstanceOf(TerminalProviderError);
+      expect((error as Error).message).toMatch(/line 1 has no text or no voice/);
+    }
+  });
+
   it("refuses a scene with no lines, and a line with no text or no voice", () => {
     expect((estimateError({ lines: [] }) as Error).message).toMatch(/no lines\.\n {2}/);
     expect((estimateError({ lines: [{ text: "", voice: ELEN }] }) as Error).message).toMatch(

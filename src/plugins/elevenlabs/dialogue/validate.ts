@@ -67,6 +67,17 @@ function isFilled(value: unknown): value is string {
 }
 
 /**
+ * Tells whether a `lines` entry is an object at all (a build file may hold
+ * `null`, a string or a number there).
+ *
+ * @param value - One entry of `lines`.
+ * @returns True for a non-null object.
+ */
+function isLine(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+
+/**
  * Checks one line id: a single file name, not `.` or `..`, not used before.
  *
  * @param id - The line's id.
@@ -115,7 +126,7 @@ function checkLines(request: DialogueRequest): {
   const ids = new Set<string>();
   for (const [index, line] of request.lines.entries()) {
     const position = index + 1;
-    if (!isFilled(line.text) || !isFilled(line.voice)) {
+    if (!isLine(line) || !isFilled(line.text) || !isFilled(line.voice)) {
       throw refusal(
         `Invalid dialogue request: line ${position} has no text or no voice`,
         "Give every line a text and a voice"

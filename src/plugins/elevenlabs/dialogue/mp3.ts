@@ -4,7 +4,7 @@
  * Xing/Info frame from timing and from cuts, and cuts by whole frames,
  * byte-for-byte (no re-encode).
  */
-import type { AudioPiece, CutEdges, CuttableAudio } from "./types";
+import type { AudioPiece, CutBounds, CuttableAudio } from "./types";
 
 /** Layer III bitrates, kbps, by bitrate index, for MPEG-1. */
 const MPEG1_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
@@ -53,6 +53,8 @@ type Frame = {
   seconds: number;
   /** Byte offset of the Xing/Info tag inside a frame of this layout. */
   tagOffset: number;
+  /** MPEG version and sample rate (the layer is always III): one stream keeps one. */
+  stream: string;
 };
 
 /**
@@ -102,7 +104,8 @@ function frameAt(bytes: Uint8Array, offset: number): Frame | undefined {
     offset,
     length,
     seconds: samples / sampleRate,
-    tagOffset: FRAME_HEADER_LENGTH + sideInfo
+    tagOffset: FRAME_HEADER_LENGTH + sideInfo,
+    stream: `${version}:${sampleRate}`
   };
 }
 
@@ -121,7 +124,9 @@ function isInfoFrame(bytes: Uint8Array, frame: Frame): boolean {
 
 /**
  * Walks the frames of the file: from after the ID3v2 tag, frame by frame,
- * resyncing byte by byte past anything that is not a whole frame.
+ * resyncing byte by byte past anything that is not a whole frame of the
+ * first frame's stream (same version, layer and sample rate). A header of
+ * another stream is junk that happens to look like a frame.
  *
  * @param bytes - The whole file.
  * @returns The complete frames, in order.
@@ -133,7 +138,8 @@ function framesOf(bytes: Uint8Array): Frame[] {
   while (offset + FRAME_HEADER_LENGTH <= bytes.length) {
     const frame = frameAt(bytes, offset);
     const isWhole = frame !== undefined && frame.offset + frame.length <= bytes.length;
-    if (!isWhole) {
+    const isSameStream = frame?.stream === (frames[0]?.stream ?? frame?.stream);
+    if (!isWhole || !isSameStream) {
       offset += 1;
       continue;
     }
@@ -168,24 +174,20 @@ export function openMp3(bytes: Uint8Array): CuttableAudio | undefined {
   return {
     durationSeconds: frames.length * frameSeconds,
     /**
-     * Cuts `[from, to)` seconds, aligned outward to whole frames.
+     * Cuts `[from, to)` seconds: rounded outward to whole frames, then clipped
+     * to the frames that lie wholly inside `hard`.
      *
      * @param from - Start of the window, seconds.
      * @param to - End of the window, seconds.
-     * @param edges - Clamped edges round inward (never a frame that overlaps a neighbour); default outward.
-     * @returns The cut bytes and the window they really cover (empty when inward rounding leaves nothing).
+     * @param hard - Bounds no frame may cross (the neighbours' speech); unbounded when absent.
+     * @returns The cut bytes and the window they really cover (empty when the bounds leave nothing).
      */
-    cut(from: number, to: number, edges?: CutEdges): AudioPiece {
-      const startAt = from / frameSeconds;
-      const endAt = to / frameSeconds;
-      const firstIndex = Math.max(
-        0,
-        edges?.clampedFrom ? Math.ceil(startAt - EPSILON) : Math.floor(startAt + EPSILON)
-      );
-      const endIndex = Math.min(
-        frames.length,
-        edges?.clampedTo ? Math.floor(endAt + EPSILON) : Math.ceil(endAt - EPSILON)
-      );
+    cut(from: number, to: number, hard?: CutBounds): AudioPiece {
+      const lowest = hard === undefined ? 0 : Math.ceil(hard.from / frameSeconds - EPSILON);
+      const highest =
+        hard === undefined ? frames.length : Math.floor(hard.to / frameSeconds + EPSILON);
+      const firstIndex = Math.max(0, lowest, Math.floor(from / frameSeconds + EPSILON));
+      const endIndex = Math.min(frames.length, highest, Math.ceil(to / frameSeconds - EPSILON));
       const picked = frames.slice(firstIndex, Math.max(endIndex, firstIndex));
       const chunks = picked.map(frame => bytes.subarray(frame.offset, frame.offset + frame.length));
       return {
