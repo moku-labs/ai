@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ItemRow, RunRow } from "../../../journal/types";
+import type { DoneOutput, ItemRow, RunRow } from "../../../journal/types";
 import { exportRun } from "../../export";
 import type { RunnerContext } from "../../types";
 import { createFakeRunnerContext, fakeItemRow } from "./fixtures";
@@ -155,5 +155,135 @@ describe("exportRun — flat", () => {
 
     expect(result.files).toEqual([]);
     expect(result.skipped).toEqual(["../escape"]);
+  });
+});
+
+/**
+ * A done dialogue-like item: the mix plus the given extra outputs, all
+ * `audio/mpeg`, with each output's bytes stored as a real file (`bytes-<hash>`).
+ *
+ * @param id - Item id.
+ * @param label - Export label.
+ * @param extra - The outputs after the mix.
+ * @returns The fake done row (cost 0.2).
+ */
+async function namedItem(id: string, label: string, extra: DoneOutput[]): Promise<ItemRow> {
+  const outputs: DoneOutput[] = [{ contentHash: `hash-${id}`, mimeType: "audio/mpeg" }, ...extra];
+  for (const output of outputs) {
+    await writeFile(path.join(tempDir, output.contentHash), `bytes-${output.contentHash}`);
+  }
+  return fakeItemRow({
+    id,
+    label,
+    buildName: "ep02",
+    status: "done",
+    contentHash: `hash-${id}`,
+    mimeType: "audio/mpeg",
+    actualCostUsd: 0.2,
+    outputs
+  });
+}
+
+/**
+ * An `audio/mpeg` output named `name`, stored under `contentHash`.
+ *
+ * @param name - The output's file name.
+ * @param contentHash - Its stored hash; default `hash-<name>`.
+ * @returns The output.
+ */
+function line(name: string, contentHash = `hash-${name}`): DoneOutput {
+  return { contentHash, mimeType: "audio/mpeg", name };
+}
+
+describe("exportRun — named outputs", () => {
+  it("writes the mix at the label and each named line beside it, the cost on the mix", async () => {
+    const item = await namedItem("q", "voices/ep02-quarrel-ru", [
+      line("ep02-signAlice-ru"),
+      line("ep02-signBob-ru")
+    ]);
+    const ctx = await exportContext([item]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir });
+
+    const voices = path.join(outDir, "ep02", "voices");
+    expect(result.files.map(file => [file.label, file.path, file.costUsd])).toEqual([
+      ["voices/ep02-quarrel-ru", path.join(voices, "ep02-quarrel-ru.mp3"), 0.2],
+      [path.join("voices", "ep02-signAlice-ru"), path.join(voices, "ep02-signAlice-ru.mp3"), 0],
+      [path.join("voices", "ep02-signBob-ru"), path.join(voices, "ep02-signBob-ru.mp3"), 0]
+    ]);
+    expect(await readFile(path.join(voices, "ep02-signBob-ru.mp3"), "utf8")).toBe(
+      "bytes-hash-ep02-signBob-ru"
+    );
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("writes output 0 at the label even when it has a name", async () => {
+    const item = await namedItem("q", "scene", []);
+    const named = { ...item, outputs: [{ ...line("mix"), contentHash: "hash-q" }] };
+    const ctx = await exportContext([named]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir, flat: true });
+
+    expect(result.files.map(file => file.path)).toEqual([path.join(outDir, "scene.mp3")]);
+  });
+
+  it("keeps <label>-<k+1> for an unnamed output among named ones", async () => {
+    const unnamed: DoneOutput = { contentHash: "hash-plain", mimeType: "audio/mpeg" };
+    const item = await namedItem("q", "scene", [line("alice"), unnamed]);
+    const ctx = await exportContext([item]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir, flat: true });
+
+    expect(result.files.map(file => path.basename(file.path))).toEqual([
+      "scene.mp3",
+      "alice.mp3",
+      "scene-3.mp3"
+    ]);
+  });
+
+  it.each([
+    "",
+    "../x",
+    "a/b",
+    String.raw`a\b`,
+    ".",
+    ".."
+  ])("skips the item when a name is unsafe (%j), and writes nothing", async name => {
+    const item = await namedItem("q", "voices/scene", [line(name, "hash-unsafe")]);
+    const ctx = await exportContext([item]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir });
+
+    expect(result.files).toEqual([]);
+    expect(result.skipped).toEqual(["voices/scene"]);
+    expect(await readdir(tempDir)).not.toContain("out");
+  });
+
+  it("skips the second item when its named file lands on another item's label", async () => {
+    const first = await namedItem("a", "alice", []);
+    const second = await namedItem("b", "scene", [line("alice")]);
+    const ctx = await exportContext([first, second]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir, flat: true });
+
+    expect(result.files.map(file => path.basename(file.path))).toEqual(["alice.mp3"]);
+    expect(result.skipped).toEqual(["scene"]);
+    expect(await readFile(path.join(outDir, "alice.mp3"), "utf8")).toBe("bytes-a");
+  });
+
+  it("skips an item two of whose own files map to one path", async () => {
+    const item = await namedItem("q", "voices/scene", [line("scene")]);
+    const ctx = await exportContext([item]);
+    const outDir = path.join(tempDir, "out");
+
+    const result = await exportRun(ctx, { outDir });
+
+    expect(result.files).toEqual([]);
+    expect(result.skipped).toEqual(["voices/scene"]);
   });
 });

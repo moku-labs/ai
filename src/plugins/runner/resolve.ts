@@ -7,7 +7,7 @@
  */
 import path from "node:path";
 import { isFileValue, isReferenceValue } from "../buildfile";
-import type { FileMimeType, HandlerResult, ResolvedFile } from "./types";
+import type { FileMimeType, HandlerOutput, HandlerResult, ResolvedFile } from "./types";
 
 /** Fallback mime type for bytes of unknown kind. */
 export const OCTET_STREAM = "application/octet-stream";
@@ -182,7 +182,7 @@ export function extensionOfMimeType(mimeType: string | null): string {
  * @throws {Error} When a reference has no resolved file (a planning bug).
  * @example
  * ```ts
- * const request = resolveReferences(plan.request, refFiles, plan.files);
+ * resolveReferences({ image: { $file: "refs/a.png" } }, new Map(), files); // => { image: { path, mimeType, hash } }
  * ```
  */
 export function resolveReferences(
@@ -193,14 +193,24 @@ export function resolveReferences(
   if (isReferenceValue(value)) return requireResolved(refFiles, String(value.$ref), "$ref");
   if (isFileValue(value)) return requireResolved(files, String(value.$file), "$file");
   if (Array.isArray(value)) return value.map(entry => resolveReferences(entry, refFiles, files));
-  if (typeof value === "object" && value !== null && !(value instanceof Uint8Array)) {
-    const resolved: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      resolved[key] = resolveReferences(entry, refFiles, files);
-    }
-    return resolved;
+  if (!isResolvableContainer(value)) return value;
+
+  const resolved: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    resolved[key] = resolveReferences(entry, refFiles, files);
   }
-  return value;
+  return resolved;
+}
+
+/**
+ * Whether a value is a plain object whose entries may hold references: an
+ * object that is not null and not a byte buffer.
+ *
+ * @param value - Any request value.
+ * @returns True for an object to walk into.
+ */
+function isResolvableContainer(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !(value instanceof Uint8Array);
 }
 
 /**
@@ -231,27 +241,45 @@ function requireResolved(
 }
 
 /**
- * Every image of a multi-image handler result, in order, as bytes to store
- * and their mime types. An entry's empty `mimeType` falls back to
- * `application/octet-stream`. A group of one is still a list of one, so the
- * caller sees the count.
+ * The stored mime type of one output: an empty one falls back to `application/octet-stream`.
+ *
+ * @param mimeType - The handler's mime type.
+ * @returns The mime type to store.
+ */
+function outputMimeTypeOf(mimeType: string): string {
+  return mimeType === "" ? OCTET_STREAM : mimeType;
+}
+
+/**
+ * Every output of a multi-output handler result, in order, as bytes to
+ * store, their mime types and, for a named output, its name. A non-empty
+ * `outputs` wins over `images`. An entry's empty `mimeType` falls back to
+ * `application/octet-stream`; an unnamed entry gets no `name` key. A group
+ * of one is still a list of one, so the caller sees the count.
  *
  * @param result - What the handler returned.
- * @returns The outputs in order, or undefined when `images` is absent or empty.
+ * @returns The outputs in order, or undefined when both `outputs` and `images` are absent or empty.
  * @example
  * ```ts
  * normalizeOutputs({ images: [{ image: new Uint8Array([1]), mimeType: "" }], costUsd: 0 });
  * // => [{ bytes: Uint8Array [1], mimeType: "application/octet-stream" }]
+ * normalizeOutputs({ outputs: [{ bytes: mp3, mimeType: "audio/mpeg", name: "l1" }], costUsd: 0 });
+ * // => [{ bytes: mp3, mimeType: "audio/mpeg", name: "l1" }]
  * ```
  */
-export function normalizeOutputs(
-  result: HandlerResult
-): { bytes: Uint8Array; mimeType: string }[] | undefined {
+export function normalizeOutputs(result: HandlerResult): HandlerOutput[] | undefined {
+  if (result.outputs !== undefined && result.outputs.length > 0) {
+    return result.outputs.map(({ bytes, mimeType, name }) => ({
+      bytes,
+      mimeType: outputMimeTypeOf(mimeType),
+      ...(name === undefined ? {} : { name })
+    }));
+  }
   if (result.images === undefined || result.images.length === 0) return undefined;
 
   return result.images.map(entry => ({
     bytes: entry.image,
-    mimeType: entry.mimeType === "" ? OCTET_STREAM : entry.mimeType
+    mimeType: outputMimeTypeOf(entry.mimeType)
   }));
 }
 

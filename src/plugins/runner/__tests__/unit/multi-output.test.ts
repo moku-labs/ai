@@ -165,6 +165,37 @@ describe("executeItem — a handler that returns images", () => {
   });
 });
 
+describe("executeItem — a handler that returns named outputs", () => {
+  it("stores every output in order and journals each name with its hash", async () => {
+    const log: CallLog = [];
+    const { ctx, committed } = groupContext(log, {
+      outputs: [
+        { bytes: FIRST, mimeType: "audio/mpeg" },
+        { bytes: new TextEncoder().encode("b"), mimeType: "audio/mpeg", name: "line-alice" },
+        { bytes: new TextEncoder().encode("c"), mimeType: "audio/mpeg" }
+      ],
+      costUsd: 0.02
+    });
+
+    const events = await runItem(ctx);
+
+    expect(committed).toStrictEqual([
+      {
+        actualCostUsd: 0.02,
+        artifactKey: "ak-1",
+        contentHash: "hash-a",
+        mimeType: "audio/mpeg",
+        outputs: [
+          { contentHash: "hash-a", mimeType: "audio/mpeg" },
+          { contentHash: "hash-b", mimeType: "audio/mpeg", name: "line-alice" },
+          { contentHash: "hash-c", mimeType: "audio/mpeg" }
+        ]
+      }
+    ]);
+    expect(events.at(-1)).toMatchObject({ contentHashes: ["hash-a", "hash-b", "hash-c"] });
+  });
+});
+
 describe("tryReuse — a done artifact with outputs", () => {
   const GROUP_ARTIFACT: DoneArtifact = {
     contentHash: "hash-a",

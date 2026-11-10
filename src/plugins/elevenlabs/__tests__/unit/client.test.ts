@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ElevenlabsRequestOptions } from "../../client";
-import { elevenlabsRequest } from "../../client";
+import { elevenlabsJsonRequest, elevenlabsRequest } from "../../client";
 import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
 
 /**
@@ -221,5 +221,63 @@ describe("elevenlabsRequest", () => {
     const caught = await captureRejection(BASE_OPTIONS);
 
     expect((caught as Error).message).not.toContain("LEAKED RESPONSE DETAIL");
+  });
+});
+
+/** A JSON body read that fails 40 ms later, after a short request timeout has fired. */
+function slowBody(): Promise<unknown> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new DOMException("The operation timed out.", "TimeoutError")), 40);
+  });
+}
+
+describe("elevenlabsJsonRequest", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the parsed JSON body of a successful response", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(fakeResponse({ status: 200, body: { audio_base64: "AA" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(elevenlabsJsonRequest(BASE_OPTIONS)).resolves.toEqual({ audio_base64: "AA" });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["xi-api-key"]).toBe("secret-key");
+  });
+
+  it("returns undefined for a body that is not JSON, so the caller's shape check refuses it", async () => {
+    const response = {
+      ...fakeResponse({ status: 200 }),
+      json: () => Promise.reject(new SyntaxError("x"))
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(elevenlabsJsonRequest(BASE_OPTIONS)).resolves.toBeUndefined();
+  });
+
+  it("throws a retryable timeout when the timeout fires while the JSON body is read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ...fakeResponse({ status: 200 }), json: slowBody })
+    );
+
+    const error = await elevenlabsJsonRequest({ ...BASE_OPTIONS, timeoutMs: 5 }).catch(
+      (error_: unknown) => error_
+    );
+
+    expect(error).toBeInstanceOf(RetryableProviderError);
+    expect((error as RetryableProviderError).kind).toBe("timeout");
+  });
+
+  it.each([
+    [429, RetryableProviderError],
+    [503, RetryableProviderError],
+    [401, TerminalProviderError]
+  ])("classifies HTTP %i with the shared taxonomy", async (status, errorClass) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(fakeResponse({ status, body: {} })));
+
+    await expect(elevenlabsJsonRequest(BASE_OPTIONS)).rejects.toBeInstanceOf(errorClass);
   });
 });

@@ -35,7 +35,7 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, `sprite`, `asset`); provider plugins
+  (`voiceover`, `dialogue`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, `sprite`, `asset`); provider plugins
   (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `apimodels`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
@@ -149,7 +149,7 @@ one twice.
 ## Plugins
 
 Three core plugins are injected on every plugin's `ctx` (plus `ctx.log` / `ctx.env`
-inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); twenty-one regular
+inherited from [`@moku-labs/common`](https://github.com/moku-labs/common)); twenty-three regular
 plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 
 | Plugin | Tier | Kind | Responsibility |
@@ -158,12 +158,13 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`store`](./src/plugins/store/README.md) | Standard | core (`ctx.store`) | Content-addressed artifact store — fsync-durable writes, integrity-verified reads, gc. |
 | [`limits`](./src/plugins/limits/README.md) | Standard | core (`ctx.limits`) | Per-lane token bucket + concurrency gate + circuit breaker for all provider traffic. |
 | [`registry`](./src/plugins/registry/README.md) | Nano | regular (`app.registry`) | The task → provider → handler map that keeps tasks and providers decoupled. |
-| [`buildfile`](./src/plugins/buildfile/README.md) | Standard | regular (`app.buildfile`) | YAML / `defineBuild()` front-end — one zod schema, `BuildSpec` IR, JSON Schema, starter template. |
+| [`buildfile`](./src/plugins/buildfile/README.md) | Standard | regular (`app.buildfile`) | YAML / `defineBuild()` front-end — one zod schema, `BuildSpec` IR, JSON Schema, starter template; `cast` and `locales` expand one scene into one item per language. |
 | [`runner`](./src/plugins/runner/README.md) | Complex | regular (`app.runner`) | The durable orchestrator — `run`/`resume`/`estimate`/`status`/`events()`; owns all bus events. |
-| [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract + one-off `generate`/`estimate`/`providers` facade. |
+| [`voiceover`](./src/plugins/voiceover/README.md) | Standard | regular (`app.voiceover`) | Owns the `"voiceover"` task contract (voice `settings`, `seed`, `previousText`/`nextText`, `outputFormat`) + one-off `generate`/`estimate`/`providers` facade. |
+| [`dialogue`](./src/plugins/dialogue/README.md) | Standard | regular (`app.dialogue`) | Owns the `"dialogue"` task contract — a multi-speaker scene in one request, returned as the whole mix plus one audio file per line — + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
 | [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`, `openai` and `anthropic`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
-| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, retry-taxonomy errors. |
+| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("dialogue", "elevenlabs")` (model named by the item, `eleven_v4` recommended; one request per scene, cut into one mp3/wav per line), `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, output formats, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK; prompt-gen runs on the Responses API (GPT-6, images, schema output, reasoning effort, tools, cache-aware cost). |
 | [`anthropic`](./src/plugins/anthropic/README.md) | Complex | regular (`app.anthropic`) | Anthropic provider — registers the prompt-gen handler over the Messages API via the official SDK (Claude 5 models, images, schema output, effort, tools with thinking replay, prompt caching, cache-aware cost). |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
@@ -397,6 +398,76 @@ An id may end with a nine-slice hint `{nine=l,t,r,b}`; it stays in the file name
 Export writes `out/<name>/coin-pickup.mp3` and `out/<name>/button{nine=12,12,12,12}.png`. Changing the sprite
 options re-cuts the stored image and never regenerates it.
 
+### Voices: dialogue scenes and locales
+
+A `dialogue` item speaks a whole scene in one request, so the voices answer each other in one
+take. It exports the whole mix plus one file per line, so a game can play a line on its own.
+`cast` names the characters once, with a voice per language; `locales: true` on an item builds it
+once per language:
+
+```yaml
+version: 1
+name: ep02
+locales: [ru, en]
+cast:
+  alice:
+    voice: TPIitICAZ8CqlGZ81AKm
+    locales:
+      en: { voice: EXAVITQu4vr4xnSDxMaL }
+  daniel:
+    voice: 6A9D8WSMm4rFsg2DWFeE
+    locales:
+      en: { voice: N2lVS1w4EtoT3dr4eOWO }
+items:
+  - id: voices/ep02-quarrel-${locale}
+    task: dialogue
+    provider: elevenlabs
+    locales: true
+    input:
+      model: eleven_v4
+      language: ${locale}
+      settings: { stability: 0.5, similarity: 0.75 }
+      seed: 7
+      lines:
+        - { id: "ep02-signAlice-${locale}", $cast: alice,
+            text: { ru: "[angry] Я ничего не подписывала!", en: "[angry] I never signed anything!" } }
+        - { id: "ep02-signDaniel-${locale}", $cast: daniel,
+            text: { ru: "[tired] Нам нужны были деньги.", en: "[tired] We needed the money." } }
+  - id: voices/promo-line3
+    task: voiceover
+    locales: true
+    input:
+      $cast: alice
+      language: ${locale}
+      settings: { stability: 0.6 }
+      text: { ru: "Новый пациент.", en: "A new patient." }
+```
+
+Export writes, for each of `ru` and `en`, `out/ep02/voices/ep02-quarrel-<locale>.mp3` (the whole
+scene), `out/ep02/voices/ep02-signAlice-<locale>.mp3` and `out/ep02/voices/ep02-signDaniel-<locale>.mp3`,
+plus `out/ep02/voices/promo-line3-<locale>.mp3` (the voiceover item; the locale is appended to an id
+that has no `${locale}`). Every locale is an ordinary item with its own cache entry, so changing one
+cast voice re-runs only the items that use it. The rules for `cast` and `locales` are in the
+[buildfile README](./src/plugins/buildfile/README.md).
+
+- **Limits.** One dialogue request carries at most 2000 characters over all its lines
+  (`elevenlabs.dialogueMaxChars`) and at most 10 distinct voices. `moku estimate` refuses a scene
+  over either limit before any spend. A line `id` is one file name and is unique in the scene.
+- **Cut.** The scene is cut into lines in TypeScript, without ffmpeg: a line never carries the next
+  line's first syllable. Cuts need `mp3_*` or `wav_*` output.
+- **Models.** A dialogue item names its `model` (required, like `sfx`: there is no default, because the
+  model is part of the cache key); `eleven_v4` is recommended. `eleven_v3` and `eleven_v4` honour only
+  `stability` and `similarity`. Voiceover `style`, `speakerBoost` and `speed` are dropped for them,
+  with one warning. `language` is not sent for `eleven_multilingual_v2`, which detects it from the text.
+- **Price.** `eleven_v4`, `eleven_v3` and `eleven_multilingual_v2` estimate at $0.08 per 1K
+  characters; `eleven_v4_turbo`, `eleven_v3_conversational`, `eleven_flash_v2_5` and
+  `eleven_turbo_v2_5` at $0.04. Override with `priceOverrides`.
+- **Formats and tiers.** `outputFormat` names an ElevenLabs code directly. `mp3_44100_192` needs
+  the Creator plan or above; `wav_44100` and `pcm_44100` need Pro or above. The legacy voiceover
+  `format: wav` now requests `wav_44100` (a real WAV; it was raw `pcm_44100`) and `format: ogg`
+  requests `opus_48000_128`. The full code table is in the
+  [elevenlabs README](./src/plugins/elevenlabs/README.md).
+
 ### Faces: Seedream first, or register a portrait
 
 Seedance on Ark refuses a real face in an image from outside. It trusts a face that
@@ -470,15 +541,18 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `maxActiveRuns` | `number` | `1` |
 | `voiceover` | `defaultProvider` | `string` | `"elevenlabs"` |
 | | `defaultFormat` | `"mp3" \| "wav" \| "ogg"` | `"mp3"` |
+| `dialogue` | `defaultProvider` | `string` | `"elevenlabs"` |
 | `translate` | `defaultProvider` | `string` | `"openai"` |
 | `promptGen` | `defaultProvider` | `string` | `"openai"` |
 | | `fallback` | `string[]` | `[]` |
 | `elevenlabs` | `apiKeyEnv` | `string` | `"ELEVENLABS_API_KEY"` |
 | | `baseUrl` | `string` | `"https://api.elevenlabs.io"` |
 | | `defaultModel` | `string` | `"eleven_multilingual_v2"` |
+| | `dialogueMaxChars` | `number` | `2000` (most characters of one dialogue request, over all lines) |
 | | `timeoutMs` | `number` | `60_000` |
 | | `musicTimeoutMs` | `number` | `600_000` |
-| | `priceOverrides` | `Record<string, number>` | `{}` (voice `<model>`; `sfx:<model>#second` / `#auto`; `music:<model>`) |
+| | `dialogueTimeoutMs` | `number` | `180_000` |
+| | `priceOverrides` | `Record<string, number>` | `{}` (USD per character by voice `<model>`, also for dialogue; `sfx:<model>#second` / `#auto`; `music:<model>`) |
 | `openai` | `apiKeyEnv` | `string` | `"OPENAI_API_KEY"` |
 | | `baseUrl` | `string?` | `undefined` (SDK default) |
 | | `models` | `{ tts: string; chat: string }` | `{ tts: "gpt-4o-mini-tts", chat: "gpt-4o-mini" }` |
@@ -619,6 +693,7 @@ flowchart LR
   RN --> BF
   subgraph TASKS["task plugins"]
     VO["voiceover"]
+    DL["dialogue"]
     TR["translate"]
     PG["promptGen"]
     IM["image"]
@@ -645,18 +720,18 @@ flowchart LR
   classDef core fill:#0b7285,stroke:#08525f,color:#fff;
   classDef reg fill:#1864ab,stroke:#0d3d6e,color:#fff;
   class LOG,ENV,J,S,L core
-  class REG,BF,RN,VO,TR,PG,IM,VI,MU,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
+  class REG,BF,RN,VO,DL,TR,PG,IM,VI,MU,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
 ```
 
 An arrow from a group means every plugin in it has that `depends` edge: each task and
 provider plugin depends on `registry` only.
 
 The five core plugins come first, from `src/config.ts`: `log → env → journal → store →
-limits`. They have no `depends`. The 19 regular plugins follow in `src/index.ts`, every
+limits`. They have no `depends`. The 23 regular plugins follow in `src/index.ts`, every
 plugin after its dependencies:
-`registry → buildfile → runner → voiceover → translate → promptGen → image → video →
-music → asset → elevenlabs → openai → codex → claude → fal → apimodels → ark → compose →
-cli`. Provider plugins register their handlers in `onInit`, so by
+`registry → buildfile → runner → voiceover → dialogue → translate → promptGen → image →
+video → music → sfx → sprite → asset → elevenlabs → openai → anthropic → codex → claude →
+fal → apimodels → ark → compose → cli`. Provider plugins register their handlers in `onInit`, so by
 the time `app.start()` resolves, every task facade sees its providers — and the
 *first*-registered provider is each task's implicit default.
 
@@ -707,6 +782,7 @@ bun run test:coverage      # unit + integration with coverage
   [buildfile](./src/plugins/buildfile/README.md) ·
   [runner](./src/plugins/runner/README.md) ·
   [voiceover](./src/plugins/voiceover/README.md) ·
+  [dialogue](./src/plugins/dialogue/README.md) ·
   [translate](./src/plugins/translate/README.md) ·
   [promptGen](./src/plugins/promptGen/README.md) ·
   [image](./src/plugins/image/README.md) ·

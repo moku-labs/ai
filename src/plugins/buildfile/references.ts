@@ -159,6 +159,8 @@ function isNonEmptyString(value: unknown): value is string {
  * error (`"<path>: <message>"`), or undefined when the graph is valid.
  *
  * @param items - The build file's items.
+ * @param sources - For a list that was expanded from a source list: the source index of each
+ *   item, so error paths name the position in the file the author wrote. Default: the item's own index.
  * @returns The first problem, or undefined.
  * @example
  * ```ts
@@ -166,22 +168,26 @@ function isNonEmptyString(value: unknown): value is string {
  * if (problem) throw buildFileInvalidError(label, problem);
  * ```
  */
-export function checkReferenceGraph(items: readonly BuildItem[]): string | undefined {
+export function checkReferenceGraph(
+  items: readonly BuildItem[],
+  sources?: readonly number[]
+): string | undefined {
   const ids = new Map<string, number>();
+  const at = (index: number): number => sources?.[index] ?? index;
 
   // Ids are unique.
   for (const [index, item] of items.entries()) {
     if (item.id === undefined) continue;
-    if (ids.has(item.id)) return `items.${index}.id: duplicate id "${item.id}"`;
+    if (ids.has(item.id)) return `items.${at(index)}.id: duplicate id "${item.id}"`;
     ids.set(item.id, index);
   }
 
   // Reference values are well formed and point at existing ids.
   for (const [index, item] of items.entries()) {
     const malformed = findMalformedReference(item.input);
-    if (malformed) return `items.${index}.input: ${malformed} must be a non-empty string`;
+    if (malformed) return `items.${at(index)}.input: ${malformed} must be a non-empty string`;
     for (const target of collectReferences(item.input).refs) {
-      if (!ids.has(target)) return `items.${index}.input: unknown $ref "${target}"`;
+      if (!ids.has(target)) return `items.${at(index)}.input: unknown $ref "${target}"`;
     }
   }
 

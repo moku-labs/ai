@@ -24,6 +24,7 @@ import type {
   ClaimVerdict,
   DrainController,
   ExecutableHandler,
+  HandlerOutput,
   HandlerRequest,
   HandlerResult,
   ItemFailure,
@@ -644,21 +645,35 @@ async function pollOnce(
   }
 }
 
-/** Bytes to store and their mime type: one artifact, or one output of a multi-image result. */
+/** Bytes to store and their mime type: one artifact, or one output of a multi-output result. */
 type ArtifactBytes = ReturnType<typeof normalizeResult>;
 
 /**
+ * The journal entry of one stored output: its hash and mime type, and its
+ * name only when it has one (never a `name: undefined` key).
+ *
+ * @param contentHash - The output's CAS hash.
+ * @param output - The stored bytes' mime type and optional name.
+ * @returns The output as the journal records it.
+ */
+function doneOutputOf(contentHash: string, output: ArtifactBytes & { name?: string }): DoneOutput {
+  const { mimeType, name } = output;
+  return { contentHash, mimeType, ...(name === undefined ? {} : { name }) };
+}
+
+/**
  * Stores what a successful attempt produced, then moves the item to `done`:
- * the bytes are durable before the item is. A multi-image result stores
+ * the bytes are durable before the item is. A multi-output result stores
  * every output in order, its first output being the item's content hash and
- * mime type, and journals and reports all of them. That holds whenever the
- * handler returned `images`, even a group of one, so the caller sees the count.
+ * mime type, and journals (names included) and reports all of them. That
+ * holds whenever the handler returned `outputs` or `images`, even a group of
+ * one, so the caller sees the count.
  *
  * @param ctx - Runner domain context.
  * @param item - The dispatching item.
  * @param costUsd - The attempt's actual cost.
  * @param artifact - The item's (first) artifact.
- * @param outputs - Every output of a multi-image result, `artifact` first; undefined for a single artifact.
+ * @param outputs - Every output of a multi-output result, `artifact` first; undefined for a single artifact.
  * @returns The `done` outcome.
  */
 async function commitArtifacts(
@@ -666,14 +681,14 @@ async function commitArtifacts(
   item: ItemRow,
   costUsd: number,
   artifact: ArtifactBytes,
-  outputs: ArtifactBytes[] | undefined
+  outputs: HandlerOutput[] | undefined
 ): Promise<AttemptOutcomeResult> {
-  // Store the first artifact, then every further output in order.
+  // Store the first artifact, then every further output in order, each with its name.
   const { hash } = await ctx.store.put(artifact.bytes);
-  const stored: DoneOutput[] = [{ contentHash: hash, mimeType: artifact.mimeType }];
+  const stored: DoneOutput[] = [doneOutputOf(hash, outputs?.[0] ?? artifact)];
   for (const output of outputs?.slice(1) ?? []) {
     const put = await ctx.store.put(output.bytes);
-    stored.push({ contentHash: put.hash, mimeType: output.mimeType });
+    stored.push(doneOutputOf(put.hash, output));
   }
 
   // The item is done; a multi-output item also journals and reports every output.
@@ -720,7 +735,7 @@ async function attemptOnce(
   });
 
   try {
-    // Every image of a multi-image result, else the one artifact; no content at all throws here.
+    // Every output of a multi-output result, else the one artifact; no content at all throws here.
     const result = await runHandler(ctx, item, handler, request, attemptId, signal);
     const outputs = normalizeOutputs(result);
     const artifact = outputs?.[0] ?? normalizeResult(result);

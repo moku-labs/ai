@@ -6,7 +6,12 @@ import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
 import type { VoiceoverRequest, VoiceoverResult } from "./contract";
 
-export type { VoiceoverHandler, VoiceoverRequest, VoiceoverResult } from "./contract";
+export type {
+  VoiceoverHandler,
+  VoiceoverRequest,
+  VoiceoverResult,
+  VoiceSettings
+} from "./contract";
 
 /**
  * voiceover plugin configuration: the provider used when a request doesn't

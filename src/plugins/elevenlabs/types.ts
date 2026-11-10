@@ -8,13 +8,16 @@ import type { PluginCtx } from "@moku-labs/core";
 import type { RegistryApi, registryPlugin } from "../registry";
 import type {
   FlaggedProviderError as FlaggedProviderErrorClass,
+  LocalFailureError as LocalFailureErrorClass,
   RetryableProviderError as RetryableProviderErrorClass,
   TerminalProviderError as TerminalProviderErrorClass
 } from "./errors";
 
 /**
  * elevenlabs plugin configuration: API key env var, base URL, default
- * model, request timeout, and per-model price overrides.
+ * voiceover model, the dialogue character limit, request timeouts, and
+ * per-model price overrides. Dialogue has no default model: a request names it,
+ * because the runner hashes the input as written.
  *
  * @example
  * ```ts
@@ -22,8 +25,10 @@ import type {
  *   apiKeyEnv: "ELEVENLABS_API_KEY",
  *   baseUrl: "https://api.elevenlabs.io",
  *   defaultModel: "eleven_multilingual_v2",
+ *   dialogueMaxChars: 2000,
  *   timeoutMs: 60_000,
  *   musicTimeoutMs: 600_000,
+ *   dialogueTimeoutMs: 180_000,
  *   priceOverrides: {}
  * };
  * ```
@@ -33,12 +38,16 @@ export type Config = {
   apiKeyEnv: string;
   /** API base URL. Default: "https://api.elevenlabs.io". */
   baseUrl: string;
-  /** Default model. Default: "eleven_multilingual_v2". */
+  /** Default voiceover model. Default: "eleven_multilingual_v2". */
   defaultModel: string;
+  /** Most characters one dialogue request may carry, summed over its lines (ElevenLabs' reliable limit). Default: 2000. */
+  dialogueMaxChars: number;
   /** Request timeout, ms. Default: 60_000. */
   timeoutMs: number;
   /** Timeout of one music request, ms: `/v1/music` answers only when the whole track is ready. Default: 600_000. */
   musicTimeoutMs: number;
+  /** Timeout of one dialogue request, ms: a whole scene takes longer than one line. Default: 180_000. */
+  dialogueTimeoutMs: number;
   /**
    * Price overrides merged over the bundled table. Voice models are keyed by model id (USD per
    * character); sfx rows are keyed `sfx:<model>#second` (USD per started second) and
@@ -51,11 +60,6 @@ export type Config = {
 /**
  * elevenlabs plugin state: the effective price table, computed once at
  * first use (bundled prices merged with `config.priceOverrides`).
- *
- * @example
- * ```ts
- * const state: State = { prices: null };
- * ```
  */
 export type State = {
   /** Effective price table (bundled prices merged with config.priceOverrides), computed once at first use. */
@@ -65,8 +69,9 @@ export type State = {
 /**
  * Public API surface of the `elevenlabs` plugin, exposed as `app.elevenlabs`.
  * A thin observability surface — the real capability surface is the
- * registered `VoiceoverHandler`, `SfxHandler` and `MusicHandler` (spec/10),
- * consumed through `app.voiceover`, `app.sfx`, `app.music` and `app.runner`.
+ * registered `VoiceoverHandler`, `DialogueHandler`, `SfxHandler` and
+ * `MusicHandler` (spec/10), consumed through `app.voiceover`, `app.dialogue`,
+ * `app.sfx`, `app.music` and `app.runner`.
  *
  * @example
  * ```ts
@@ -82,7 +87,7 @@ export type ElevenlabsApi = {
    * ```ts
    * // Before a voiceover run, check ELEVENLABS_API_KEY is set; this call never throws.
    * const { configured, models } = app.elevenlabs.info();
-   * // configured: false without the key, models: ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_monolingual_v1"]
+   * // configured: false without the key, models: ["eleven_v4", "eleven_v3", "eleven_multilingual_v2", "eleven_v4_turbo", ...]
    * ```
    */
   info(): { provider: "elevenlabs"; configured: boolean; models: string[] };
@@ -100,18 +105,15 @@ export type RetryableProviderError = RetryableProviderErrorClass;
 export type TerminalProviderError = TerminalProviderErrorClass;
 /** Instance type of the content-policy provider error; the class is `ElevenlabsErrors.FlaggedProviderError`. */
 export type FlaggedProviderError = FlaggedProviderErrorClass;
+/** Instance type of the plugin's own local failure (a dialogue cut); the class is `ElevenlabsErrors.LocalFailureError`. */
+export type LocalFailureError = LocalFailureErrorClass;
 
 /**
  * Domain context shared by `api.ts` (`info()`), `voiceover/handler.ts`,
- * `sfx/handler.ts` and `music/handler.ts` (`estimate()`/`execute()`) — the framework's `PluginCtx` helper supplies
+ * `dialogue/handler.ts`, `sfx/handler.ts` and `music/handler.ts` (`estimate()`/`execute()`) — the framework's `PluginCtx` helper supplies
  * `config`/`state`/`emit`; `require` is narrowed to the one declared
  * dependency (`registry`), and `env`/`log` are the injected core APIs this
  * plugin reads the API key and logs redacted failures through.
- *
- * @example
- * ```ts
- * export const createElevenlabsApi = (ctx: ElevenlabsContext): ElevenlabsApi => ({ ... });
- * ```
  */
 export type ElevenlabsContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

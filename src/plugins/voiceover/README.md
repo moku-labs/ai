@@ -54,7 +54,28 @@ import). Consumers get the same types from the package as `Voiceover.VoiceoverHa
 | `language` | `string` | no | BCP-47 language tag (e.g. `"en-US"`), for providers that need an explicit hint. |
 | `model` | `string` | no | Provider-scoped model id (e.g. `"eleven_multilingual_v2"`). |
 | `format` | `"mp3" \| "wav" \| "ogg"` | no | Output audio container format; defaulted from `config.defaultFormat` when omitted. |
+| `settings` | `VoiceSettings` | no | Per-request voice settings (see below); providers map them to their own names. |
+| `seed` | `number` | no | Integer >= 0 for best-effort reproducibility. |
+| `previousText` | `string` | no | Text spoken before this line, for intonation context. |
+| `nextText` | `string` | no | Text spoken after this line, for intonation context. |
+| `outputFormat` | `string` | no | Provider-scoped output encoding (e.g. `"mp3_44100_192"`); wins over `format`. |
 | `params` | `Record<string, unknown>` | no | Resolved pack values merged upstream — providers receive final text/params only. |
+
+`settings`, `seed`, `previousText`, `nextText` and `outputFormat` are passed through to the provider
+untouched. A provider that does not support a field ignores it (each provider's README says which
+fields it uses); `format` keeps its meaning.
+
+### `VoiceSettings`
+
+Exported from `contract.ts` and `types.ts` (as `Voiceover.VoiceSettings`). All fields are optional.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `stability` | `number` | Delivery stability, 0 (more expressive) to 1 (more consistent). |
+| `similarity` | `number` | How closely the output follows the original voice, 0 to 1. |
+| `style` | `number` | Style exaggeration, 0 to 1. |
+| `speakerBoost` | `boolean` | Boosts similarity to the original speaker, at some latency cost. |
+| `speed` | `number` | Speaking rate multiplier (1 is normal speed). |
 
 ### `VoiceoverResult`
 

@@ -14,7 +14,31 @@ const LABEL_HINT_MESSAGE = "only a trailing {nine=l,t,r,b} hint with whole-pixel
 const NINE_SLICE_ID = /^[^{}]+\{nine=\d+,\d+,\d+,\d+\}$/;
 
 /**
- * Tells whether an item id carries an invalid label hint.
+ * The placeholder a localized item writes where its locale code goes. Braces
+ * of the placeholder are not label-hint braces, so the id check ignores it.
+ */
+export const LOCALE_PLACEHOLDER = `\${locale}`;
+
+/** A locale code: a 2-3 letter language and optional region/script parts, e.g. `ru`, `pt-BR`. */
+const LOCALE_CODE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+
+/** A non-empty list of unique locale codes. */
+const localeList = z
+  .array(z.string().regex(LOCALE_CODE))
+  .min(1)
+  .refine(list => new Set(list).size === list.length, { message: "locales must be unique" });
+
+/**
+ * One named character of the build's cast: base fields (`voice`, `settings`,
+ * `model`, ...) plus per-locale overrides under `locales`.
+ */
+const castEntrySchema = z
+  .object({ locales: z.record(z.string(), z.record(z.string(), z.unknown())).optional() })
+  .catchall(z.unknown());
+
+/**
+ * Tells whether an item id carries an invalid label hint. A `${locale}`
+ * placeholder is ignored: it is not a hint.
  *
  * @param id - The item id, or `undefined` when the item has none.
  * @returns `true` when the id contains `{` or `}` but is not `<label>{nine=l,t,r,b}`.
@@ -23,12 +47,14 @@ const NINE_SLICE_ID = /^[^{}]+\{nine=\d+,\d+,\d+,\d+\}$/;
  * hasInvalidLabelHint("button{nine=12,12,12,12}"); // => false
  * hasInvalidLabelHint("button{nine=1.5,2,3,4}"); // => true
  * hasInvalidLabelHint("s01.key"); // => false
+ * hasInvalidLabelHint("voices/ep02-${locale}"); // => false
  * ```
  */
 function hasInvalidLabelHint(id: string | undefined): boolean {
   if (id === undefined) return false;
-  const hasBraces = id.includes("{") || id.includes("}");
-  return hasBraces && !NINE_SLICE_ID.test(id);
+  const label = id.replaceAll(LOCALE_PLACEHOLDER, "");
+  const hasBraces = label.includes("{") || label.includes("}");
+  return hasBraces && !NINE_SLICE_ID.test(label);
 }
 
 /**
@@ -49,6 +75,7 @@ export const buildItemSchema = z
     provider: z.string().optional(),
     input: z.record(z.string(), z.unknown()),
     params: z.record(z.string(), z.unknown()).optional(),
+    locales: z.union([z.literal(true), localeList]).optional(),
     pack: z.object({ name: z.string(), version: z.string() }).optional()
   })
   .superRefine((item, refinement) => {
@@ -73,6 +100,8 @@ export const buildSpecSchema = z.object({
   defaults: z
     .object({ provider: z.string().optional(), maxAttempts: z.number().optional() })
     .optional(),
+  locales: localeList.optional(),
+  cast: z.record(z.string(), castEntrySchema).optional(),
   items: z.array(buildItemSchema),
   itemsFrom: z.string().optional()
 });

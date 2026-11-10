@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { isOpen, mapItem, mapRun, NOT_OPEN_ERROR, requireDriver, SQL_NULL } from "../../db";
+import {
+  isOpen,
+  mapItem,
+  mapRun,
+  NOT_OPEN_ERROR,
+  outputsColumn,
+  parseOutputs,
+  requireDriver,
+  SQL_NULL
+} from "../../db";
 import type { ItemDatabaseRow, RunDatabaseRow, SqliteDriver } from "../../driver/types";
 import type { State } from "../../types";
 import { closedState } from "./fixtures";
@@ -179,6 +188,44 @@ describe("journal db", () => {
         maxCostUsd: 5,
         finishedAt: 2000
       });
+    });
+  });
+
+  describe("named outputs", () => {
+    it("writes the column text of unnamed outputs exactly as before names existed", () => {
+      const column = outputsColumn([
+        { contentHash: "ch-1", mimeType: "audio/mpeg" },
+        { contentHash: "ch-2", mimeType: "audio/mpeg" }
+      ]);
+
+      expect(column).toBe(
+        '[{"contentHash":"ch-1","mimeType":"audio/mpeg"},{"contentHash":"ch-2","mimeType":"audio/mpeg"}]'
+      );
+    });
+
+    it("writes a name after the mime type, and only on the outputs that have one", () => {
+      const column = outputsColumn([
+        { contentHash: "ch-1", mimeType: "audio/mpeg" },
+        { contentHash: "ch-2", mimeType: "audio/mpeg", name: "ep02-signAlice-ru" }
+      ]);
+
+      expect(column).toBe(
+        '[{"contentHash":"ch-1","mimeType":"audio/mpeg"},{"contentHash":"ch-2","mimeType":"audio/mpeg","name":"ep02-signAlice-ru"}]'
+      );
+    });
+
+    it("reads a string name back", () => {
+      const text = '[{"contentHash":"ch-1","mimeType":"audio/mpeg","name":"line-1"}]';
+
+      expect(parseOutputs(text)).toEqual([
+        { contentHash: "ch-1", mimeType: "audio/mpeg", name: "line-1" }
+      ]);
+    });
+
+    it("maps an entry whose name is not a string to null", () => {
+      const text = '[{"contentHash":"ch-1","mimeType":"audio/mpeg","name":5}]';
+
+      expect(parseOutputs(text)).toBeNull();
     });
   });
 });

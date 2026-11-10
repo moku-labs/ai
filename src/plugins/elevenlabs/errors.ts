@@ -31,8 +31,11 @@ type RetryHint = {
  * bucketed as retryable without any cross-plugin error-class import.
  */
 export class RetryableProviderError extends Error {
+  /** HTTP status (5xx or 429), when the failure came from a response. */
   readonly status: number | undefined;
+  /** `"timeout"` or `"network"` for a failure with no HTTP response. */
   readonly kind: "timeout" | "network" | undefined;
+  /** Delay the provider asked for with `Retry-After`, ms. */
   readonly retryAfterMs: number | undefined;
 
   /**
@@ -63,6 +66,7 @@ export class RetryableProviderError extends Error {
  * `"http-4xx"` (terminal).
  */
 export class TerminalProviderError extends Error {
+  /** The HTTP status that caused the failure (400 for a request refused before any call). */
   readonly status: number;
 
   /**
@@ -88,6 +92,7 @@ export class TerminalProviderError extends Error {
  * `classifyError` reads to bucket it as `"content-policy"`.
  */
 export class FlaggedProviderError extends Error {
+  /** Always `"content-policy"`: how `runner/retry.ts` buckets this error. */
   readonly kind: "content-policy" = "content-policy";
 
   /**
@@ -102,5 +107,34 @@ export class FlaggedProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "FlaggedProviderError";
+  }
+}
+
+/**
+ * The plugin's own machine failed after a successful response (e.g. the
+ * dialogue audio could not be cut) — terminal after one attempt, never
+ * retried. Carries `kind: "local-failure"`, the field `runner/retry.ts`'s
+ * `classifyError` reads, and a `publicMessage` the runner may show (the same
+ * two-line text: no keys, no request text).
+ */
+export class LocalFailureError extends Error {
+  /** Always `"local-failure"`: how `runner/retry.ts` buckets this error. */
+  readonly kind: "local-failure" = "local-failure";
+  /** The message the runner may show: the same two-line text, with no keys and no request text. */
+  readonly publicMessage: string;
+
+  /**
+   * Creates a local-failure error whose message is also its public message.
+   *
+   * @param message - Two-line `[ai]` message, safe to show (never request text or response bodies).
+   * @example
+   * ```ts
+   * throw new LocalFailureError("[ai] Could not cut the ElevenLabs dialogue audio.\n  The response audio has no readable mp3 frames or wav data.");
+   * ```
+   */
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalFailureError";
+    this.publicMessage = message;
   }
 }

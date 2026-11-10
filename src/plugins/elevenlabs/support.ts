@@ -4,7 +4,12 @@
  * to redacted, loggable fields. Per-task submodules never import each other,
  * so they share these through this root module.
  */
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "./errors";
+import {
+  FlaggedProviderError,
+  LocalFailureError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "./errors";
 import type { ElevenlabsContext } from "./types";
 
 /**
@@ -20,7 +25,7 @@ export type RedactedFailure = {
   errorType: string;
   /** HTTP status code, when the error carries one. */
   status?: number | undefined;
-  /** Failure kind (timeout, network, content-policy), when the error carries one. */
+  /** Failure kind (timeout, network, content-policy, local-failure), when the error carries one. */
   kind?: string | undefined;
 };
 
@@ -64,6 +69,9 @@ export function redactedFailureOf(error: unknown): RedactedFailure {
   }
   if (error instanceof FlaggedProviderError) {
     return { errorType: "flagged", kind: error.kind };
+  }
+  if (error instanceof LocalFailureError) {
+    return { errorType: "local-failure", kind: error.kind };
   }
   return { errorType: "unknown" };
 }

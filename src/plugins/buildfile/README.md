@@ -100,8 +100,8 @@ Renders the starter build-file text for `moku new`.
   (`# yaml-language-server: $schema=<schemaPath>`) AND the `$schema:` key — both are emitted
   because the literal `$schema:` key alone does NOT activate editor autocomplete; only the
   modeline comment does — followed by a minimal valid spec and one commented example item per
-  task (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, and an
-  `image` → `sprite` pair with a `{nine=l,t,r,b}` id hint). The rendered text is itself a valid,
+  task (`voiceover`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, an
+  `image` → `sprite` pair with a `{nine=l,t,r,b}` id hint, and a `dialogue` scene). The rendered text is itself a valid,
   compilable build file.
 - **Throws:** nothing.
 
@@ -146,6 +146,8 @@ emits) are stripped by zod, not rejected.
 | `defaults` | `{ provider?: string; maxAttempts?: number }` | no | Per-build defaults applied by the runner at dispatch. |
 | `items` | `BuildItem[]` | yes | The build's task invocations (may be `[]`). |
 | `itemsFrom` | `string` | no | Path to an NDJSON file (one `BuildItem` JSON object per line, blank lines skipped), resolved relative to the build file, appended to `items` at compile time. |
+| `locales` | `string[]` | no | The build's locale set (see "Locales and cast"). |
+| `cast` | `Record<string, CastEntry>` | no | Named characters with per-locale overrides (see "Locales and cast"). |
 
 ### `BuildItem` (one task invocation)
 
@@ -156,6 +158,7 @@ emits) are stripped by zod, not rejected.
 | `provider` | `string` | no | Provider override; the runner falls back to `defaults.provider`, else the task's first registered provider. |
 | `input` | `Record<string, unknown>` | yes | Task-specific request payload, handed to the provider flat (`{ ...input, params }`). May hold `$ref` / `$file` values. A `params` key inside `input` is refused. Put params next to input. |
 | `params` | `Record<string, unknown>` | no | Output-relevant parameters — part of the runner's planning key. Goes next to `input`, never inside it. |
+| `locales` | `true \| string[]` | no | Expand this item into one item per locale (see "Locales and cast"). |
 
 `compile()` refuses `input.params`. The runner would drop it silently. The error reads
 `items.0.input.params: params go next to input, not inside it; move input.params to params.`
@@ -208,6 +211,78 @@ items:
     task: sprite
     input: { source: { $ref: btn-raw }, size: { width: 128, height: 64 }, padding: 2 }
 ```
+
+### Locales and cast
+
+One scene definition can build one item per language, each with its own voices. Two top-level fields
+and one item field do it; a build file that uses none of them compiles exactly as before.
+
+| Field | Where | Type | Meaning |
+|---|---|---|---|
+| `locales` | top level | `string[]` (non-empty, unique, codes like `ru`, `en`, `pt-BR`) | The build's locale set. |
+| `cast` | top level | `Record<string, CastEntry>` | Named characters: base fields (`voice`, `settings`, `model`, ...) plus per-locale overrides under `locales`. |
+| `locales` | item | `true \| string[]` | Expand this item per locale. `true` means the top-level list; a list must be a subset of it. |
+
+```yaml
+locales: [ru, en]
+cast:
+  alice:
+    voice: TPIitICAZ8CqlGZ81AKm              # the ru voice
+    locales:
+      en: { voice: <english voice id> }
+  mira:
+    voice: EDpEYNf6XIeKYRzYcx4I
+    settings: { stability: 0.5 }
+    locales:
+      en: { voice: <english voice id>, settings: { stability: 0.6 } }
+items:
+  - id: voices/ep02-quarrel-${locale}
+    task: dialogue
+    locales: true
+    input:
+      model: eleven_v4
+      language: ${locale}
+      lines:
+        - { id: "ep02-signAlice-${locale}", $cast: alice,
+            text: { ru: "Я ничего не подписывала!", en: "I never signed anything!" } }
+  - id: voices/promo-line3
+    task: voiceover
+    locales: true
+    input:
+      $cast: mira
+      language: ${locale}
+      text: { ru: "Новый пациент.", en: "A new patient." }
+```
+
+This compiles to `voices/ep02-quarrel-ru`, `voices/ep02-quarrel-en`, `voices/promo-line3-ru` and
+`voices/promo-line3-en`. Each is an ordinary item with its own planning key and cache entry, so
+changing one cast voice re-runs exactly the items that use it. Expansion is deterministic and runs
+in `compile()` after `itemsFrom` and before the `$ref` check; `defineBuild()` only validates.
+
+Rules, for an item that expands (the **locale** is the one being built):
+
+- **Ids.** The item needs an `id`. `${locale}` in it is replaced; an id without it gets `-<locale>`
+  appended (`man-door` becomes `man-door-ru`), in front of a trailing `{nine=...}` hint
+  (`button{nine=1,2,3,4}` becomes `button-ru{nine=1,2,3,4}`).
+- **Localized values.** In `input` and `params`, an object whose keys are all locale codes (the
+  top-level list plus the item's own) is replaced by its entry for the locale. A missing entry is an
+  error naming the path: `items.0.input.lines.2.text: no "en" value`. An object like
+  `{ width: 128, height: 64 }` is left alone.
+- **`${locale}`** in any string of `input` and `params` (including inside `$ref` and `$file`) is
+  replaced by the locale code.
+- **`$cast: <name>`** in an object merges the cast member's base fields with its override for the
+  locale; the object's own keys win. An unknown name is an error:
+  `items.0.input.lines.0.$cast: no cast member "bob"`.
+- **Ids inside `input`.** Every string at a key named `id` anywhere in `input` (a dialogue line id, for
+  example) must contain `${locale}` or be a localized value, since every locale would otherwise export
+  to the same file. Otherwise: `items.0.input.lines.0.id: an id inside a localized item needs ${locale}`.
+
+An item without `locales` is not expanded: `$cast` resolves with the base fields only, and
+`${locale}` and localized values stay as written. The item-level `locales` key is removed from the
+compiled items; `cast` and the top-level `locales` stay on the spec for tooling.
+
+Errors use the usual two-line format, for example `items.1.locales: true needs a top-level locales
+list` or `items.0.locales: "fr" is not in the top-level locales list`.
 
 ### Annotated example
 

@@ -68,7 +68,7 @@ export type RunEvent =
       costUsd: number;
       /** The item's (first) artifact. */
       contentHash: string;
-      /** Every output hash in order; only for a multi-output item (the handler returned `images`). */
+      /** Every output hash in order; only for a multi-output item (the handler returned `outputs` or `images`). */
       contentHashes?: string[];
     }
   | { type: "item:retry"; runId: string; itemId: string; errorClass: ErrorClass; attempt: number }
@@ -157,11 +157,30 @@ export type HandlerRequest = Record<string, unknown>;
 export type ResolvedFile = { path: string; mimeType: string; hash: string };
 
 /**
+ * One output of a multi-output handler result: its bytes, mime type and,
+ * optionally, the file name it exports under (no extension, no folder).
+ *
+ * @example
+ * ```ts
+ * const line: HandlerOutput = { bytes: mp3, mimeType: "audio/mpeg", name: "ep02-signAlice-ru" };
+ * ```
+ */
+export type HandlerOutput = {
+  /** The output's bytes. */
+  bytes: Uint8Array;
+  /** Its MIME type; empty stores as `application/octet-stream`. */
+  mimeType: string;
+  /** Export file name beside the item's label; absent exports as `<label>-<k+1>`. */
+  name?: string;
+};
+
+/**
  * What a handler may return: the bytes under the field its task contract
  * names (`body`, `audio`, `image`, `video`) or `text`, plus cost and mime.
- * The runner normalizes it before storing. A non-empty `images` makes the
- * item multi-output: every entry is stored, in order, and the first is the
- * item's artifact.
+ * The runner normalizes it before storing. A non-empty `outputs` (any task)
+ * or `images` (image groups) makes the item multi-output: every entry is
+ * stored, in order, and the first is the item's artifact. `outputs` wins
+ * over `images` when both are non-empty.
  */
 export type HandlerResult = {
   body?: Uint8Array;
@@ -170,6 +189,8 @@ export type HandlerResult = {
   video?: Uint8Array;
   text?: string;
   mimeType?: string;
+  /** Every output of a multi-output result, in order. The runner stores each one, with its name. */
+  outputs?: HandlerOutput[];
   /** Every image of a multi-image result, in order. The runner stores each one. */
   images?: { image: Uint8Array; mimeType: string }[];
   costUsd: number;
@@ -273,8 +294,9 @@ export type PlannedItem = {
 
 /**
  * One file written by {@link RunnerApi.export}. An item with several outputs
- * writes one file per output: `label` is the item's label for the first and
- * `<label>-<k>` (k from 2) for the others, which carry `costUsd` 0.
+ * writes one file per output: `label` is the item's label for the first; for
+ * the others it is `<label folder>/<name>` when the output is named, else
+ * `<label>-<k>` (k from 2). They carry `costUsd` 0.
  */
 export type ExportedFile = {
   label: string;
@@ -473,10 +495,21 @@ export type RunnerApi = {
   /**
    * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`, or to
    * `<outDir>/<label>.<ext>` with `flat`. An item with several outputs (an
-   * image group) writes `<label>.<ext>`, then `<label>-2.<ext>` …
-   * `<label>-N.<ext>`; the item cost is on the first file. A label that would
-   * escape `outDir`, or a file this export already wrote (with `flat`: the same
-   * label in two builds), is skipped and listed in `skipped`.
+   * image group, a dialogue scene) writes `<label>.<ext>` first; each later
+   * output is written beside it as `<name>.<ext>` in the label's folder when
+   * it is named, else as `<label>-2.<ext>` … `<label>-N.<ext>`. The item cost
+   * is on the first file. An item is skipped and listed in `skipped` when its
+   * label, an output name or the build name would escape its folder, when two
+   * of its own files map to one path, or when a file this export already wrote
+   * would be overwritten (with `flat`: the same label in two builds).
+   *
+   * Without `flat` the files land in `<outDir>/<build>/`, and the first file of a
+   * multi-output item carries the item cost (a group of 3 keyframes "e01.keys"
+   * writes "e01.keys", "e01.keys-2", "e01.keys-3"). With `flat` they land in
+   * `outDir` itself (`flat` into "assets/icons" writes "assets/icons/sword.png";
+   * a second build with a "sword" label is listed in `skipped`, the first file
+   * is kept). An output named "../x", or named like the label itself, puts the
+   * item in `skipped`.
    *
    * @param opts - Run id (default: newest run), output directory (default "out") and `flat` (default false).
    * @param opts.runId - Run to export.
@@ -485,15 +518,10 @@ export type RunnerApi = {
    * @returns The files written and the labels skipped.
    * @example
    * ```ts
-   * // Hand the newest run's clips to the editor.
-   * const { files, skipped } = await app.runner.export({ outDir: "out" });
-   * // files[0]: { label: "e01.s01.h3", path: "/repo/out/ep01/e01.s01.h3.mp4", bytes: 4_812_331, costUsd: 0.3, mimeType: "video/mp4" }
-   * // a group of 3 keyframes "e01.keys": labels "e01.keys", "e01.keys-2", "e01.keys-3"; costUsd 0.105, 0, 0
-   *
-   * // Drop the icons straight into the game's asset folder, no build folder.
-   * const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
-   * // icons.files[0].path: "/repo/assets/icons/sword.png"
-   * // a second build with a "sword" label: icons.skipped is ["sword"], the first file is kept
+   * // A dialogue scene "voices/ep02-quarrel-ru" whose second output is named "ep02-signAlice-ru".
+   * const { files } = await app.runner.export({ outDir: "out" });
+   * // files[0].path: "/repo/out/ep02/voices/ep02-quarrel-ru.mp3"
+   * // files[1].path: "/repo/out/ep02/voices/ep02-signAlice-ru.mp3", costUsd: 0
    * ```
    */
   export(opts?: { runId?: string; outDir?: string; flat?: boolean }): Promise<ExportResult>;
