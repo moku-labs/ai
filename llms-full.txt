@@ -9,7 +9,7 @@ Contents:
 1. Architecture & factory chain
 2. Public package surface
 3. Core plugins: journal, store, limits (full types + APIs)
-4. Regular plugins: registry, buildfile, runner, voiceover, translate, promptGen,
+4. Regular plugins: registry, buildfile, runner, voiceover, dialogue, translate, promptGen,
    image, video, elevenlabs, openai, codex, claude, compose, cli, asset, ark, music, fal,
    apimodels, sfx, sprite (full types + APIs)
 5. Complete event catalog
@@ -45,8 +45,8 @@ Layer 2 — src/index.ts:
 
 ```ts
 const framework = createCore(coreConfig, {
-  plugins: [                                  // 21 regular plugins, dependency order
-    registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, translatePlugin,
+  plugins: [                                  // regular plugins, dependency order (dialogue after voiceover)
+    registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, dialoguePlugin, translatePlugin,
     promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, sfxPlugin, spritePlugin, assetPlugin,
     elevenlabsPlugin, openaiPlugin, codexPlugin, claudePlugin, falPlugin,
     apimodelsPlugin, arkPlugin, composePlugin, cliPlugin
@@ -96,7 +96,7 @@ stop → process.exit(code). Project config:
 
 Key facts:
 - Regular plugin APIs mount on the app BY NAME: app.registry, app.buildfile,
-  app.runner, app.voiceover, app.translate, app.promptGen, app.image, app.video,
+  app.runner, app.voiceover, app.dialogue, app.translate, app.promptGen, app.image, app.video,
   app.music, app.sfx, app.sprite, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
   app.apimodels, app.ark, app.compose, app.cli. Core APIs mount too (app.limits, ...).
   There is NO `app.plugins.<name>` indirection.
@@ -117,13 +117,14 @@ Key facts:
 Value exports:
 - createApp, createPlugin, defineConfig (type ProjectConfig), defineBuild
 - Plugin instances: apimodelsPlugin, arkPlugin, assetPlugin, buildfilePlugin,
-  claudePlugin, cliPlugin, codexPlugin, composePlugin, elevenlabsPlugin, falPlugin,
+  claudePlugin, cliPlugin, codexPlugin, composePlugin, dialoguePlugin, elevenlabsPlugin, falPlugin,
   imagePlugin, journalPlugin, limitsPlugin, musicPlugin, openaiPlugin, promptGenPlugin,
   registryPlugin, runnerPlugin, sfxPlugin, spritePlugin, storePlugin, translatePlugin,
   videoPlugin, voiceoverPlugin
 - Error classes as runtime values, for `instanceof` (src/index.ts, `export * as`):
   ElevenlabsErrors, OpenaiErrors, ArkErrors, FalErrors, ApimodelsErrors (each
-  RetryableProviderError, TerminalProviderError, FlaggedProviderError) and ClaudeErrors,
+  RetryableProviderError, TerminalProviderError, FlaggedProviderError; ElevenlabsErrors also
+  LocalFailureError) and ClaudeErrors,
   CodexErrors (RetryableProviderError, TerminalProviderError; no flagged class).
   The same names under the plugin namespaces (`Fal.RetryableProviderError`, ...) are
   type aliases only: use them in annotations, never with `instanceof`.
@@ -132,6 +133,8 @@ Value exports:
 - Type namespaces Asset (AssetRequest, AssetRecord, AssetResult, AssetJobPoll,
   AssetHandler, AssetFile, AssetGroupKind, AssetApi, Config) and Ark (Config, State,
   ArkApi, ArkInfo, ArkRegion, EstimateRequest, error class types)
+- Type namespace Dialogue (DialogueLine, DialogueRequest, DialogueSettings, DialogueResult,
+  DialogueLineTiming, DialogueHandler, DialogueApi, DialogueContext, Config, RegistryApi)
 - Type namespaces Music (MusicChunk, MusicRequest, MusicResult, MusicJobPoll,
   MusicHandler, MusicApi, MusicContext, Config, RegistryApi) and Fal (Config, State,
   UploadMode, FalApi, FalInfo, FalTask, FalModelInfo, LocalFile, RetryHint,
@@ -157,7 +160,7 @@ Value exports:
   ApimodelsInfo, ApimodelsApi, ApimodelsProviderError, error class types)
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
-- Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image,
+- Journal, Store, Limits, Buildfile, Runner, Voiceover, Dialogue, Translate, PromptGen, Image,
   Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose,
   Cli
 (registry is Nano tier and ships no types.ts — its 4-method surface is declared once as
@@ -442,7 +445,10 @@ export type BuildItem = z.infer<typeof buildItemSchema>;
 //     params?: Record<string, unknown>; pack?: { name: string; version: string } }
 export type BuildSpec = z.infer<typeof buildSpecSchema>;
 // = { version: 1; name: string; defaults?: { provider?: string; maxAttempts?: number };
-//     items: BuildItem[]; itemsFrom?: string }
+//     items: BuildItem[]; itemsFrom?: string;
+//     locales?: string[];                       // the build's locale set (non-empty, unique)
+//     cast?: Record<string, CastEntry> }        // named characters + per-locale overrides
+// BuildItem also takes locales?: true | string[] (expand this item per locale).
 export type Config = {
   defaultGlob: string;  // default "**/*.moku.yaml"
   schemaPath: string;   // default ".moku/build.schema.json"
@@ -470,6 +476,21 @@ Standalone helper (also re-exported from "@moku-labs/ai"):
 export function defineBuild(spec: BuildSpec): BuildSpec;
 // pure factory; validates through the exact schema the YAML loader uses
 ```
+
+Locales and cast. compile() expands them after itemsFrom and before the $ref check; defineBuild()
+only validates. An item with `locales: true` (the top-level list) or a subset list becomes one
+ordinary item per locale, each with its own planning key and cache entry (changing one cast voice
+re-runs only the items that use it). A file that uses none of the fields compiles as before.
+- Ids: the item needs an id. `${locale}` is replaced; an id without it gets `-<locale>`
+  appended (in front of a trailing `{nine=...}` hint). Every string at a key named `id` anywhere in
+  `input` (a dialogue line id) must contain `${locale}` or be a localized value.
+- Localized values: in input and params, an object whose keys are all locale codes is replaced by
+  its entry (a missing one: `items.0.input.lines.2.text: no "en" value`). `{ width, height }` stays.
+- `${locale}` in any string of input and params (also in $ref / $file) is replaced.
+- `$cast: <name>` in an object merges the cast member's base fields with its override for the
+  locale; the object's own keys win; unknown name: `items.0.input.lines.0.$cast: no cast member "bob"`.
+- An item without `locales` is not expanded (`$cast` resolves base fields only). The item-level
+  `locales` key is removed from compiled items; `cast` and top-level `locales` stay on the spec.
 
 --------------------------------------------------------------------------------
 4.3 runner — app.runner (Complex tier; depends: [registryPlugin, buildfilePlugin])
@@ -557,6 +578,9 @@ export type HandlerResult = {
   body?: Uint8Array; audio?: Uint8Array; image?: Uint8Array; video?: Uint8Array; text?: string;
   mimeType?: string;
   images?: { image: Uint8Array; mimeType: string }[]; // every image of a multi-image result, in order; each one stored
+  outputs?: { bytes: Uint8Array; mimeType: string; name?: string }[]; // any task; wins over images; each stored,
+                                                       // journaled as outputs; `name` = the file a named output
+                                                       // exports under (a dialogue line)
   costUsd: number; meta?: Record<string, unknown>;
 };
 export type JobPoll =
@@ -611,7 +635,8 @@ export type RunnerApi = {
     // runId default: newest run; outDir default "out"; flat default false.
     // Writes <outDir>/<build name>/<label>.<ext>, or <outDir>/<label>.<ext> with flat: true
     // (no build folder; the build name is not checked). label = item id, else <NN>-<task>.
-    // A multi-output item adds <label>-2.<ext> … <label>-N.<ext> (cost on the first file).
+    // A multi-output item adds <label>-2.<ext> … <label>-N.<ext> (cost on the first file); an output
+    // with a `name` (a dialogue line) is written as <label folder>/<name>.<ext> instead.
     // An unsafe label, or a target this export already wrote (with flat: the same label in
     // two builds), is skipped and listed in `skipped`; the first file is kept.
 };
@@ -639,6 +664,11 @@ export type VoiceoverRequest = {
   language?: string;                 // BCP-47 hint
   model?: string;
   format?: "mp3" | "wav" | "ogg";    // defaulted from config.defaultFormat when omitted
+  settings?: VoiceSettings;          // { stability?, similarity?, style?, speakerBoost?, speed? }
+  seed?: number;                     // integer >= 0, best-effort repeatable takes
+  previousText?: string;             // text spoken before this line, for intonation
+  nextText?: string;                 // text spoken after this line
+  outputFormat?: string;             // provider-scoped code (e.g. "mp3_44100_192"); wins over format
   params?: Record<string, unknown>;  // resolved pack values merged upstream
 };
 export type VoiceoverResult = {
@@ -670,6 +700,68 @@ export type VoiceoverApi = {
 
 Unknown-provider error (same shape for translate/promptGen with their task names):
 `[ai] No voiceover provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+--------------------------------------------------------------------------------
+4.4a dialogue — app.dialogue (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "dialogue" task contract: a multi-speaker scene generated in ONE provider request, so the
+voices answer each other in one take. The result carries the whole mix and one audio file per line,
+so a game can play a line on its own. Use voiceover for one voice and one line. A handler has
+estimate + execute; there is no submit + poll form. DialogueResult is structurally a runner
+HandlerResult (audio + mimeType + outputs), so the runner stores and exports every output with no
+dialogue-specific code. api.ts narrows registry values with the runtime guard isDialogueHandler
+(the task's ONE audited cast, no `as`).
+
+Contract (src/plugins/dialogue/contract.ts, self-contained; providers type-import it):
+
+```ts
+export type DialogueLine = {
+  id?: string;      // file name of this line's cut (no extension, no slash), e.g. "ep02-signAlice-ru"
+  text: string;     // audio tags allowed for models that take them ("[tense] ...")
+  voice: string;    // provider-scoped voice id
+};
+export type DialogueSettings = { stability?: number; similarity?: number }; // scene-wide
+export type DialogueRequest = {
+  lines: DialogueLine[];              // in speaking order
+  model?: string;                     // provider default when absent (elevenlabs: eleven_v4)
+  language?: string;                  // BCP-47 / ISO 639-1 hint
+  settings?: DialogueSettings;
+  seed?: number;
+  outputFormat?: string;              // provider-scoped code, e.g. "mp3_44100_192" or "wav_44100"
+  params?: Record<string, unknown>;   // raw provider fields, spread last
+};
+export type DialogueLineTiming = { index: number; id?: string; startMs: number; endMs: number };
+export type DialogueResult = {
+  audio: Uint8Array;                  // the whole scene
+  mimeType: string;
+  costUsd: number;
+  outputs: { bytes: Uint8Array; mimeType: string; name?: string }[]; // [0] = the whole scene, then one per line with speech
+  lines: DialogueLineTiming[];        // the cut window of each line that has a file
+  meta?: Record<string, unknown>;     // metadata only, never a payload echo
+};
+export type DialogueHandler = {
+  estimate(request: DialogueRequest): { usd: number };
+  execute(request: DialogueRequest, opts: { signal?: AbortSignal }): Promise<DialogueResult>;
+};
+```
+
+Config + API (src/plugins/dialogue/types.ts):
+
+```ts
+export type Config = { defaultProvider: string }; // default "elevenlabs"
+export type DialogueApi = {
+  generate(request: DialogueRequest,
+    opts?: { signal?: AbortSignal; provider?: string }): Promise<DialogueResult>; // NOT journaled
+  estimate(request: DialogueRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[]; // = registry.providers("dialogue")
+};
+```
+
+Unknown-provider error: `[ai] No dialogue provider named "<name>" is registered.\n  Available: <list or "none">.`
+
+Durable path: a `task: dialogue` build item needs no runner change. Export writes the mix as
+<label>.<ext> plus one <line id>.<ext> per named line beside it (out/<build>/voices/ep02-quarrel-ru.mp3,
+voices/ep02-signAlice-ru.mp3, ...). Combine with `cast` + `locales: true` (§4.2) to build one scene per language.
 
 --------------------------------------------------------------------------------
 4.5 translate — app.translate (Standard tier; depends: [registryPlugin]; stateless)
@@ -991,20 +1083,25 @@ Unknown-provider error (also for a value that fails isVideoHandler):
 --------------------------------------------------------------------------------
 Provider adapter for ElevenLabs. Thin fetch client, no SDK. onInit registers
 ("voiceover", "elevenlabs") → createVoiceoverHandler(ctx), ("sfx", "elevenlabs") →
-createSfxHandler(ctx) (§4.20) and ("music", "elevenlabs") → createMusicHandler(ctx). POST
-/v1/text-to-speech/{voiceId}?output_format=... (mp3→mp3_44100_128, wav→pcm_44100,
-ogg→ogg_44100). API key resolved via ctx.env at request time only (info()/estimate()
+createSfxHandler(ctx) (§4.20), ("music", "elevenlabs") → createMusicHandler(ctx) and
+("dialogue", "elevenlabs") → createDialogueHandler(ctx). POST
+/v1/text-to-speech/{voiceId}?output_format=... (legacy format mp3→mp3_44100_128,
+wav→wav_44100 (a real WAV; it was raw pcm_44100), ogg→opus_48000_128; an `outputFormat` code
+wins over `format`). API key resolved via ctx.env at request time only (info()/estimate()
 are key-free). estimate = text.length × per-character price for the resolved model
-(request.model ?? config.defaultModel); unpriced models estimate $0.
+(request.model ?? config.defaultModel); unpriced voiceover models estimate $0.
 
 ```ts
 export type Config = {
   apiKeyEnv: string;      // default "ELEVENLABS_API_KEY"
   baseUrl: string;        // default "https://api.elevenlabs.io"
-  defaultModel: string;   // default "eleven_multilingual_v2"
+  defaultModel: string;   // default "eleven_multilingual_v2" (voiceover)
+  defaultDialogueModel: string; // default "eleven_v4"
+  dialogueMaxChars: number;     // default 2000 (characters over all lines of one dialogue request)
   timeoutMs: number;      // default 60_000 (AbortSignal.timeout merged with caller signal)
   musicTimeoutMs: number; // default 600_000 (one /v1/music request)
-  priceOverrides: Record<string, number>; // USD/char by model; sfx:<model>#second / #auto; music:<model>
+  dialogueTimeoutMs: number;    // default 180_000 (one /v1/text-to-dialogue request)
+  priceOverrides: Record<string, number>; // USD/char by model (voice + dialogue); sfx:<model>#second / #auto; music:<model>
 };
 export type State = { prices: Record<string, number> | null }; // lazy effective table
 
@@ -1028,13 +1125,77 @@ export class FlaggedProviderError extends Error {
   readonly kind: "content-policy" = "content-policy";
   constructor(message: string);
 }
+export class LocalFailureError extends Error {         // dialogue audio with no readable mp3 frame / wav data
+  readonly kind: "local-failure" = "local-failure";    // failed after one attempt
+  readonly publicMessage: string;
+}
 ```
 
-Bundled prices (USD/char): eleven_multilingual_v2 0.0003 · eleven_turbo_v2_5 0.000_15 ·
-eleven_flash_v2_5 0.000_06 · eleven_monolingual_v1 0.0003.
+Bundled prices (USD/char; checked against elevenlabs.io/pricing/api 2026-11-10):
+eleven_v4 · eleven_v3 · eleven_multilingual_v2 0.000_08 (0.08 per 1K) ·
+eleven_v4_turbo · eleven_v3_conversational · eleven_flash_v2_5 · eleven_turbo_v2_5 0.000_04
+(0.04 per 1K) · eleven_monolingual_v1 0.0003 (unchanged). eleven_multilingual_v2 was 0.0003 and
+flash / turbo were 0.000_06 / 0.000_15 before.
 Missing-key error (before any network call):
 `[ai] ELEVENLABS_API_KEY is not set.\n  Export it or set config.apiKeyEnv to the variable that holds your key.`
-Logs (redacted): elevenlabs:voiceover:done (info) / elevenlabs:voiceover:failed (warn).
+Logs (redacted): elevenlabs:voiceover:done (info) / elevenlabs:voiceover:failed (warn) /
+elevenlabs:voiceover:settings-ignored (warn, { model, keys }).
+
+Output formats (formats.ts; `outputFormat` names a code, else the legacy `format`, else mp3_44100_128;
+an unknown code is refused before any request: `[ai] Unknown ElevenLabs output format "<code>".`):
+- mp3_22050_32, mp3_44100_32/64/96/128 (any plan) and mp3_44100_192 (Creator or above) → audio/mpeg
+- wav_16000/22050/24000/48000 (any plan) and wav_44100 (Pro or above) → audio/wav
+- pcm_16000/22050/24000/48000 (any plan) and pcm_44100 (Pro or above) → audio/L16;rate=<hz>
+  (raw headerless samples, exported as .bin; voiceover only)
+- opus_48000_64/128/192 → audio/ogg (voiceover only)
+Dialogue takes mp3_* and wav_* only (it cuts the scene itself). A plan below the one a code needs
+gets a 4xx from ElevenLabs: terminal failed.
+
+voiceover voice fields: language → language_code (primary subtag lowercased; NOT sent for
+eleven_multilingual_v2, eleven_multilingual_v1, eleven_monolingual_v1, which detect the language);
+settings.stability → voice_settings.stability; settings.similarity → similarity_boost;
+settings.style → style; settings.speakerBoost → use_speaker_boost; settings.speed → speed;
+seed → seed; previousText / nextText → previous_text / next_text. v3 and v4 models (eleven_v3*,
+eleven_v4*) honour only stability and similarity: style, speakerBoost and speed are not sent and one
+warning names them.
+
+dialogue — ("dialogue", "elevenlabs"): estimate + execute. POST
+/v1/text-to-dialogue/with-timestamps?output_format=<code>; body
+{ "inputs": [{ "text", "voice_id" }], "model_id", "language_code"?, "settings": { "stability",
+"similarity" }?, "seed"?, ...params } (settings keys are stability and similarity, not
+similarity_boost; language_code follows the voiceover rule; params spread last). A line takes id,
+text and voice; other line keys are not sent and one warning names them
+(elevenlabs:dialogue:line-fields-ignored). Rules, checked by estimate and execute before any request,
+each a TerminalProviderError 400 (so `moku estimate` shows them before any spend): at least one
+line, every line has text and voice · characters over all lines ≤ dialogueMaxChars (2000) ·
+at most 10 distinct voices · a line id is one file name (no / or \, not "." or "..", unique) ·
+output format mp3_* or wav_* · the model has a price row. Cost = characters over all lines × model
+price (eleven_v4: $0.08 per 1K).
+The cut: the response carries audio_base64 and voice_segments (start/end per line). Per line, speech
+runs from its earliest segment start to its latest end; window = from max(start − 0.050 s, end of the
+previous line's speech, 0) to min(end + 0.150 s, start of the next line's speech, duration). The
+clamp keeps a cut from carrying the next line's first syllable (overlapping speech: the raw span).
+Done in TypeScript without ffmpeg or re-encoding: mp3 by whole MPEG frames (ID3v2 and Xing/Info
+skipped), wav by whole samples with a fresh 44-byte header. Result: outputs[0] = whole scene, then
+one output per line with speech named by the line id (no id: unnamed, exported <label>-2, -3, …);
+lines = cut windows; meta = { model, characters, voices, missingLines? }. A line with no segment gets
+no file (meta.missingLines, a warning); the item still succeeds. A response that is not JSON or lacks
+audio_base64 / voice_segments is a retryable 502; unreadable audio is LocalFailureError.
+Logs: elevenlabs:dialogue:done (info, { model, format }) / :failed (warn) / :lines-missing (warn).
+
+```yaml
+  - id: voices/ep02-quarrel
+    task: dialogue
+    provider: elevenlabs
+    input:
+      model: eleven_v4
+      language: ru
+      seed: 7
+      settings: { stability: 0.5, similarity: 0.75 }
+      lines:
+        - { id: ep02-signAlice-ru, text: "[tense] Я ничего не подписывала!", voice: TPIitICAZ8CqlGZ81AKm }
+        - { id: ep02-signDaniel-ru, text: "[bitterly] Ты давно здесь не живёшь, Элис.", voice: 6A9D8WSMm4rFsg2DWFeE }
+```
 
 music — ("music", "elevenlabs"): estimate + execute, no submit + poll. POST /v1/music is
 synchronous and returns the mp3 (https://elevenlabs.io/docs/api-reference/music/compose). Needs
@@ -2180,6 +2341,9 @@ voiceover:
   defaultProvider: string = "elevenlabs"
   defaultFormat: "mp3" | "wav" | "ogg" = "mp3"
 
+dialogue:
+  defaultProvider: string = "elevenlabs"
+
 translate:
   defaultProvider: string = "openai"
 
@@ -2198,9 +2362,12 @@ elevenlabs:
   apiKeyEnv: string = "ELEVENLABS_API_KEY"
   baseUrl: string = "https://api.elevenlabs.io"
   defaultModel: string = "eleven_multilingual_v2"
+  defaultDialogueModel: string = "eleven_v4"
+  dialogueMaxChars: number = 2000              — most characters of one dialogue request, over all lines
   timeoutMs: number = 60_000
   musicTimeoutMs: number = 600_000             — one /v1/music request
-  priceOverrides: Record<string, number> = {}  — USD/char by model; sfx:<model>#second / sfx:<model>#auto; music:<model>
+  dialogueTimeoutMs: number = 180_000          — one /v1/text-to-dialogue request
+  priceOverrides: Record<string, number> = {}  — USD/char by model (voice + dialogue); sfx:<model>#second / sfx:<model>#auto; music:<model>
 
 openai:
   apiKeyEnv: string = "OPENAI_API_KEY"
@@ -2605,6 +2772,7 @@ everything it depends on):
   2. buildfile     (deps: none)   Standard
   3. runner        (deps: registry, buildfile)          Complex
   4. voiceover     (deps: registry)                      Standard
+     dialogue      (deps: registry), registered right after voiceover  Standard
   5. translate     (deps: registry)                      Standard
   6. promptGen     (deps: registry)                      Standard
   7. image         (deps: registry)                      Standard
@@ -2614,7 +2782,8 @@ everything it depends on):
  11. sprite        (deps: registry)                      Standard
  12. asset         (deps: registry)                      Standard
  13. elevenlabs    (deps: registry) — onInit registers ("voiceover","elevenlabs"),
-                    ("sfx","elevenlabs"), ("music","elevenlabs")                     Complex
+                    ("sfx","elevenlabs"), ("music","elevenlabs"),
+                    ("dialogue","elevenlabs")                                        Complex
  14. openai        (deps: registry) — onInit registers ("voiceover","openai"),
                     ("translate","openai"), ("prompt-gen","openai")                  Complex
  15. codex         (deps: registry) — ("image","codex"), ("prompt-gen","codex")     Complex
@@ -2631,7 +2800,7 @@ everything it depends on):
 ASCII graph (A --> B means A depends on B):
 
   runner ----> registry        runner ----> buildfile
-  voiceover, translate, promptGen, image, video, music, sfx, sprite, asset -> registry
+  voiceover, dialogue, translate, promptGen, image, video, music, sfx, sprite, asset -> registry
   elevenlabs, openai, codex, claude, fal, apimodels, ark ---------------> registry
   compose ---> buildfile       compose ---> promptGen
   cli -------> runner          cli --------> buildfile    cli --------> compose
@@ -2647,6 +2816,8 @@ and W6 ark (registered after fal, before compose — fal stays the first, defaul
 provider; ark is the only asset provider). claude registers after codex; apimodels
 registers after fal and before ark (a second video provider; fal stays the default). music is registered after video and before
 asset; fal registers ("music","fal"), so fal is the default (and only) music provider.
+dialogue is registered right after voiceover; elevenlabs registers ("dialogue","elevenlabs") in onInit,
+so elevenlabs is the default (and only built-in) dialogue provider.
 sfx and sprite are registered right after music. elevenlabs registers ("sfx","elevenlabs")
 before fal registers ("sfx","fal"), so elevenlabs is the default sfx provider; fal is the
 only sprite provider.

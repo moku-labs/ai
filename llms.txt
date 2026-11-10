@@ -11,7 +11,7 @@
   Global `Config` and `Events` are both empty by ratified decision — all configuration
   is per-plugin; the runner declares its own events.
 - Layer 2 (`src/index.ts`): `createCore(coreConfig, { plugins: [...] })` assembles the
-  19 regular plugins in dependency order and exports the public surface.
+  23 regular plugins in dependency order and exports the public surface.
 - Layer 3 (consumer apps): `import { createApp, createPlugin } from "@moku-labs/ai"`.
   `createApp({ plugins?, pluginConfigs?, onReady?, ... })` → `await app.start()`.
 - The `moku` bin (`src/bin.ts`) is a Layer-3 consumer: `loadProjectConfig` (`src/plugins/cli/project-config.ts`)
@@ -67,7 +67,8 @@ lanes `video/apimodels` 2 concurrent / 20 rpm and `video/ark` 3 concurrent / 180
 - `runner.export({ runId?, outDir?, flat? })` copies done artifacts to
   `<outDir>/<build name>/<label>.<ext>` (label = item id, else `<NN>-<task>`), or to
   `<outDir>/<label>.<ext>` with `flat: true` (default false). A multi-output item adds
-  `<label>-2.<ext>` … `<label>-N.<ext>`. An unsafe label, or a target this export already wrote
+  `<label>-2.<ext>` … `<label>-N.<ext>`; an output with a `name` (a dialogue line) is written
+  as `<dir of label>/<name>.<ext>` beside the first file instead. An unsafe label, or a target this export already wrote
   (with `flat`: the same label in two builds), is skipped and listed in `skipped`; the first file
   is kept. With `flat` the build name is not checked (no build folder).
 - The atomic gate (`journal.gateToDispatching`) verifies still-queued + projected spend
@@ -123,6 +124,10 @@ for await (const e of app.runner.events()) { /* item:* stream records */ }
 // One-off facades (NOT journaled)
 await app.voiceover.generate({ text: "Hi", voice: "en-US-1" }, { provider: "elevenlabs" });
 app.voiceover.estimate({ text: "Hi", voice: "en-US-1" });                   // { usd }
+await app.voiceover.generate({ text: "Hi", voice: "v1", settings: { stability: 0.5, similarity: 0.75 }, seed: 7, outputFormat: "mp3_44100_192" }, { provider: "elevenlabs" });
+// Dialogue: one request for the whole scene → { audio (mix), outputs: [mix, one file per line], lines (cut windows), costUsd }
+await app.dialogue.generate({ model: "eleven_v4", language: "ru", lines: [{ id: "a", text: "[tense] Привет", voice: "v1" }, { id: "b", text: "Привет", voice: "v2" }] });
+app.dialogue.estimate({ lines: [{ text: "Hi", voice: "v1" }] });             // { usd }
 await app.translate.generate({ text: "Hi", targetLang: "es" });
 await app.promptGen.generate({ prompt: "Write a tagline." });
 // Tool turn (fal only): { toolCalls, finishReason, usage } on every result
@@ -192,6 +197,38 @@ items:                  # required (may be [])
     params: { }         # optional, part of the planning key
     pack: { name: narration, version: "1.0.0" }       # optional
 itemsFrom: extra.ndjson # optional NDJSON, one BuildItem per line, appended at compile
+locales: [ru, en]       # optional: the build's locale set (non-empty, unique codes)
+cast:                   # optional: named characters (base fields + per-locale overrides)
+  alice: { voice: v-ru, locales: { en: { voice: v-en } } }
+```
+
+Locales and cast (buildfile `compile()` expands them; `defineBuild()` only validates): an item with
+`locales: true` (the top-level list) or a subset list becomes one item per locale. Id: `${locale}` is
+replaced, else `-<locale>` is appended (before a trailing `{nine=...}` hint). In `input`/`params`:
+`${locale}` in any string is replaced; an object whose keys are all locale codes is replaced by its
+entry (a missing one is an error naming the path); `$cast: <name>` merges the cast member's base fields
+with its locale override (the object's own keys win; unknown name is an error). Every string at a key
+named `id` inside `input` (a dialogue line id) must contain `${locale}` or be localized. An item
+without `locales` is not expanded. Each locale item has its own planning key and cache entry.
+
+```yaml
+locales: [ru, en]
+cast:
+  alice: { voice: TPIitICAZ8CqlGZ81AKm, locales: { en: { voice: EXAVITQu4vr4xnSDxMaL } } }
+  daniel: { voice: 6A9D8WSMm4rFsg2DWFeE, locales: { en: { voice: N2lVS1w4EtoT3dr4eOWO } } }
+items:
+  - id: voices/ep02-quarrel-${locale}      # → ep02-quarrel-ru.mp3 (mix) + ep02-signAlice-ru.mp3 + ep02-signDaniel-ru.mp3, same for en
+    task: dialogue
+    provider: elevenlabs
+    locales: true
+    input:
+      model: eleven_v4
+      language: ${locale}
+      settings: { stability: 0.5, similarity: 0.75 }
+      seed: 7
+      lines:
+        - { id: "ep02-signAlice-${locale}", $cast: alice, text: { ru: "[angry] Я ничего не подписывала!", en: "[angry] I never signed anything!" } }
+        - { id: "ep02-signDaniel-${locale}", $cast: daniel, text: { ru: "[tired] Нам нужны были деньги.", en: "[tired] We needed the money." } }
 ```
 
 CLI exit codes: 0 ok · 1 failure · 2 validation · 3 usage · 4 paused · 5 budget stop.
@@ -207,7 +244,7 @@ src/
   index.ts                # Layer 2: framework assembly; exports createApp, createPlugin, defineConfig, ProjectConfig, defineBuild, helpers, plugins, type namespaces, <Provider>Errors
   bin.ts                  # `moku` bin — Layer-3 consumer: loadProjectConfig → createApp → start → cli.dispatch → stop → exit
   plugins/
-    index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Translate, PromptGen, Image, Video, Music, Sfx, Sprite, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose, Cli)
+    index.ts              # barrel: plugin instances + type namespaces (Journal, Store, Limits, Buildfile, Runner, Voiceover, Dialogue, Translate, PromptGen, Image, Video, Music, Sfx, Sprite, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose, Cli)
     journal/              # index.ts, types.ts, api.ts, db.ts, runs.ts, items.ts, gate.ts, attempts.ts, snapshot.ts, provider-records.ts, state.ts, schema.ts, driver/ (bun:sqlite | better-sqlite3)
     store/                # index.ts, types.ts, api.ts, state.ts
     limits/               # index.ts, types.ts, api.ts, state.ts
@@ -215,10 +252,11 @@ src/
     buildfile/            # index.ts, types.ts, api.ts, schema.ts (zod), define.ts (defineBuild), references.ts
     runner/               # index.ts, types.ts, api.ts, state.ts, pipeline.ts, plan.ts, claim.ts, resolve.ts, keys.ts, retry.ts, failure.ts, stream.ts, export.ts
     voiceover/            # index.ts, types.ts, api.ts, contract.ts, packs/
+    dialogue/             # index.ts, types.ts, api.ts, contract.ts (DialogueLine/Request/Result/Handler, isDialogueHandler)
     translate/            # index.ts, types.ts, api.ts, contract.ts
     promptGen/            # index.ts, types.ts, api.ts, contract.ts, resolve.ts, fallback.ts, loop/ (runToolLoop: run, tools, history, cache, types)
     image/ video/         # index.ts, types.ts, api.ts, contract.ts
-    elevenlabs/           # index.ts, types.ts, api.ts, client.ts, errors.ts, prices.ts, state.ts, voiceover/handler.ts, sfx/handler.ts, music/handler.ts
+    elevenlabs/           # index.ts, types.ts, api.ts, client.ts, errors.ts, formats.ts, prices.ts, support.ts, state.ts, voiceover/handler.ts, dialogue/ (handler, validate, response, cut, mp3, wav), sfx/handler.ts, music/handler.ts
     openai/               # index.ts, types.ts, api.ts, client.ts, errors.ts, prices.ts, state.ts, tts/ translate/ prompt-gen/ handlers
     codex/                # index.ts, types.ts, api.ts, cli.ts, errors.ts, message.ts, prices.ts, state.ts, workdir.ts, image/ prompt/ handlers
     claude/               # index.ts, types.ts, api.ts, cli.ts, errors.ts, prompt/ handler
@@ -250,7 +288,8 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - registry: dumb task→provider→handler map; handlers transported as unknown | Nano | register, resolve, providers, tasks | events: none
 - buildfile: YAML + defineBuild() → validated BuildSpec IR via one zod schema; stateless pure compiler, works offline | Standard | compile, loadGlob, jsonSchema, template (+ standalone defineBuild) | events: none
 - runner (deps: registry, buildfile): the durable orchestrator — plan → admit → gate → execute → persist → report; owns resume, budget stop, clean pause, retry taxonomy | Complex | run, resume, estimate, status, events, export | events: run:progress, run:done, run:failed, run:budget-stop, run:paused
-- voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params | Standard | generate, estimate, providers | events: none
+- voiceover (deps: registry): owns "voiceover" contract (VoiceoverRequest/Result/Handler) + one-off facade; merges template-pack params; VoiceoverRequest also takes settings (VoiceSettings: stability, similarity, style, speakerBoost, speed), seed, previousText, nextText, outputFormat (provider-scoped code, wins over format) | Standard | generate, estimate, providers | events: none
+- dialogue (deps: registry): owns "dialogue" contract (DialogueLine { id?, text, voice } / DialogueRequest { lines, model?, language?, settings? { stability, similarity }, seed?, outputFormat?, params? } / DialogueResult { audio (whole scene), mimeType, costUsd, outputs (mix first, then one per line with speech, named by line id), lines (cut windows), meta? } / DialogueHandler: estimate + execute, no job form) + one-off facade; the runner stores every output and exports the mix as <label>.<ext> plus one <line id>.<ext> per named line beside it; module export isDialogueHandler | Standard | generate, estimate, providers | events: none
 - translate (deps: registry): owns "translate" contract + one-off facade | Standard | generate, estimate, providers | events: none
 - promptGen (deps: registry): owns "prompt-gen" contract + one-off facade (API name camelCase promptGen; task key kebab "prompt-gen"); backs compose; generate walks [provider, ...fallback] and switches only on PromptGenUnavailableError (missing/auth/limit) or HTTP 401/402/403/429 or a breaker-open lane, one limits lane "prompt-gen/<provider>/default" per attempt. Tool calling: request messages (ChatMessage[] of ContentPart text/image), tools (ToolDefinition: name, description, JSON-schema inputSchema), toolChoice, cacheSystem; result toolCalls, finishReason, usage (PromptGenUsage: promptTokens, completionTokens, cachedTokens, cacheWriteTokens; optional cachedReadTokens, cachedWriteTokens when the provider reports them) are REQUIRED, so external handlers must return them. claude/codex/openai throw PromptGenUnavailableError reason "unsupported" for messages/tools/toolChoice (generate falls back; fal serves them). Package root also exports ToolArgumentsError (tool arguments not JSON; toolName, raw) and runToolLoop (library function, not a plugin: model:<n> / tool:<callId> / tool:<callId>:start|:wait steps of the caller's journal; budget breaker before model calls and costed tools; finishAt + finishNote once; "Not run: <reason>." answers; ask, keepImages, maxSteps, cancel; cache "system" | "conversation" (default: system mark + up to two rolling cache: true marks on the newest stable user/tool message, max 4 breakpoints with caller marks) | "off"; stoppedBy done | budget | steps | cancel | asked) | Standard | generate, estimate, providers | events: none
 - image (deps: registry): owns "image" contract (ImageRequest/Result/Handler) + one-off facade | Standard | generate, estimate, providers | events: none
@@ -259,7 +298,7 @@ Regular (in registration/dependency order; APIs on app.<name>):
 - sfx (deps: registry): owns "sfx" contract (SfxRequest/SfxResult/SfxHandler: estimate + execute, no job form) + one-off facade; SfxRequest { prompt, model (REQUIRED), durationMs?, promptInfluence? 0..1, loop?, params? }; output is always mp3 (audio/mpeg → .mp3); module export isSfxHandler | Standard | generate, estimate, providers | events: none
 - sprite (deps: registry): owns "sprite" contract (SpriteFile/SpriteRequest/SpriteResult/SpriteHandler: estimate + execute) + one-off facade; a sprite item `$ref`s an image item: SpriteRequest { source (resolved file), model (REQUIRED; "none" = already transparent), trim?=true, padding?=0, size?, fit?="contain"|"cover"|"fill", pixelArt?=false, alphaThreshold?=8, params? } → trimmed RGBA PNG; an item id may end with a nine-slice hint `{nine=l,t,r,b}` (kept in the exported file name); module exports isSpriteHandler and processSprite (the pure sharp pixel step providers run after their matte; not on the package root) | Standard | generate, estimate, providers | events: none
 - asset (deps: registry): owns "asset" contract (AssetRequest/AssetRecord/AssetHandler, submit + poll only) + one-off facade; register a portrait with a provider BEFORE any video item; the done artifact is the AssetRecord JSON under ASSET_MIME ("application/vnd.moku.asset+json", exported as .json); a video item `$ref`s it and gets a file with that MIME; re-register by bumping params.generation; package root also exports ASSET_MIME, encodeAssetRecord, parseAssetRecord | Standard | register, estimate, providers | events: none
-- elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs") and ("sfx","elevenlabs") (POST /v1/sound-generation, model eleven_text_to_sound_v2, price keys sfx:<model>#second / sfx:<model>#auto, a missing sfx price throws) and ("music","elevenlabs") (POST /v1/music, sync, estimate + execute; models music_v1 / music_v2 / music_v2_5; 0.15 USD per started minute, price keys music:<model>; chunks → composition_plan.chunks on v2 models only; seed only with chunks; paid ElevenLabs plan); fetch client (no SDK), per-character price table, RetryableProviderError/TerminalProviderError/FlaggedProviderError | Complex | info | events: none
+- elevenlabs (deps: registry): ElevenLabs provider — registers ("voiceover","elevenlabs") (POST /v1/text-to-speech/{voiceId}; voice_settings, seed, previous_text, next_text, language_code; language_code not sent for eleven_multilingual_v2/v1 and eleven_monolingual_v1; v3/v4 models keep only stability + similarity, style/speakerBoost/speed are dropped with one warning), ("dialogue","elevenlabs") (POST /v1/text-to-dialogue/with-timestamps, default model eleven_v4, body { inputs: [{ text, voice_id }], model_id, language_code?, settings: { stability, similarity }, seed? } ; ≤ dialogueMaxChars (2000) characters over all lines, ≤ 10 distinct voices, unique file-safe line ids, mp3_*/wav_* output only — each broken rule a terminal 400 before any request; the response is cut in TypeScript (no ffmpeg) into one mp3/wav per line with 0.05 s lead / 0.15 s tail, clamped so a cut never carries the neighbour line's speech; cost = characters × model price), ("sfx","elevenlabs") (POST /v1/sound-generation, model eleven_text_to_sound_v2, price keys sfx:<model>#second / sfx:<model>#auto, a missing sfx price throws) and ("music","elevenlabs") (POST /v1/music, sync, estimate + execute; models music_v1 / music_v2 / music_v2_5; 0.15 USD per started minute, price keys music:<model>; chunks → composition_plan.chunks on v2 models only; seed only with chunks; paid ElevenLabs plan); fetch client (no SDK), per-character price table (eleven_v4 / eleven_v3 / eleven_multilingual_v2 0.08 USD per 1K chars; eleven_v4_turbo / eleven_v3_conversational / eleven_flash_v2_5 / eleven_turbo_v2_5 0.04 USD per 1K), outputFormat codes (mp3_*, wav_*, pcm_*, opus_*; mp3_44100_192 needs Creator+, wav_44100 and pcm_44100 need Pro+; legacy format mp3 → mp3_44100_128, wav → wav_44100, ogg → opus_48000_128; an unknown code is refused before any request), RetryableProviderError/TerminalProviderError/FlaggedProviderError/LocalFailureError | Complex | info | events: none
 - openai (deps: registry): OpenAI provider — registers ("voiceover","openai"), ("translate","openai"), ("prompt-gen","openai") via official SDK (lazy client, SDK retries disabled); token/char pricing; same error taxonomy | Complex | info | events: none
 - codex (deps: registry): image and text provider over the local Codex CLI (`codex exec`, plan-billed, $0) — registers ("image","codex") and ("prompt-gen","codex"); params.images → --image, params.responseSchema in the prompt and validated with zod (never --output-schema: OpenAI strict mode rejects zod schemas), params.reasoning → model_reasoning_effort; openai/<id> mapped to -m | Complex | info | events: none
 - claude (deps: registry): text provider over the local Claude Code CLI (`claude -p --output-format json`, plan-billed, $0) — registers ("prompt-gen","claude"); images read with the Read tool under --restricted, params.responseSchema → --json-schema ($schema dropped), structured_output validated with zod, params.reasoning → --effort; anthropic/<id> mapped to --model | Complex | info | events: none
@@ -283,9 +322,10 @@ Config defaults (per plugin, override via createApp pluginConfigs or a moku.conf
 - buildfile: defaultGlob="**/*.moku.yaml", schemaPath=".moku/build.schema.json"
 - runner: maxAttempts=3, retryBaseMs=1000, eventBufferSize=10000, pollIntervalMs=5000, jobTimeoutMs=1800000, maxActiveRuns=1
 - voiceover: defaultProvider="elevenlabs", defaultFormat="mp3"
+- dialogue: defaultProvider="elevenlabs"
 - translate: defaultProvider="openai"
 - promptGen: defaultProvider="openai", fallback=[]
-- elevenlabs: apiKeyEnv="ELEVENLABS_API_KEY", baseUrl="https://api.elevenlabs.io", defaultModel="eleven_multilingual_v2", timeoutMs=60000, musicTimeoutMs=600000, priceOverrides={}
+- elevenlabs: apiKeyEnv="ELEVENLABS_API_KEY", baseUrl="https://api.elevenlabs.io", defaultModel="eleven_multilingual_v2", defaultDialogueModel="eleven_v4", dialogueMaxChars=2000, timeoutMs=60000, musicTimeoutMs=600000, dialogueTimeoutMs=180000, priceOverrides={} (USD per character by model id; sfx:<model>#second|#auto; music:<model>)
 - openai: apiKeyEnv="OPENAI_API_KEY", baseUrl=undefined, models={tts:"gpt-4o-mini-tts", chat:"gpt-4o-mini"}, timeoutMs=60000, priceOverrides={}
 - image: defaultProvider="codex"
 - video: defaultProvider="fal", pollIntervalMs=5000

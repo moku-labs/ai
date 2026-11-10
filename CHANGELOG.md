@@ -7,6 +7,38 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **dialogue: a new task for multi-speaker scenes.** `task: dialogue` (and `app.dialogue.generate` /
+  `estimate` / `providers`, config `dialogue.defaultProvider`, default `"elevenlabs"`) speaks a whole
+  scene in one request, so the voices answer each other in one take. A line is `{ id?, text, voice }`;
+  the request takes `model`, `language`, `settings` (`stability`, `similarity`), `seed`, `outputFormat`
+  and `params`. The result is the whole mix plus one audio file per line. The package exports the
+  `Dialogue` type namespace and `dialoguePlugin`.
+- **elevenlabs: the `("dialogue", "elevenlabs")` handler.** Model `eleven_v4` (config
+  `defaultDialogueModel`), `POST /v1/text-to-dialogue/with-timestamps`. At most 2000 characters over all
+  lines (`dialogueMaxChars`) and 10 distinct voices, each a terminal 400 before any request, also in
+  `moku estimate`. The scene is cut into one mp3 or wav per line in TypeScript, with no ffmpeg: 0.05 s
+  lead and 0.15 s tail, clamped so a cut never carries the next line's speech. New config
+  `dialogueTimeoutMs` (180 000 ms) and the `LocalFailureError` class under `ElevenlabsErrors`.
+- **runner, journal: named outputs.** A handler result may carry `outputs: { bytes, mimeType, name? }[]`
+  for any task. Each output is stored and journaled (`name` only when set); export writes the first as
+  `<label>.<ext>` and a named one as `<label folder>/<name>.<ext>`. A journal without names keeps its
+  exact column text.
+- **buildfile: `cast` and `locales`.** A top-level `locales: [ru, en]` and `cast` (named characters with
+  per-locale voices and settings), and an item field `locales: true` that builds the item once per
+  language. `${locale}` in ids and strings, localized values (`text: { ru: "…", en: "…" }`) and
+  `$cast: <name>` are resolved in `compile()`. Every locale is an ordinary item with its own cache entry.
+  A build file that uses none of them compiles as before.
+- **voiceover, elevenlabs: voice fields.** `VoiceoverRequest` takes `settings` (`stability`,
+  `similarity`, `style`, `speakerBoost`, `speed`), `seed`, `previousText`, `nextText` and `outputFormat`.
+  elevenlabs sends them as `voice_settings`, `seed`, `previous_text`, `next_text` and
+  `?output_format=`, and `language` as `language_code`. v3 and v4 models keep only `stability` and
+  `similarity`; the rest is dropped with one warning (`elevenlabs:voiceover:settings-ignored`).
+- **elevenlabs: output formats.** `outputFormat` names an ElevenLabs code (`mp3_*`, `wav_*`, `pcm_*`,
+  `opus_*`); an unknown code is refused before any request. `mp3_44100_192` needs the Creator plan or
+  above, `wav_44100` and `pcm_44100` need Pro or above.
+- **elevenlabs: models and prices.** Price rows for `eleven_v4`, `eleven_v3`, `eleven_v4_turbo` and
+  `eleven_v3_conversational`.
+
 - **promptGen, anthropic: a 1-hour prompt cache per request.** `PromptGenRequest.cacheTtl` is
   `"5m"` (the default) or `"1h"`. With `"1h"` the anthropic provider sends
   `cache_control: { type: "ephemeral", ttl: "1h" }` on every cache mark of the request (system and
@@ -21,6 +53,20 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
   `params`. fal lists no per-image price for it, so the bundled price is Nano Banana Pro's
   (0.15 / 0.15 / 0.30), an upper bound. Set `image:nano-banana-2.1@2K` in `priceOverrides` once
   the real price is known.
+
+### Changed
+
+- **elevenlabs: voice prices follow the API pricing page (checked 2026-11-10).** `eleven_multilingual_v2`
+  drops from $0.30 to $0.08 per 1K characters, `eleven_flash_v2_5` and `eleven_turbo_v2_5` from
+  $0.06 / $0.15 to $0.04 per 1K. `moku estimate` shows the new numbers; a `priceOverrides` entry still wins.
+- **elevenlabs: `format: wav` now requests `wav_44100`**, a real WAV with a header, where it asked for
+  raw `pcm_44100` before. A script that post-processed the raw samples sets `outputFormat: pcm_44100`.
+  `wav_44100` needs the Pro plan or above; `wav_24000` and the lower rates work on any plan.
+- **elevenlabs: `format: ogg` now requests `opus_48000_128`** (Opus in an Ogg container), because
+  `ogg_44100` is not in the documented format list.
+- **elevenlabs: `language` is no longer sent with `eleven_multilingual_v2`**, `eleven_multilingual_v1`
+  and `eleven_monolingual_v1`, which ElevenLabs does not accept it for; they detect the language
+  from the text. Other models get the primary subtag as `language_code`.
 
 ### Fixed
 
