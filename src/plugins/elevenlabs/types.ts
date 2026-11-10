@@ -15,8 +15,9 @@ import type {
 
 /**
  * elevenlabs plugin configuration: API key env var, base URL, default
- * voiceover and dialogue models, the dialogue character limit, request
- * timeouts, and per-model price overrides.
+ * voiceover model, the dialogue character limit, request timeouts, and
+ * per-model price overrides. Dialogue has no default model: a request names it,
+ * because the runner hashes the input as written.
  *
  * @example
  * ```ts
@@ -24,7 +25,6 @@ import type {
  *   apiKeyEnv: "ELEVENLABS_API_KEY",
  *   baseUrl: "https://api.elevenlabs.io",
  *   defaultModel: "eleven_multilingual_v2",
- *   defaultDialogueModel: "eleven_v4",
  *   dialogueMaxChars: 2000,
  *   timeoutMs: 60_000,
  *   musicTimeoutMs: 600_000,
@@ -40,8 +40,6 @@ export type Config = {
   baseUrl: string;
   /** Default voiceover model. Default: "eleven_multilingual_v2". */
   defaultModel: string;
-  /** Default dialogue model. Default: "eleven_v4". */
-  defaultDialogueModel: string;
   /** Most characters one dialogue request may carry, summed over its lines (ElevenLabs' reliable limit). Default: 2000. */
   dialogueMaxChars: number;
   /** Request timeout, ms. Default: 60_000. */
@@ -62,11 +60,6 @@ export type Config = {
 /**
  * elevenlabs plugin state: the effective price table, computed once at
  * first use (bundled prices merged with `config.priceOverrides`).
- *
- * @example
- * ```ts
- * const state: State = { prices: null };
- * ```
  */
 export type State = {
   /** Effective price table (bundled prices merged with config.priceOverrides), computed once at first use. */
@@ -121,11 +114,6 @@ export type LocalFailureError = LocalFailureErrorClass;
  * `config`/`state`/`emit`; `require` is narrowed to the one declared
  * dependency (`registry`), and `env`/`log` are the injected core APIs this
  * plugin reads the API key and logs redacted failures through.
- *
- * @example
- * ```ts
- * export const createElevenlabsApi = (ctx: ElevenlabsContext): ElevenlabsApi => ({ ... });
- * ```
  */
 export type ElevenlabsContext = PluginCtx<Config, State> & {
   /** Resolves a dependency plugin's API by instance reference. */

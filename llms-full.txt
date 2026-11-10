@@ -723,7 +723,7 @@ export type DialogueLine = {
 export type DialogueSettings = { stability?: number; similarity?: number }; // scene-wide
 export type DialogueRequest = {
   lines: DialogueLine[];              // in speaking order
-  model?: string;                     // provider default when absent (elevenlabs: eleven_v4)
+  model: string;                      // required, no provider default (it is part of the artifact key); elevenlabs: eleven_v4 recommended
   language?: string;                  // BCP-47 / ISO 639-1 hint
   settings?: DialogueSettings;
   seed?: number;
@@ -1096,7 +1096,6 @@ export type Config = {
   apiKeyEnv: string;      // default "ELEVENLABS_API_KEY"
   baseUrl: string;        // default "https://api.elevenlabs.io"
   defaultModel: string;   // default "eleven_multilingual_v2" (voiceover)
-  defaultDialogueModel: string; // default "eleven_v4"
   dialogueMaxChars: number;     // default 2000 (characters over all lines of one dialogue request)
   timeoutMs: number;      // default 60_000 (AbortSignal.timeout merged with caller signal)
   musicTimeoutMs: number; // default 600_000 (one /v1/music request)
@@ -1166,7 +1165,8 @@ dialogue — ("dialogue", "elevenlabs"): estimate + execute. POST
 similarity_boost; language_code follows the voiceover rule; params spread last). A line takes id,
 text and voice; other line keys are not sent and one warning names them
 (elevenlabs:dialogue:line-fields-ignored). Rules, checked by estimate and execute before any request,
-each a TerminalProviderError 400 (so `moku estimate` shows them before any spend): at least one
+each a TerminalProviderError 400 (so `moku estimate` shows them before any spend): the request
+names a model (required, no default; eleven_v4 recommended) · at least one
 line, every line has text and voice · characters over all lines ≤ dialogueMaxChars (2000) ·
 at most 10 distinct voices · a line id is one file name (no / or \, not "." or "..", unique) ·
 output format mp3_* or wav_* · the model has a price row. Cost = characters over all lines × model
@@ -2362,7 +2362,6 @@ elevenlabs:
   apiKeyEnv: string = "ELEVENLABS_API_KEY"
   baseUrl: string = "https://api.elevenlabs.io"
   defaultModel: string = "eleven_multilingual_v2"
-  defaultDialogueModel: string = "eleven_v4"
   dialogueMaxChars: number = 2000              — most characters of one dialogue request, over all lines
   timeoutMs: number = 60_000
   musicTimeoutMs: number = 600_000             — one /v1/music request

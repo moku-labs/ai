@@ -89,13 +89,21 @@ export type AudioPiece = {
  *
  * @example
  * ```ts
- * const audio: CuttableAudio = openMp3(bytes) ?? fail();
- * const piece = audio.cut(0.5, 1.2);
+ * const audio = openMp3(sceneBytes); // a CuttableAudio, or undefined without a readable frame
+ * const piece = audio?.cut(0.5, 1.2); // whole frames covering [0.5, 1.2) s
  * ```
  */
 export type CuttableAudio = {
   /** Length of the audio, seconds (mp3: audio frames only, Xing/Info frame excluded). */
   durationSeconds: number;
-  /** Cuts `[from, to)` seconds, rounded outward to whole frames or samples, then clipped inside `hard`. */
+  /**
+   * Cuts `[from, to)` seconds: rounded outward to whole frames (mp3) or samples
+   * (wav), then clipped to the frames or samples that lie wholly inside `hard`.
+   *
+   * @param from - Start of the window, seconds.
+   * @param to - End of the window, seconds.
+   * @param hard - Bounds no frame may cross (the neighbours' speech); unbounded when absent.
+   * @returns The cut bytes and the window they really cover (empty when the bounds leave nothing).
+   */
   cut(from: number, to: number, hard?: CutBounds): AudioPiece;
 };

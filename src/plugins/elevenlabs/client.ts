@@ -89,10 +89,6 @@ function extractErrorDetail(parsedBody: unknown): ElevenlabsErrorDetail {
  *
  * @param response - The failed HTTP response.
  * @returns The parsed body, or undefined when it isn't valid JSON.
- * @example
- * ```ts
- * const body = await parseErrorBody(response);
- * ```
  */
 async function parseErrorBody(response: Response): Promise<unknown> {
   try {
@@ -100,6 +96,24 @@ async function parseErrorBody(response: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The message of the content refusal a `detail.status` names.
+ *
+ * @param detail - The `detail` fields of an error body.
+ * @returns The flagged message, or undefined when the status is absent or not a refusal.
+ * @example
+ * ```ts
+ * flaggedMessageOf({ status: "content_policy_violation" });
+ * // => "[ai] ElevenLabs rejected the request for content-policy reasons."
+ * flaggedMessageOf({ status: "invalid_content" }); // => undefined
+ * ```
+ */
+function flaggedMessageOf(detail: ElevenlabsErrorDetail): string | undefined {
+  const { status } = detail;
+  const isRefusal = status !== undefined && Object.hasOwn(FLAGGED_MESSAGES, status);
+  return isRefusal ? FLAGGED_MESSAGES[status] : undefined;
 }
 
 /**
@@ -111,18 +125,15 @@ async function parseErrorBody(response: Response): Promise<unknown> {
  *
  * @param response - The failed HTTP response.
  * @returns The classified provider error to throw.
- * @example
- * ```ts
- * throw await classifyHttpFailure(response);
- * ```
  */
 async function classifyHttpFailure(response: Response): Promise<Error> {
   const detail = extractErrorDetail(await parseErrorBody(response));
-  const flaggedMessage =
-    detail.status !== undefined && Object.hasOwn(FLAGGED_MESSAGES, detail.status)
-      ? FLAGGED_MESSAGES[detail.status]
-      : undefined;
+
+  // A content refusal is flagged whatever the numeric status is: it is never retried.
+  const flaggedMessage = flaggedMessageOf(detail);
   if (flaggedMessage !== undefined) return new FlaggedProviderError(flaggedMessage);
+
+  // Rate-limited: retryable, honouring the provider's Retry-After.
   if (response.status === 429) {
     const retryAfterMs = retryAfterMsFromHeader(response.headers.get("retry-after"));
     return new RetryableProviderError("[ai] ElevenLabs rate-limited the request.", {
@@ -130,11 +141,14 @@ async function classifyHttpFailure(response: Response): Promise<Error> {
       retryAfterMs
     });
   }
+  // The provider's side broke: retryable.
   if (response.status >= 500) {
     return new RetryableProviderError(`[ai] ElevenLabs returned HTTP ${response.status}.`, {
       status: response.status
     });
   }
+
+  // Any other 4xx is deterministic: terminal, the status only (never the body).
   return new TerminalProviderError(
     `[ai] ElevenLabs rejected the request (HTTP ${response.status}).`,
     response.status
@@ -151,7 +165,8 @@ async function classifyHttpFailure(response: Response): Promise<Error> {
  * @returns The merged signal fetch should observe.
  * @example
  * ```ts
- * const signal = mergeSignals(options.signal, AbortSignal.timeout(60_000));
+ * mergeSignals(undefined, AbortSignal.timeout(60_000)); // the timeout signal itself
+ * mergeSignals(AbortSignal.abort(), AbortSignal.timeout(60_000)).aborted; // true: aborts on either
  * ```
  */
 function mergeSignals(external: AbortSignal | undefined, timeout: AbortSignal): AbortSignal {
@@ -210,7 +225,14 @@ async function send(
  * @throws {FlaggedProviderError} On a content-policy rejection.
  * @example
  * ```ts
- * const audio = await elevenlabsRequest(options);
+ * const audio = await elevenlabsRequest({
+ *   baseUrl: "https://api.elevenlabs.io",
+ *   path: "/v1/sound-generation?output_format=mp3_44100_128",
+ *   apiKey: "xi-key",
+ *   body: { text: "coin pickup", model_id: "eleven_text_to_sound_v2" },
+ *   timeoutMs: 60_000
+ * });
+ * // => the mp3 bytes as a Uint8Array
  * ```
  */
 export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Promise<Uint8Array> {
@@ -231,7 +253,14 @@ export async function elevenlabsRequest(options: ElevenlabsRequestOptions): Prom
  * @throws {FlaggedProviderError} On a content-policy rejection.
  * @example
  * ```ts
- * const json = await elevenlabsJsonRequest(options); // the caller narrows it
+ * const json = await elevenlabsJsonRequest({
+ *   baseUrl: "https://api.elevenlabs.io",
+ *   path: "/v1/text-to-dialogue/with-timestamps?output_format=mp3_44100_128",
+ *   apiKey: "xi-key",
+ *   body: { inputs: [{ text: "Hi.", voice_id: "v1" }], model_id: "eleven_v4" },
+ *   timeoutMs: 180_000
+ * });
+ * // => { audio_base64: "SUQz...", voice_segments: [...] }, still untrusted: the caller narrows it
  * ```
  */
 export async function elevenlabsJsonRequest(options: ElevenlabsRequestOptions): Promise<unknown> {

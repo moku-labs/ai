@@ -83,6 +83,39 @@ function neighbourSpeech(
 }
 
 /**
+ * The cut window of one line that has speech: padded speech, clamped to the
+ * neighbours' speech, which is also its hard bound.
+ *
+ * @param index - The line's index.
+ * @param span - The line's own speech span.
+ * @param spans - The speech span by line index (for the neighbours).
+ * @param durationSeconds - Length of the scene audio, seconds.
+ * @returns The window; the raw speech span, unbounded, when the clamp leaves nothing.
+ */
+function windowOf(
+  index: number,
+  span: Speech,
+  spans: readonly (Speech | undefined)[],
+  durationSeconds: number
+): CutWindow {
+  // The neighbours' speech bounds the window: no frame of it may enter the cut.
+  const previous = neighbourSpeech(spans, index, -1);
+  const next = neighbourSpeech(spans, index, 1);
+  const hard = { from: previous?.end ?? 0, to: next?.start ?? durationSeconds };
+
+  // Pad the speech, then clamp to the bounds and to the audio.
+  const from = Math.max(span.start - LEAD_SECONDS, hard.from, 0);
+  const to = Math.min(span.end + TAIL_SECONDS, hard.to, durationSeconds);
+  const speech = { from: span.start, to: span.end };
+
+  // Overlapping speech can clamp the window away: fall back to the raw span.
+  const isClampedAway = to <= from;
+  return isClampedAway
+    ? { index, ...speech, hard: { from: 0, to: durationSeconds }, speech }
+    : { index, from, to, hard, speech };
+}
+
+/**
  * Plans the cut window of every line. Window of line i:
  * `from = max(start_i − 0.050, end_prev, 0)`,
  * `to = min(end_i + 0.150, start_next, duration)`, where prev/next are the
@@ -99,7 +132,10 @@ function neighbourSpeech(
  * @example
  * ```ts
  * planCutWindows([{ lineIndex: 0, startSeconds: 0.2, endSeconds: 1 }], 2, 3);
- * // => { windows: [{ index: 0, from: 0.15, to: 1.15, hard: { from: 0, to: 3 }, speech: { from: 0.2, to: 1 } }], missing: [1] }
+ * // => {
+ * //   windows: [{ index: 0, from ≈ 0.15, to ≈ 1.15, hard: { from: 0, to: 3 }, speech: { from: 0.2, to: 1 } }],
+ * //   missing: [1]
+ * // }
  * ```
  */
 export function planCutWindows(
@@ -112,22 +148,12 @@ export function planCutWindows(
   const missing: number[] = [];
 
   for (const [index, span] of spans.entries()) {
+    // A line with no segment has no speech to cut: report it.
     if (span === undefined) {
       missing.push(index);
       continue;
     }
-    const previous = neighbourSpeech(spans, index, -1);
-    const next = neighbourSpeech(spans, index, 1);
-    const hard = { from: previous?.end ?? 0, to: next?.start ?? durationSeconds };
-    const from = Math.max(span.start - LEAD_SECONDS, hard.from, 0);
-    const to = Math.min(span.end + TAIL_SECONDS, hard.to, durationSeconds);
-    const speech = { from: span.start, to: span.end };
-    const isClampedAway = to <= from;
-    windows.push(
-      isClampedAway
-        ? { index, ...speech, hard: { from: 0, to: durationSeconds }, speech }
-        : { index, from, to, hard, speech }
-    );
+    windows.push(windowOf(index, span, spans, durationSeconds));
   }
   return { windows, missing };
 }
@@ -171,7 +197,9 @@ function cutWindow(opened: CuttableAudio, window: CutWindow): AudioPiece {
  * @throws {LocalFailureError} When the audio has no readable mp3 frame or wav data.
  * @example
  * ```ts
- * const { cuts, missing } = cutDialogue(mix, "mp3_44100_128", segments, request.lines.length);
+ * // `sceneMp3`: a 3 s mp3 at 44.1 kHz (frames of ≈ 0.026 s); the second line has no segment.
+ * cutDialogue(sceneMp3, "mp3_44100_128", [{ lineIndex: 0, startSeconds: 0.2, endSeconds: 1 }], 2);
+ * // => { cuts: [{ index: 0, piece: { bytes, startSeconds ≈ 0.13, endSeconds ≈ 1.18 } }], missing: [1] }
  * ```
  */
 export function cutDialogue(

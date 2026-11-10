@@ -34,11 +34,11 @@ export const SQL_NULL = null;
 function isDoneOutput(value: unknown): value is DoneOutput {
   if (typeof value !== "object" || value === null) return false;
 
-  const entry = value as { contentHash?: unknown; mimeType?: unknown; name?: unknown };
-  const hasValidName = entry.name === undefined || typeof entry.name === "string";
-  return (
-    typeof entry.contentHash === "string" && typeof entry.mimeType === "string" && hasValidName
-  );
+  const hasHash = "contentHash" in value && typeof value.contentHash === "string";
+  const hasMimeType = "mimeType" in value && typeof value.mimeType === "string";
+  const hasValidName =
+    !("name" in value) || value.name === undefined || typeof value.name === "string";
+  return hasHash && hasMimeType && hasValidName;
 }
 
 /**

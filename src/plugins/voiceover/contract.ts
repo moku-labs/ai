@@ -109,10 +109,6 @@ export type VoiceoverHandler = {
    *
    * @param request - The request to estimate.
    * @returns The estimated cost in US dollars.
-   * @example
-   * ```ts
-   * handler.estimate({ text: "hi", voice: "en-US-1" }); // => { usd: 0.00006 }
-   * ```
    */
   estimate(request: VoiceoverRequest): { usd: number };
   /**
@@ -122,10 +118,6 @@ export type VoiceoverHandler = {
    * @param opts - Execution options.
    * @param opts.signal - Abort signal for cancelling the in-flight request.
    * @returns The generation result.
-   * @example
-   * ```ts
-   * await handler.execute({ text: "hi", voice: "en-US-1" }, {});
-   * ```
    */
   execute(request: VoiceoverRequest, opts: { signal?: AbortSignal }): Promise<VoiceoverResult>;
 };

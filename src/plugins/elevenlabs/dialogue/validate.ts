@@ -1,10 +1,10 @@
 /**
  * @file elevenlabs dialogue — request check, shared by `estimate` and
- * `execute`, before any HTTP call: lines, characters, voices, line ids and
- * the output format. Every refusal is a terminal 400 with a two-line `[ai]`
+ * `execute`, before any HTTP call: model, lines, characters, voices, line ids
+ * and the output format. Every refusal is a terminal 400 with a two-line `[ai]`
  * message, so `moku estimate` shows it before any spend.
  */
-import type { DialogueRequest } from "../../dialogue/contract";
+import type { DialogueLine, DialogueRequest } from "../../dialogue/contract";
 import { TerminalProviderError } from "../errors";
 import type { OutputFormat } from "../formats";
 import { resolveOutputFormat } from "../formats";
@@ -27,6 +27,7 @@ const SAFE_LINE_ID = /^[^/\\]+$/;
  * @example
  * ```ts
  * const checked: CheckedDialogue = {
+ *   model: "eleven_v4",
  *   characters: 52,
  *   voices: 2,
  *   ignoredKeys: ["settings"],
@@ -35,6 +36,8 @@ const SAFE_LINE_ID = /^[^/\\]+$/;
  * ```
  */
 export type CheckedDialogue = {
+  /** The request's model, as written (there is no default: it is part of the artifact key). */
+  model: string;
   /** Characters over every line's text. */
   characters: number;
   /** Distinct voices. */
@@ -67,14 +70,15 @@ function isFilled(value: unknown): value is string {
 }
 
 /**
- * Tells whether a `lines` entry is an object at all (a build file may hold
- * `null`, a string or a number there).
+ * Tells whether a `lines` entry can be spoken: an object (a build file may
+ * hold `null`, a string or a number there) with a filled `text` and `voice`.
  *
- * @param value - One entry of `lines`.
- * @returns True for a non-null object.
+ * @param line - One entry of `lines`.
+ * @returns True for an object with a non-empty text and voice.
  */
-function isLine(value: unknown): value is object {
-  return typeof value === "object" && value !== null;
+function isSpeakable(line: unknown): line is DialogueLine {
+  if (typeof line !== "object" || line === null) return false;
+  return isFilled(Reflect.get(line, "text")) && isFilled(Reflect.get(line, "voice"));
 }
 
 /**
@@ -100,6 +104,34 @@ function checkLineId(id: unknown, position: number, seen: Set<string>): void {
 }
 
 /**
+ * Adds the keys of `line` that the endpoint does not take to `ignored`.
+ *
+ * @param line - One line of the scene.
+ * @param ignored - The keys not sent so far; this line's are added.
+ */
+function collectIgnoredKeys(line: object, ignored: Set<string>): void {
+  for (const key of Object.keys(line)) {
+    if (!LINE_KEYS.has(key)) ignored.add(key);
+  }
+}
+
+/**
+ * Reads the model: it must be named, because the runner hashes the input as
+ * written and a model defaulted here would not be part of the artifact key.
+ *
+ * @param request - The dialogue request.
+ * @returns The model id, as written.
+ * @throws {TerminalProviderError} Status 400 when the model is missing or empty.
+ */
+function modelOf(request: DialogueRequest): string {
+  const model: unknown = request.model;
+  if (!isFilled(model)) {
+    throw refusal("Invalid dialogue request: no model", "Name the model, e.g. model: eleven_v4");
+  }
+  return model;
+}
+
+/**
  * Checks the lines: at least one, each with a text and a voice, safe unique
  * ids. Collects the characters, the voices and the keys that are not sent.
  *
@@ -112,6 +144,7 @@ function checkLines(request: DialogueRequest): {
   voices: Set<string>;
   ignored: Set<string>;
 } {
+  // At least one line (a build file may hold anything under `lines`).
   const lines: unknown = request.lines;
   if (!Array.isArray(lines) || lines.length === 0) {
     throw refusal(
@@ -126,14 +159,20 @@ function checkLines(request: DialogueRequest): {
   const ids = new Set<string>();
   for (const [index, line] of request.lines.entries()) {
     const position = index + 1;
-    if (!isLine(line) || !isFilled(line.text) || !isFilled(line.voice)) {
+
+    // Every line speaks: it has a text and a voice.
+    if (!isSpeakable(line)) {
       throw refusal(
         `Invalid dialogue request: line ${position} has no text or no voice`,
         "Give every line a text and a voice"
       );
     }
+
+    // The id, when given, is a unique file name; the keys the endpoint lacks are only noted.
     if (line.id !== undefined) checkLineId(line.id, position, ids);
-    for (const key of Object.keys(line)) if (!LINE_KEYS.has(key)) ignored.add(key);
+    collectIgnoredKeys(line, ignored);
+
+    // Count what the scene sends.
     characters += line.text.length;
     voices.add(line.voice);
   }
@@ -145,15 +184,17 @@ function checkLines(request: DialogueRequest): {
  *
  * @param request - The dialogue request.
  * @param maxChars - The most characters the request may carry (`config.dialogueMaxChars`).
- * @returns What the check learned (characters, voices, ignored keys, format).
+ * @returns What the check learned (model, characters, voices, ignored keys, format).
  * @throws {TerminalProviderError} Status 400 for every refusal.
  * @example
  * ```ts
- * checkDialogue({ lines: [{ text: "Hi.", voice: "v1" }] }, 2000);
- * // => { characters: 3, voices: 1, ignoredKeys: [], format: { code: "mp3_44100_128", mimeType: "audio/mpeg" } }
+ * checkDialogue({ model: "eleven_v4", lines: [{ text: "Hi.", voice: "v1" }] }, 2000);
+ * // => { model: "eleven_v4", characters: 3, voices: 1, ignoredKeys: [], format: { code: "mp3_44100_128", mimeType: "audio/mpeg" } }
  * ```
  */
 export function checkDialogue(request: DialogueRequest, maxChars: number): CheckedDialogue {
+  // The request-level fields first: the model, then the lines and their limits.
+  const model = modelOf(request);
   const { characters, voices, ignored } = checkLines(request);
   if (characters > maxChars) {
     throw refusal(
@@ -168,6 +209,7 @@ export function checkDialogue(request: DialogueRequest, maxChars: number): Check
     );
   }
 
+  // The output format must be one the cutters read.
   const format = resolveOutputFormat(request.outputFormat);
   const isCuttable = format.code.startsWith("mp3_") || format.code.startsWith("wav_");
   if (!isCuttable) {
@@ -176,5 +218,5 @@ export function checkDialogue(request: DialogueRequest, maxChars: number): Check
       "Use an mp3_* or wav_* output format"
     );
   }
-  return { characters, voices: voices.size, ignoredKeys: [...ignored].toSorted(), format };
+  return { model, characters, voices: voices.size, ignoredKeys: [...ignored].toSorted(), format };
 }

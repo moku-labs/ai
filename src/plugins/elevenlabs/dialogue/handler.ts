@@ -21,21 +21,11 @@ import type { ElevenlabsContext } from "../types";
 import type { LineCut } from "./cut";
 import { cutDialogue } from "./cut";
 import { readDialogueResponse } from "./response";
+import type { CheckedDialogue } from "./validate";
 import { checkDialogue } from "./validate";
 
 /** Milliseconds per second. */
 const MS_PER_SECOND = 1000;
-
-/**
- * The model of `request`: its own `model`, else `config.defaultDialogueModel`.
- *
- * @param ctx - Plugin context (for `config.defaultDialogueModel`).
- * @param request - The dialogue request.
- * @returns The resolved model id.
- */
-function resolveModel(ctx: ElevenlabsContext, request: DialogueRequest): string {
-  return request.model ?? ctx.config.defaultDialogueModel;
-}
 
 /**
  * The scene's cost: characters × the model's per-character price.
@@ -82,6 +72,33 @@ function buildRequestBody(request: DialogueRequest, model: string): Record<strin
 }
 
 /**
+ * Builds the request options: endpoint, key, body and timeout of the one POST.
+ *
+ * @param ctx - Plugin context (for the base URL and the dialogue timeout).
+ * @param request - The dialogue request.
+ * @param checked - What the check learned (model and output format).
+ * @param apiKey - The API key, read just now.
+ * @param signal - The caller's abort signal, if any.
+ * @returns The options for `elevenlabsJsonRequest`.
+ */
+function requestOptionsOf(
+  ctx: ElevenlabsContext,
+  request: DialogueRequest,
+  checked: CheckedDialogue,
+  apiKey: string,
+  signal: AbortSignal | undefined
+): ElevenlabsRequestOptions {
+  return {
+    baseUrl: ctx.config.baseUrl,
+    path: `/v1/text-to-dialogue/with-timestamps?output_format=${checked.format.code}`,
+    apiKey,
+    body: buildRequestBody(request, checked.model),
+    timeoutMs: ctx.config.dialogueTimeoutMs,
+    ...(signal === undefined ? {} : { signal })
+  };
+}
+
+/**
  * Builds the result from the mix and the cuts: `outputs[0]` is the mix, then
  * one output per cut line (`name` only for a line with an id).
  *
@@ -119,59 +136,45 @@ function outputsOf(
  *
  * @param ctx - Plugin context (config + state + env + log).
  * @returns The `DialogueHandler` registered under the "dialogue" task.
- * @example
- * ```ts
- * registry.register("dialogue", "elevenlabs", createDialogueHandler(ctx));
- * ```
  */
 export function createDialogueHandler(ctx: ElevenlabsContext): DialogueHandler {
   return {
     /**
-     * Estimates the cost of `request` without executing it; refuses an
-     * invalid scene or an unpriced model before any spend.
+     * Prices `request` after checking it (contract and errors: `DialogueHandler`).
      *
      * @param request - The dialogue request to estimate.
      * @returns The estimated cost in US dollars.
-     * @throws {TerminalProviderError} Status 400 for an invalid scene or a model with no price.
      */
     estimate(request: DialogueRequest): { usd: number } {
-      const { characters } = checkDialogue(request, ctx.config.dialogueMaxChars);
-      return { usd: costOf(ctx, resolveModel(ctx, request), characters) };
+      const { model, characters } = checkDialogue(request, ctx.config.dialogueMaxChars);
+      return { usd: costOf(ctx, model, characters) };
     },
     /**
-     * Executes `request`: one POST to the dialogue endpoint, then the cuts.
+     * Sends `request` in one POST, then cuts the mix (contract and errors: `DialogueHandler`).
      *
      * @param request - The dialogue request to execute.
      * @param opts - Execution options.
      * @param opts.signal - Abort signal for cancelling the in-flight request.
      * @returns The mix, one output per line with speech, the timings and the cost.
-     * @throws {TerminalProviderError} Status 400 for an invalid scene or a model with no price; any other 4xx.
-     * @throws {RetryableProviderError} On HTTP 5xx/429, a timeout, a network failure, or an unreadable response.
-     * @throws {FlaggedProviderError} On a content-policy rejection.
-     * @throws {LocalFailureError} When the response audio cannot be cut.
      */
     async execute(
       request: DialogueRequest,
       opts: { signal?: AbortSignal }
     ): Promise<DialogueResult> {
+      // Check: refuse a bad scene, an unnamed model or an unpriced one before the key is read.
       const checked = checkDialogue(request, ctx.config.dialogueMaxChars);
-      const model = resolveModel(ctx, request);
-      const costUsd = costOf(ctx, model, checked.characters);
+      const costUsd = costOf(ctx, checked.model, checked.characters);
       const apiKey = resolveApiKey(ctx);
       if (checked.ignoredKeys.length > 0) {
         ctx.log.warn("elevenlabs:dialogue:line-fields-ignored", { keys: checked.ignoredKeys });
       }
-      const options: ElevenlabsRequestOptions = {
-        baseUrl: ctx.config.baseUrl,
-        path: `/v1/text-to-dialogue/with-timestamps?output_format=${checked.format.code}`,
-        apiKey,
-        body: buildRequestBody(request, model),
-        timeoutMs: ctx.config.dialogueTimeoutMs,
-        ...(opts.signal === undefined ? {} : { signal: opts.signal })
-      };
 
+      // Send: one request speaks the whole scene; a failure is logged redacted and rethrown unchanged.
+      const options = requestOptionsOf(ctx, request, checked, apiKey, opts.signal);
       try {
         const { audio, segments } = readDialogueResponse(await elevenlabsJsonRequest(options));
+
+        // Cut: one file per line from the voice segments; a line with no segment gets none.
         const { cuts, missing } = cutDialogue(
           audio,
           checked.format.code,
@@ -179,15 +182,20 @@ export function createDialogueHandler(ctx: ElevenlabsContext): DialogueHandler {
           request.lines.length
         );
         if (missing.length > 0) ctx.log.warn("elevenlabs:dialogue:lines-missing", { missing });
-        ctx.log.info("elevenlabs:dialogue:done", { model, format: checked.format.code });
+
+        // Report: the mix first, then the cuts, with the cost and the metadata.
         const { mimeType } = checked.format;
+        ctx.log.info("elevenlabs:dialogue:done", {
+          model: checked.model,
+          format: checked.format.code
+        });
         return {
           audio,
           mimeType,
           costUsd,
           ...outputsOf(request, audio, mimeType, cuts),
           meta: {
-            model,
+            model: checked.model,
             characters: checked.characters,
             voices: checked.voices,
             ...(missing.length > 0 ? { missingLines: missing } : {})

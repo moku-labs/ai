@@ -61,7 +61,11 @@ function segmentOf(raw: unknown): VoiceSegment | undefined {
  * @throws {RetryableProviderError} Status 502 when the body is not JSON or lacks either field.
  * @example
  * ```ts
- * const { audio, segments } = readDialogueResponse(await elevenlabsJsonRequest(options));
+ * readDialogueResponse({
+ *   audio_base64: "SUQz",
+ *   voice_segments: [{ dialogue_input_index: 0, start_time_seconds: 0.1, end_time_seconds: 1 }]
+ * });
+ * // => { audio: Uint8Array [73, 68, 51], segments: [{ lineIndex: 0, startSeconds: 0.1, endSeconds: 1 }] }
  * ```
  */
 export function readDialogueResponse(json: unknown): DialogueResponse {

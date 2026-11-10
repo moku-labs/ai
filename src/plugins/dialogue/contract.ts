@@ -43,6 +43,9 @@ export type DialogueSettings = {
 
 /**
  * A multi-speaker scene generation request: ordered lines, spoken in one provider request.
+ * `model` is required: the runner hashes the input as written, so a model defaulted
+ * inside the provider would not be part of the artifact key and a changed default
+ * would reuse another model's scene.
  *
  * @example
  * ```ts
@@ -56,8 +59,8 @@ export type DialogueSettings = {
 export type DialogueRequest = {
   /** The lines in speaking order. */
   lines: DialogueLine[];
-  /** Provider-scoped model alias; the provider default when absent (elevenlabs: eleven_v4). */
-  model?: string;
+  /** Provider-scoped model alias, e.g. "eleven_v4" (recommended for elevenlabs). Required: it is part of the artifact key. */
+  model: string;
   /** BCP-47 / ISO 639-1 language hint. */
   language?: string;
   /** Scene-wide voice settings. */
@@ -97,11 +100,12 @@ export type DialogueLineTiming = {
  *
  * @example
  * ```ts
+ * const mix = new Uint8Array();
  * const scene: DialogueResult = {
- *   audio: new Uint8Array(),
+ *   audio: mix,
  *   mimeType: "audio/mpeg",
  *   costUsd: 0.4,
- *   outputs: [{ bytes: new Uint8Array(), mimeType: "audio/mpeg" }],
+ *   outputs: [{ bytes: mix, mimeType: "audio/mpeg" }],
  *   lines: []
  * };
  * ```
@@ -132,7 +136,10 @@ export type DialogueResult = {
  * ```ts
  * const handler: DialogueHandler = {
  *   estimate: request => ({ usd: request.lines.reduce((sum, line) => sum + line.text.length, 0) * 0.0001 }),
- *   execute: async () => ({ audio: new Uint8Array(), mimeType: "audio/mpeg", costUsd: 0.1, outputs: [], lines: [] })
+ *   execute: async () => {
+ *     const mix = new Uint8Array();
+ *     return { audio: mix, mimeType: "audio/mpeg", costUsd: 0.1, outputs: [{ bytes: mix, mimeType: "audio/mpeg" }], lines: [] };
+ *   }
  * };
  * ```
  */
@@ -143,6 +150,8 @@ export type DialogueHandler = {
    *
    * @param request - The request to estimate.
    * @returns The estimated cost in US dollars.
+   * @throws {Error} A terminal error (elevenlabs: `TerminalProviderError`, status 400) for an invalid scene,
+   * a missing `model` or a model with no price, before any spend.
    */
   estimate(request: DialogueRequest): { usd: number };
   /**
@@ -151,7 +160,12 @@ export type DialogueHandler = {
    * @param request - The request to execute.
    * @param opts - Execution options.
    * @param opts.signal - Abort signal for cancelling the in-flight request.
-   * @returns The generation result.
+   * @returns The generation result: `outputs[0]` is the whole scene, then one output per line that has speech.
+   * @throws {Error} The same terminal 400 as `estimate` for an invalid scene, a missing `model` or an unpriced model.
+   * @throws {Error} A retryable error (elevenlabs: `RetryableProviderError`) on HTTP 5xx/429, a timeout,
+   * a network failure or an unreadable response.
+   * @throws {Error} A flagged error (elevenlabs: `FlaggedProviderError`) on a content-policy rejection.
+   * @throws {Error} A local failure (elevenlabs: `LocalFailureError`) when the response audio cannot be cut.
    */
   execute(request: DialogueRequest, opts: { signal?: AbortSignal }): Promise<DialogueResult>;
 };

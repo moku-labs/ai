@@ -34,6 +34,7 @@ export type Config = {
  * @example
  * ```ts
  * const scene = await app.dialogue.generate({
+ *   model: "eleven_v4",
  *   lines: [{ id: "signAlice", text: "[tense] I never signed it!", voice: "TPIitICAZ8CqlGZ81AKm" }]
  * });
  * ```
@@ -52,6 +53,8 @@ export type DialogueApi = {
    * provider is unregistered or its handler is malformed.
    * @example
    * ```ts
+   * import { writeFile } from "node:fs/promises";
+   *
    * // Render a two-voice scene for a prototype, outside the runner.
    * const scene = await app.dialogue.generate({
    *   model: "eleven_v4",
@@ -62,8 +65,8 @@ export type DialogueApi = {
    *     { id: "signDaniel", text: "[bitterly] Ты давно здесь не живёшь, Элис.", voice: "6A9D8WSMm4rFsg2DWFeE" }
    *   ]
    * });
-   * await Bun.write("scene.mp3", scene.audio);
-   * for (const out of scene.outputs.slice(1)) await Bun.write(`${out.name}.mp3`, out.bytes);
+   * await writeFile("scene.mp3", scene.audio);
+   * for (const out of scene.outputs.slice(1)) await writeFile(`${out.name}.mp3`, out.bytes);
    * ```
    */
   generate(
@@ -82,7 +85,7 @@ export type DialogueApi = {
    * @example
    * ```ts
    * // Check what a scene costs before adding it to a build file.
-   * const { usd } = app.dialogue.estimate({ lines: [{ text: "Hi", voice: "v1" }] });
+   * const { usd } = app.dialogue.estimate({ model: "eleven_v4", lines: [{ text: "Hi", voice: "v1" }] });
    * ```
    */
   estimate(request: DialogueRequest, opts?: { provider?: string }): { usd: number };

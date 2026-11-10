@@ -5,13 +5,16 @@ import { RetryableProviderError, TerminalProviderError } from "../../errors";
 import { dialogueBody, fakeJsonResponse, syntheticMp3, syntheticWav } from "../audio-fixtures";
 import { createFakeEnv, createFakeLog, createTestCtx } from "./fixtures";
 
+/** The model every scene names: dialogue has no default model. */
+const MODEL = "eleven_v4";
+
 /** Two voices of the spike's H1 recipe. */
 const ELEN = "TPIitICAZ8CqlGZ81AKm";
 const EGOR = "6A9D8WSMm4rFsg2DWFeE";
 
 /** The spike's H1 recipe: v4 dialogue, stability 0.5, seed 7, language ru. */
 const H1: DialogueRequest = {
-  model: "eleven_v4",
+  model: MODEL,
   language: "ru",
   settings: { stability: 0.5, similarity: 0.75 },
   seed: 7,
@@ -101,7 +104,7 @@ describe("createDialogueHandler — request", () => {
       { text: "Secret line two", voice: EGOR, settings: { stability: 0.4 } }
     ];
 
-    await createDialogueHandler(ctx).execute({ lines }, {});
+    await createDialogueHandler(ctx).execute({ model: MODEL, lines }, {});
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as { inputs: unknown[] };
@@ -173,8 +176,8 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
     vi.stubGlobal("fetch", fetchMock);
     const handler = createDialogueHandler(createTestCtx());
 
-    expect(handler.estimate({ lines: oneLineOf(2000) }).usd).toBeCloseTo(0.16, 12);
-    const error = estimateError({ lines: oneLineOf(2001) });
+    expect(handler.estimate({ model: MODEL, lines: oneLineOf(2000) }).usd).toBeCloseTo(0.16, 12);
+    const error = estimateError({ model: MODEL, lines: oneLineOf(2001) });
     expect(error).toBeInstanceOf(TerminalProviderError);
     expect((error as TerminalProviderError).status).toBe(400);
     expect((error as Error).message).toBe(
@@ -185,7 +188,7 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
 
   it("follows a configured dialogueMaxChars", () => {
     const error = estimateError(
-      { lines: [{ text: "abcdef", voice: ELEN }] },
+      { model: MODEL, lines: [{ text: "abcdef", voice: ELEN }] },
       { config: { dialogueMaxChars: 5 } }
     );
 
@@ -195,8 +198,8 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
   it("accepts 10 voices and refuses 11", () => {
     const handler = createDialogueHandler(createTestCtx());
 
-    expect(() => handler.estimate({ lines: linesWithVoices(10) })).not.toThrow();
-    expect((estimateError({ lines: linesWithVoices(11) }) as Error).message).toMatch(
+    expect(() => handler.estimate({ model: MODEL, lines: linesWithVoices(10) })).not.toThrow();
+    expect((estimateError({ model: MODEL, lines: linesWithVoices(11) }) as Error).message).toMatch(
       /^\[ai\] The dialogue uses 11 voices; ElevenLabs takes at most 10\.\n {2}/
     );
   });
@@ -207,7 +210,7 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
     ["..", "..", /Invalid dialogue line id "\.\." \(line 1\)/],
     [".", ".", /Invalid dialogue line id "\." \(line 1\)/]
   ])("refuses a line id with %s", (_, id, message) => {
-    const error = estimateError({ lines: [{ id, text: "a", voice: ELEN }] });
+    const error = estimateError({ model: MODEL, lines: [{ id, text: "a", voice: ELEN }] });
 
     expect(error).toBeInstanceOf(TerminalProviderError);
     expect((error as Error).message).toMatch(message);
@@ -219,7 +222,7 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
       { id: "same", text: "b", voice: EGOR }
     ];
 
-    expect((estimateError({ lines }) as Error).message).toBe(
+    expect((estimateError({ model: MODEL, lines }) as Error).message).toBe(
       '[ai] Duplicate dialogue line id "same".\n  Give every line its own id.'
     );
   });
@@ -228,21 +231,44 @@ describe("createDialogueHandler — refusals before any HTTP call", () => {
     // eslint-disable-next-line unicorn/no-null -- a YAML build file can hold null in lines; that is the case under test
     for (const line of [null, "text", 5]) {
       const lines = [line] as unknown as DialogueRequest["lines"];
-      const error = estimateError({ lines });
+      const error = estimateError({ model: MODEL, lines });
 
       expect(error).toBeInstanceOf(TerminalProviderError);
       expect((error as Error).message).toMatch(/line 1 has no text or no voice/);
     }
   });
 
+  it("refuses a request with no model or an empty one: there is no default, from estimate and from execute", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const lines = [{ text: "a", voice: ELEN }];
+    const { ctx } = keyedCtx();
+    const unnamed = { lines } as unknown as DialogueRequest;
+
+    const message = (estimateError(unnamed) as Error).message;
+    const emptyError = estimateError({ model: "", lines });
+
+    expect(message).toBe(
+      "[ai] Invalid dialogue request: no model.\n  Name the model, e.g. model: eleven_v4."
+    );
+    expect(emptyError).toBeInstanceOf(TerminalProviderError);
+    expect((emptyError as TerminalProviderError).status).toBe(400);
+    await expect(createDialogueHandler(ctx).execute(unnamed, {})).rejects.toBeInstanceOf(
+      TerminalProviderError
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("refuses a scene with no lines, and a line with no text or no voice", () => {
-    expect((estimateError({ lines: [] }) as Error).message).toMatch(/no lines\.\n {2}/);
-    expect((estimateError({ lines: [{ text: "", voice: ELEN }] }) as Error).message).toMatch(
-      /line 1 has no text or no voice/
+    expect((estimateError({ model: MODEL, lines: [] }) as Error).message).toMatch(
+      /no lines\.\n {2}/
     );
-    expect((estimateError({ lines: [{ text: "a", voice: "" }] }) as Error).message).toMatch(
-      /line 1 has no text or no voice/
-    );
+    expect(
+      (estimateError({ model: MODEL, lines: [{ text: "", voice: ELEN }] }) as Error).message
+    ).toMatch(/line 1 has no text or no voice/);
+    expect(
+      (estimateError({ model: MODEL, lines: [{ text: "a", voice: "" }] }) as Error).message
+    ).toMatch(/line 1 has no text or no voice/);
   });
 
   it("refuses a pcm or opus output format: those cannot be cut here", () => {

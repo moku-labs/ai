@@ -330,6 +330,7 @@ describe("elevenlabs integration", () => {
         "    task: dialogue",
         "    provider: elevenlabs",
         "    input:",
+        "      model: eleven_v4",
         "      lines:",
         "        - { id: signAlice, text: First line, voice: v-alice }",
         "        - { text: Second line, voice: v-daniel }",

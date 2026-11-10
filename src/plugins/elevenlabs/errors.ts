@@ -31,8 +31,11 @@ type RetryHint = {
  * bucketed as retryable without any cross-plugin error-class import.
  */
 export class RetryableProviderError extends Error {
+  /** HTTP status (5xx or 429), when the failure came from a response. */
   readonly status: number | undefined;
+  /** `"timeout"` or `"network"` for a failure with no HTTP response. */
   readonly kind: "timeout" | "network" | undefined;
+  /** Delay the provider asked for with `Retry-After`, ms. */
   readonly retryAfterMs: number | undefined;
 
   /**
@@ -63,6 +66,7 @@ export class RetryableProviderError extends Error {
  * `"http-4xx"` (terminal).
  */
 export class TerminalProviderError extends Error {
+  /** The HTTP status that caused the failure (400 for a request refused before any call). */
   readonly status: number;
 
   /**
@@ -88,6 +92,7 @@ export class TerminalProviderError extends Error {
  * `classifyError` reads to bucket it as `"content-policy"`.
  */
 export class FlaggedProviderError extends Error {
+  /** Always `"content-policy"`: how `runner/retry.ts` buckets this error. */
   readonly kind: "content-policy" = "content-policy";
 
   /**
@@ -113,7 +118,9 @@ export class FlaggedProviderError extends Error {
  * two-line text: no keys, no request text).
  */
 export class LocalFailureError extends Error {
+  /** Always `"local-failure"`: how `runner/retry.ts` buckets this error. */
   readonly kind: "local-failure" = "local-failure";
+  /** The message the runner may show: the same two-line text, with no keys and no request text. */
   readonly publicMessage: string;
 
   /**

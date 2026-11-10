@@ -75,7 +75,8 @@ export function localizeItems(spec: LocalizeSpec, items: readonly BuildItem[]): 
  * @returns One item per locale, or the single resolved item (neither carries `locales`).
  * @example
  * ```ts
- * expandItem(item, 0, { locales: ["ru", "en"] });
+ * const door = { task: "image", id: "door", input: { prompt: "a door" }, locales: true };
+ * expandItem(door, 0, { locales: ["ru", "en"] }).map(copy => copy.id); // => ["door-ru", "door-en"]
  * ```
  */
 function expandItem(source: BuildItem, index: number, spec: LocalizeSpec): BuildItem[] {
@@ -160,10 +161,6 @@ function localizedId(id: string, locale: string): string {
  * @param index - The item's position, for error paths.
  * @param scope - The locale scope (a locale-less scope only resolves `$cast`).
  * @returns The new item.
- * @example
- * ```ts
- * withValues(item, 0, scope);
- * ```
  */
 function withValues(item: BuildItem, index: number, scope: Scope): BuildItem {
   const { input, params, ...rest } = item;
@@ -359,7 +356,8 @@ function castFields(entry: CastEntry, locale: string | undefined): Record<string
  * ```
  */
 function requireLocaleInId(key: string, child: unknown, path: string[], scope: Scope): void {
-  if (scope.ids === "ignore" || key !== "id" || typeof child !== "string") return;
+  const isIdString = key === "id" && typeof child === "string";
+  if (scope.ids === "ignore" || !isIdString) return;
 
   const hasPlaceholder = child.includes(LOCALE_PLACEHOLDER);
   if (scope.ids === "forbid" && hasPlaceholder) throw placeholderWithoutLocales(path.join("."));

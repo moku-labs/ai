@@ -10,11 +10,12 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 - **dialogue: a new task for multi-speaker scenes.** `task: dialogue` (and `app.dialogue.generate` /
   `estimate` / `providers`, config `dialogue.defaultProvider`, default `"elevenlabs"`) speaks a whole
   scene in one request, so the voices answer each other in one take. A line is `{ id?, text, voice }`;
-  the request takes `model`, `language`, `settings` (`stability`, `similarity`), `seed`, `outputFormat`
-  and `params`. The result is the whole mix plus one audio file per line. The package exports the
+  the request takes a required `model`, and `language`, `settings` (`stability`, `similarity`), `seed`,
+  `outputFormat` and `params`. The result is the whole mix plus one audio file per line. The package exports the
   `Dialogue` type namespace and `dialoguePlugin`.
-- **elevenlabs: the `("dialogue", "elevenlabs")` handler.** Model `eleven_v4` (config
-  `defaultDialogueModel`), `POST /v1/text-to-dialogue/with-timestamps`. At most 2000 characters over all
+- **elevenlabs: the `("dialogue", "elevenlabs")` handler.** The request must name its `model`
+  (required, like `sfx`: no provider default, because the model is part of the cache key; `eleven_v4` is
+  recommended), `POST /v1/text-to-dialogue/with-timestamps`. At most 2000 characters over all
   lines (`dialogueMaxChars`) and 10 distinct voices, each a terminal 400 before any request, also in
   `moku estimate`. The scene is cut into one mp3 or wav per line in TypeScript, with no ffmpeg: 0.05 s
   lead and 0.15 s tail, clamped so a cut never carries the next line's speech. New config

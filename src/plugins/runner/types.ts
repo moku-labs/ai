@@ -68,7 +68,7 @@ export type RunEvent =
       costUsd: number;
       /** The item's (first) artifact. */
       contentHash: string;
-      /** Every output hash in order; only for a multi-output item (the handler returned `images`). */
+      /** Every output hash in order; only for a multi-output item (the handler returned `outputs` or `images`). */
       contentHashes?: string[];
     }
   | { type: "item:retry"; runId: string; itemId: string; errorClass: ErrorClass; attempt: number }
@@ -294,8 +294,9 @@ export type PlannedItem = {
 
 /**
  * One file written by {@link RunnerApi.export}. An item with several outputs
- * writes one file per output: `label` is the item's label for the first and
- * `<label>-<k>` (k from 2) for the others, which carry `costUsd` 0.
+ * writes one file per output: `label` is the item's label for the first; for
+ * the others it is `<label folder>/<name>` when the output is named, else
+ * `<label>-<k>` (k from 2). They carry `costUsd` 0.
  */
 export type ExportedFile = {
   label: string;
@@ -494,10 +495,13 @@ export type RunnerApi = {
   /**
    * Copies a run's done artifacts to `<outDir>/<build>/<label>.<ext>`, or to
    * `<outDir>/<label>.<ext>` with `flat`. An item with several outputs (an
-   * image group) writes `<label>.<ext>`, then `<label>-2.<ext>` …
-   * `<label>-N.<ext>`; the item cost is on the first file. A label that would
-   * escape `outDir`, or a file this export already wrote (with `flat`: the same
-   * label in two builds), is skipped and listed in `skipped`.
+   * image group, a dialogue scene) writes `<label>.<ext>` first; each later
+   * output is written beside it as `<name>.<ext>` in the label's folder when
+   * it is named, else as `<label>-2.<ext>` … `<label>-N.<ext>`. The item cost
+   * is on the first file. An item is skipped and listed in `skipped` when its
+   * label, an output name or the build name would escape its folder, when two
+   * of its own files map to one path, or when a file this export already wrote
+   * would be overwritten (with `flat`: the same label in two builds).
    *
    * @param opts - Run id (default: newest run), output directory (default "out") and `flat` (default false).
    * @param opts.runId - Run to export.
@@ -515,6 +519,12 @@ export type RunnerApi = {
    * const icons = await app.runner.export({ outDir: "assets/icons", flat: true });
    * // icons.files[0].path: "/repo/assets/icons/sword.png"
    * // a second build with a "sword" label: icons.skipped is ["sword"], the first file is kept
+   *
+   * // A dialogue scene labelled "voices/ep02-quarrel-ru" whose second output is named "ep02-signAlice-ru".
+   * const scenes = await app.runner.export({ outDir: "out" });
+   * // scenes.files[0].label: "voices/ep02-quarrel-ru", path: "/repo/out/ep02/voices/ep02-quarrel-ru.mp3"
+   * // scenes.files[1].label: "voices/ep02-signAlice-ru", path: "/repo/out/ep02/voices/ep02-signAlice-ru.mp3", costUsd: 0
+   * // an output named "../x", or named like the label itself: the item is in scenes.skipped
    * ```
    */
   export(opts?: { runId?: string; outDir?: string; flat?: boolean }): Promise<ExportResult>;

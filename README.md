@@ -164,7 +164,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`dialogue`](./src/plugins/dialogue/README.md) | Standard | regular (`app.dialogue`) | Owns the `"dialogue"` task contract — a multi-speaker scene in one request, returned as the whole mix plus one audio file per line — + one-off `generate`/`estimate`/`providers` facade. |
 | [`translate`](./src/plugins/translate/README.md) | Standard | regular (`app.translate`) | Owns the `"translate"` task contract + one-off facade. |
 | [`promptGen`](./src/plugins/promptGen/README.md) | Standard | regular (`app.promptGen`) | Owns the `"prompt-gen"` task contract + one-off facade (backs `compose`); `fallback` chain to the next provider when one is unavailable. Tool calling: `messages`, `tools`, `toolChoice`, `cacheSystem`, typed `usage` (served by `fal`, `openai` and `anthropic`), and `runToolLoop`, a tool loop the caller journals, with a rolling prompt-cache breakpoint on the conversation (`cache`). |
-| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("dialogue", "elevenlabs")` (model `eleven_v4`; one request per scene, cut into one mp3/wav per line), `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, output formats, retry-taxonomy errors. |
+| [`elevenlabs`](./src/plugins/elevenlabs/README.md) | Complex | regular (`app.elevenlabs`) | ElevenLabs provider — registers `("voiceover", "elevenlabs")`, `("dialogue", "elevenlabs")` (model named by the item, `eleven_v4` recommended; one request per scene, cut into one mp3/wav per line), `("sfx", "elevenlabs")` and `("music", "elevenlabs")` (models `music_v1`, `music_v2`, `music_v2_5`, needs a paid ElevenLabs plan); price table, output formats, retry-taxonomy errors. |
 | [`openai`](./src/plugins/openai/README.md) | Complex | regular (`app.openai`) | OpenAI provider — registers voiceover, translate, and prompt-gen handlers via the official SDK; prompt-gen runs on the Responses API (GPT-6, images, schema output, reasoning effort, tools, cache-aware cost). |
 | [`anthropic`](./src/plugins/anthropic/README.md) | Complex | regular (`app.anthropic`) | Anthropic provider — registers the prompt-gen handler over the Messages API via the official SDK (Claude 5 models, images, schema output, effort, tools with thinking replay, prompt caching, cache-aware cost). |
 | [`compose`](./src/plugins/compose/README.md) | Standard | regular (`app.compose`) | Natural language → validated build file, with an LLM repair loop that can never emit an invalid spec. |
@@ -455,7 +455,8 @@ cast voice re-runs only the items that use it. The rules for `cast` and `locales
   over either limit before any spend. A line `id` is one file name and is unique in the scene.
 - **Cut.** The scene is cut into lines in TypeScript, without ffmpeg: a line never carries the next
   line's first syllable. Cuts need `mp3_*` or `wav_*` output.
-- **Models.** `eleven_v4` is the dialogue default; `eleven_v3` and `eleven_v4` honour only
+- **Models.** A dialogue item names its `model` (required, like `sfx`: there is no default, because the
+  model is part of the cache key); `eleven_v4` is recommended. `eleven_v3` and `eleven_v4` honour only
   `stability` and `similarity`. Voiceover `style`, `speakerBoost` and `speed` are dropped for them,
   with one warning. `language` is not sent for `eleven_multilingual_v2`, which detects it from the text.
 - **Price.** `eleven_v4`, `eleven_v3` and `eleven_multilingual_v2` estimate at $0.08 per 1K
@@ -547,7 +548,6 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | `elevenlabs` | `apiKeyEnv` | `string` | `"ELEVENLABS_API_KEY"` |
 | | `baseUrl` | `string` | `"https://api.elevenlabs.io"` |
 | | `defaultModel` | `string` | `"eleven_multilingual_v2"` |
-| | `defaultDialogueModel` | `string` | `"eleven_v4"` |
 | | `dialogueMaxChars` | `number` | `2000` (most characters of one dialogue request, over all lines) |
 | | `timeoutMs` | `number` | `60_000` |
 | | `musicTimeoutMs` | `number` | `600_000` |

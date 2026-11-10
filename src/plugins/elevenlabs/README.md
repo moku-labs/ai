@@ -31,7 +31,6 @@ plugin works out of the box once the API key env var is exported.
 | `apiKeyEnv` | `string` | `"ELEVENLABS_API_KEY"` | Name of the env var holding the API key. Resolved via `ctx.env` at request time — never stored, never logged. |
 | `baseUrl` | `string` | `"https://api.elevenlabs.io"` | API base URL. |
 | `defaultModel` | `string` | `"eleven_multilingual_v2"` | Voiceover model used when a request doesn't name one. |
-| `defaultDialogueModel` | `string` | `"eleven_v4"` | Dialogue model used when a request doesn't name one. |
 | `dialogueMaxChars` | `number` | `2000` | Most characters one dialogue request may carry, over all its lines. ElevenLabs words its limit as a recommendation, so it is configurable. |
 | `timeoutMs` | `number` | `60_000` | Per-request timeout, ms (enforced via `AbortSignal.timeout`, merged with any caller signal). |
 | `musicTimeoutMs` | `number` | `600_000` | Timeout of one music request, ms. `/v1/music` answers only when the whole track is ready. |
@@ -296,6 +295,7 @@ two-line `[ai]` message (so `moku estimate` shows it before any spend):
 
 | Rule | Message |
 | --- | --- |
+| The request names a `model` (there is no default: it is part of the artifact key; `eleven_v4` is recommended) | `[ai] Invalid dialogue request: no model.` |
 | At least one line; every line has a `text` and a `voice` | `[ai] Invalid dialogue request: line 2 has no text or no voice.` |
 | Characters over all lines ≤ `dialogueMaxChars` (2000) | `[ai] The dialogue has 2001 characters; ElevenLabs takes at most 2000.` |
 | At most 10 distinct voices | `[ai] The dialogue uses 11 voices; ElevenLabs takes at most 10.` |
@@ -523,7 +523,7 @@ re-exported under the `Elevenlabs` namespace, and its error classes (values) und
 ```ts
 import { Elevenlabs, ElevenlabsErrors, elevenlabsPlugin } from "@moku-labs/ai";
 
-type Cfg = Elevenlabs.Config; // { apiKeyEnv, baseUrl, defaultModel, defaultDialogueModel, dialogueMaxChars, timeoutMs, musicTimeoutMs, dialogueTimeoutMs, priceOverrides }
+type Cfg = Elevenlabs.Config; // { apiKeyEnv, baseUrl, defaultModel, dialogueMaxChars, timeoutMs, musicTimeoutMs, dialogueTimeoutMs, priceOverrides }
 type Api = Elevenlabs.ElevenlabsApi; // { info() }
 
 // Error classes (values) for instanceof checks in custom pipelines:

@@ -91,10 +91,6 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
  *
  * @param ctx - Plugin context exposing `config.priceOverrides` and the mutable `state.prices` cache.
  * @returns The effective price table.
- * @example
- * ```ts
- * const prices = resolvePrices(ctx);
- * ```
  */
 export function resolvePrices(ctx: ElevenlabsContext): Record<string, number> {
   if (ctx.state.prices === null) {

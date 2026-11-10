@@ -193,14 +193,24 @@ export function resolveReferences(
   if (isReferenceValue(value)) return requireResolved(refFiles, String(value.$ref), "$ref");
   if (isFileValue(value)) return requireResolved(files, String(value.$file), "$file");
   if (Array.isArray(value)) return value.map(entry => resolveReferences(entry, refFiles, files));
-  if (typeof value === "object" && value !== null && !(value instanceof Uint8Array)) {
-    const resolved: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      resolved[key] = resolveReferences(entry, refFiles, files);
-    }
-    return resolved;
+  if (!isResolvableContainer(value)) return value;
+
+  const resolved: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    resolved[key] = resolveReferences(entry, refFiles, files);
   }
-  return value;
+  return resolved;
+}
+
+/**
+ * Whether a value is a plain object whose entries may hold references: an
+ * object that is not null and not a byte buffer.
+ *
+ * @param value - Any request value.
+ * @returns True for an object to walk into.
+ */
+function isResolvableContainer(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !(value instanceof Uint8Array);
 }
 
 /**

@@ -44,10 +44,6 @@ const VOICE_SETTING_KEYS: ReadonlyArray<readonly [keyof VoiceSettings, string]> 
  * @param ctx - Plugin context (for `config.defaultModel`).
  * @param request - The voiceover request.
  * @returns The resolved model id.
- * @example
- * ```ts
- * resolveModel(ctx, { text: "hi", voice: "v1" }); // => ctx.config.defaultModel
- * ```
  */
 function resolveModel(ctx: ElevenlabsContext, request: VoiceoverRequest): string {
   return request.model ?? ctx.config.defaultModel;
@@ -61,10 +57,6 @@ function resolveModel(ctx: ElevenlabsContext, request: VoiceoverRequest): string
  * @param request - The voiceover request.
  * @param model - The resolved model id.
  * @returns The cost, in US dollars.
- * @example
- * ```ts
- * costOf(ctx, request, "eleven_multilingual_v2");
- * ```
  */
 function costOf(ctx: ElevenlabsContext, request: VoiceoverRequest, model: string): number {
   const prices = resolvePrices(ctx);
@@ -167,10 +159,6 @@ function buildRequestBody(
  *
  * @param ctx - Plugin context (config + state + env + log).
  * @returns The `VoiceoverHandler` registered under the "voiceover" task.
- * @example
- * ```ts
- * registry.register("voiceover", "elevenlabs", createVoiceoverHandler(ctx));
- * ```
  */
 export function createVoiceoverHandler(ctx: ElevenlabsContext): VoiceoverHandler {
   return {
@@ -179,10 +167,6 @@ export function createVoiceoverHandler(ctx: ElevenlabsContext): VoiceoverHandler
      *
      * @param request - The voiceover request to estimate.
      * @returns The estimated cost in US dollars.
-     * @example
-     * ```ts
-     * handler.estimate({ text: "hi", voice: "v1" });
-     * ```
      */
     estimate(request: VoiceoverRequest): { usd: number } {
       return { usd: costOf(ctx, request, resolveModel(ctx, request)) };
@@ -199,15 +183,12 @@ export function createVoiceoverHandler(ctx: ElevenlabsContext): VoiceoverHandler
      * @throws {FlaggedProviderError} On a content-policy rejection.
      * @throws {TerminalProviderError} Status 400 for an unknown output format, before any HTTP call.
      * @throws {Error} When the configured API key env var is unset.
-     * @example
-     * ```ts
-     * await handler.execute({ text: "hi", voice: "v1" }, {});
-     * ```
      */
     async execute(
       request: VoiceoverRequest,
       opts: { signal?: AbortSignal }
     ): Promise<VoiceoverResult> {
+      // Resolve: the key, the model, the output format and the settings the model honours.
       const apiKey = resolveApiKey(ctx);
       const model = resolveModel(ctx, request);
       const format = resolveOutputFormat(request.outputFormat, request.format);
@@ -215,6 +196,8 @@ export function createVoiceoverHandler(ctx: ElevenlabsContext): VoiceoverHandler
       if (ignored.length > 0) {
         ctx.log.warn("elevenlabs:voiceover:settings-ignored", { model, keys: ignored });
       }
+
+      // Build the request: endpoint, body and timeout.
       const options: ElevenlabsRequestOptions = {
         baseUrl: ctx.config.baseUrl,
         path: buildPath(request.voice, format),
@@ -224,8 +207,11 @@ export function createVoiceoverHandler(ctx: ElevenlabsContext): VoiceoverHandler
         ...(opts.signal === undefined ? {} : { signal: opts.signal })
       };
 
+      // Send; a failure is logged redacted and rethrown unchanged.
       try {
         const audio = await elevenlabsRequest(options);
+
+        // Report: price the characters and assemble the result.
         const costUsd = costOf(ctx, request, model);
         ctx.log.info("elevenlabs:voiceover:done", { model, format: format.code });
         return {

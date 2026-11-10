@@ -52,7 +52,7 @@ get the same types as `Dialogue.DialogueHandler` etc.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `lines` | `DialogueLine[]` | yes | The lines in speaking order. |
-| `model` | `string` | no | Provider-scoped model alias; the provider default when absent (elevenlabs: `eleven_v4`). |
+| `model` | `string` | yes | Provider-scoped model alias (elevenlabs: `eleven_v4`, recommended). Required, like `sfx`: the runner hashes the input as written, so a model defaulted inside the provider would not be part of the artifact key and a changed default would reuse another model's scene. A provider refuses a request without it. |
 | `language` | `string` | no | BCP-47 / ISO 639-1 language hint. |
 | `settings` | `DialogueSettings` | no | Scene-wide `stability` and `similarity`. |
 | `seed` | `number` | no | Seed for repeatable takes. |
@@ -120,8 +120,8 @@ const scene = await app.dialogue.generate({
     { id: "signDaniel", text: "[bitterly] Ты давно здесь не живёшь, Элис.", voice: "6A9D8WSMm4rFsg2DWFeE" }
   ]
 });
-await Bun.write("scene.mp3", scene.audio);
-for (const out of scene.outputs.slice(1)) await Bun.write(`${out.name}.mp3`, out.bytes);
+await writeFile("scene.mp3", scene.audio); // writeFile from "node:fs/promises"
+for (const out of scene.outputs.slice(1)) await writeFile(`${out.name}.mp3`, out.bytes);
 ```
 
 ### `estimate(request, opts?): { usd: number }`
@@ -130,7 +130,7 @@ Cost estimate without executing. Delegates to the handler's own `estimate()`, th
 runner's budget gate uses. Throws the same pinned error for an unknown provider.
 
 ```ts
-const { usd } = app.dialogue.estimate({ lines: [{ text: "Hi", voice: "v1" }] });
+const { usd } = app.dialogue.estimate({ model: "eleven_v4", lines: [{ text: "Hi", voice: "v1" }] });
 ```
 
 ### `providers(): string[]`
@@ -161,7 +161,7 @@ and re-exported from `types.ts`.
 
 | Provider | Registered by | Notes |
 |----------|---------------|-------|
-| `elevenlabs` | the `elevenlabs` plugin, in its `onInit` | Model `eleven_v4`, scene cut into one mp3 per line. Limits, cut padding and tier notes: see the [elevenlabs README](../elevenlabs/README.md). |
+| `elevenlabs` | the `elevenlabs` plugin, in its `onInit` | Model `eleven_v4` (recommended; the request names it), scene cut into one mp3 per line. Limits, cut padding and tier notes: see the [elevenlabs README](../elevenlabs/README.md). |
 
 A Layer-3 custom provider works the same way:
 

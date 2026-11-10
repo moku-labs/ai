@@ -11,6 +11,28 @@ const HEADER_LENGTH = 44;
 /** Length of a RIFF chunk header (id + size). */
 const CHUNK_HEADER_LENGTH = 8;
 
+/** Length of the RIFF container header: "RIFF", the size, "WAVE". Chunks start after it. */
+const RIFF_HEADER_LENGTH = 12;
+
+/** Smallest `fmt ` body this reader takes: the PCM fields up to `bitsPerSample`. */
+const MIN_FMT_SIZE = 16;
+
+/** Byte offsets inside the 44-byte header this cutter writes. */
+const HEADER = {
+  riffSize: 4,
+  waveTag: 8,
+  fmtTag: 12,
+  fmtSize: 16,
+  audioFormat: 20,
+  channels: 22,
+  sampleRate: 24,
+  byteRate: 28,
+  blockAlign: 32,
+  bitsPerSample: 34,
+  dataTag: 36,
+  dataSize: 40
+} as const;
+
 /** Absorbs floating-point noise when a window edge falls on a sample boundary. */
 const EPSILON = 1e-9;
 
@@ -67,6 +89,19 @@ function formatAt(view: DataView, offset: number, size: number): WavFormat {
 }
 
 /**
+ * Reads a `fmt ` chunk when its body is whole.
+ *
+ * @param view - A view over the whole file.
+ * @param body - Where the chunk body starts.
+ * @param size - The chunk body size, as declared.
+ * @returns The format fields, or undefined when the body is too small or cut off.
+ */
+function readFmtChunk(view: DataView, body: number, size: number): WavFormat | undefined {
+  const isWhole = size >= MIN_FMT_SIZE && body + MIN_FMT_SIZE <= view.byteLength;
+  return isWhole ? formatAt(view, body, size) : undefined;
+}
+
+/**
  * Walks the RIFF chunks to the format and the sample data. A `data` size past
  * the end of the file (a streamed wav) is cut to the bytes present.
  *
@@ -74,24 +109,29 @@ function formatAt(view: DataView, offset: number, size: number): WavFormat {
  * @returns The format and the sample bytes, or undefined when either is missing.
  */
 function chunksOf(bytes: Uint8Array): { format: WavFormat; data: Uint8Array } | undefined {
+  // The container: "RIFF" ... "WAVE".
   const isWave = fourCcAt(bytes, 0) === "RIFF" && fourCcAt(bytes, 8) === "WAVE";
   if (!isWave) return undefined;
 
+  // Walk the chunks; the format must come before the data.
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let format: WavFormat | undefined;
-  let offset = 12;
+  let offset = RIFF_HEADER_LENGTH;
   while (offset + CHUNK_HEADER_LENGTH <= bytes.length) {
     const id = fourCcAt(bytes, offset);
     const size = view.getUint32(offset + 4, true);
     const body = offset + CHUNK_HEADER_LENGTH;
+
     if (id === "fmt ") {
-      if (size < 16 || body + 16 > bytes.length) return undefined;
-      format = formatAt(view, body, size);
+      format = readFmtChunk(view, body, size);
+      if (format === undefined) return undefined;
     }
     if (id === "data") {
       const data = bytes.subarray(body, Math.min(body + size, bytes.length));
       return format === undefined ? undefined : { format, data };
     }
+
+    // Chunks are word-aligned: an odd size carries one pad byte.
     offset = body + size + (size % 2);
   }
   return undefined;
@@ -111,19 +151,24 @@ function wavFile(format: WavFormat, data: Uint8Array): Uint8Array {
     for (const [index, char] of [...text].entries()) out[offset + index] = char.codePointAt(0) ?? 0;
   };
 
+  // The RIFF container: everything after the first eight bytes is its size.
   writeText(0, "RIFF");
-  view.setUint32(4, HEADER_LENGTH - CHUNK_HEADER_LENGTH + data.length, true);
-  writeText(8, "WAVE");
-  writeText(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, format.audioFormat, true);
-  view.setUint16(22, format.channels, true);
-  view.setUint32(24, format.sampleRate, true);
-  view.setUint32(28, format.byteRate, true);
-  view.setUint16(32, format.blockAlign, true);
-  view.setUint16(34, format.bitsPerSample, true);
-  writeText(36, "data");
-  view.setUint32(40, data.length, true);
+  view.setUint32(HEADER.riffSize, HEADER_LENGTH - CHUNK_HEADER_LENGTH + data.length, true);
+  writeText(HEADER.waveTag, "WAVE");
+
+  // The fmt chunk: the source format, copied.
+  writeText(HEADER.fmtTag, "fmt ");
+  view.setUint32(HEADER.fmtSize, MIN_FMT_SIZE, true);
+  view.setUint16(HEADER.audioFormat, format.audioFormat, true);
+  view.setUint16(HEADER.channels, format.channels, true);
+  view.setUint32(HEADER.sampleRate, format.sampleRate, true);
+  view.setUint32(HEADER.byteRate, format.byteRate, true);
+  view.setUint16(HEADER.blockAlign, format.blockAlign, true);
+  view.setUint16(HEADER.bitsPerSample, format.bitsPerSample, true);
+
+  // The data chunk: the cut samples.
+  writeText(HEADER.dataTag, "data");
+  view.setUint32(HEADER.dataSize, data.length, true);
   out.set(data, HEADER_LENGTH);
   return out;
 }
@@ -150,21 +195,25 @@ export function openWav(bytes: Uint8Array): CuttableAudio | undefined {
   return {
     durationSeconds: totalFrames / format.sampleRate,
     /**
-     * Cuts `[from, to)` seconds: rounded outward to whole sample frames, then
-     * clipped to the samples inside `hard`.
+     * Cuts `[from, to)` seconds (contract: `CuttableAudio.cut`).
      *
      * @param from - Start of the window, seconds.
      * @param to - End of the window, seconds.
-     * @param hard - Bounds no frame may cross (the neighbours' speech); unbounded when absent.
-     * @returns The cut bytes and the window they really cover (empty when the bounds leave nothing).
+     * @param hard - Bounds no sample may cross; unbounded when absent.
+     * @returns The cut bytes and the window they really cover.
      */
     cut(from: number, to: number, hard?: CutBounds): AudioPiece {
+      // Sample frames wholly inside the hard bounds (all of them when unbounded).
       const rate = format.sampleRate;
       const lowest = hard === undefined ? 0 : Math.ceil(hard.from * rate - EPSILON);
       const highest = hard === undefined ? totalFrames : Math.floor(hard.to * rate + EPSILON);
+
+      // The window rounded outward to sample frames, then clipped inside those bounds.
       const firstFrame = Math.max(0, lowest, Math.floor(from * rate + EPSILON));
       const endFrame = Math.min(totalFrames, highest, Math.ceil(to * rate - EPSILON));
       const lastFrame = Math.max(endFrame, firstFrame);
+
+      // The chosen samples under a fresh header; an empty window gives an empty wav.
       const samples = data.subarray(firstFrame * format.blockAlign, lastFrame * format.blockAlign);
       return {
         bytes: wavFile(format, samples),

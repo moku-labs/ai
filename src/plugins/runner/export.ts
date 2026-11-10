@@ -41,10 +41,6 @@ function isSafeRelativeName(name: string): boolean {
  * @param runId - Optional run id.
  * @returns The run row.
  * @throws {Error} When the run does not exist, or the journal has no runs.
- * @example
- * ```ts
- * const run = pickRun(ctx, undefined);
- * ```
  */
 function pickRun(ctx: RunnerContext, runId: string | undefined): RunRow {
   const run = runId === undefined ? ctx.journal.latestRun() : ctx.journal.getRun(runId);
@@ -241,7 +237,8 @@ async function exportItem(
   const writes = entries.map(entry => ({ entry, target: targetOf(entry, itemDirectory) }));
   const targets = new Set(writes.map(write => write.target));
   const collidesWithItself = targets.size !== writes.length;
-  if (collidesWithItself || writes.some(write => taken.has(write.target))) return undefined;
+  const overwritesEarlierFile = writes.some(write => taken.has(write.target));
+  if (collidesWithItself || overwritesEarlierFile) return undefined;
   for (const write of writes) taken.add(write.target);
 
   // One file per output, in order, so `<label>-2` never lands before `<label>`.

@@ -19,6 +19,27 @@ const SAMPLE_RATES: Readonly<Record<number, readonly number[]>> = {
   3: [44_100, 48_000, 32_000]
 };
 
+/** Samples in one MPEG-1 Layer III frame. */
+const SAMPLES_PER_FRAME_MPEG1 = 1152;
+
+/** Samples in one MPEG-2 or MPEG-2.5 Layer III frame. */
+const SAMPLES_PER_FRAME_MPEG2 = 576;
+
+/** First header byte of every MPEG audio frame. */
+const SYNC_BYTE = 0xff;
+
+/** The three sync bits that open the second header byte. */
+const SYNC_BITS = 0xe0;
+
+/** Mask of a two-bit header field (version, layer, sample-rate index, channel mode). */
+const TWO_BITS = 0x03;
+
+/** Mask of the four-bit bitrate index. */
+const FOUR_BITS = 0x0f;
+
+/** Mask of a one-bit header field (padding). */
+const ONE_BIT = 0x01;
+
 /** Version bits of MPEG-1. */
 const MPEG1 = 3;
 
@@ -75,6 +96,20 @@ function id3Length(bytes: Uint8Array): number {
 }
 
 /**
+ * Tells whether two header bytes open a Layer III frame: the sync word, then
+ * the Layer III bits.
+ *
+ * @param b0 - First header byte (undefined past the end of the file).
+ * @param b1 - Second header byte.
+ * @returns True for a sync word followed by the Layer III bits.
+ */
+function isSupportedHeader(b0: number | undefined, b1: number): boolean {
+  const hasSync = b0 === SYNC_BYTE && (b1 & SYNC_BITS) === SYNC_BITS;
+  const layer = (b1 >> 1) & TWO_BITS;
+  return hasSync && layer === LAYER_III;
+}
+
+/**
  * Reads the Layer III frame header at `offset`.
  *
  * @param bytes - The whole file.
@@ -83,22 +118,23 @@ function id3Length(bytes: Uint8Array): number {
  */
 function frameAt(bytes: Uint8Array, offset: number): Frame | undefined {
   const [b0, b1, b2, b3] = [bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]];
-  if (b0 !== 0xff || b1 === undefined || b2 === undefined || b3 === undefined) return undefined;
-  if ((b1 & 0xe0) !== 0xe0) return undefined;
+  if (b1 === undefined || b2 === undefined || b3 === undefined) return undefined;
+  if (!isSupportedHeader(b0, b1)) return undefined;
 
-  const version = (b1 >> 3) & 0x03;
-  const layer = (b1 >> 1) & 0x03;
-  const sampleRate = SAMPLE_RATES[version]?.[(b2 >> 2) & 0x03];
+  // Read the fields: version, sample rate and bitrate must name a real combination.
+  const version = (b1 >> 3) & TWO_BITS;
+  const sampleRate = SAMPLE_RATES[version]?.[(b2 >> 2) & TWO_BITS];
   const isMpeg1 = version === MPEG1;
-  const kbps = (isMpeg1 ? MPEG1_BITRATES : MPEG2_BITRATES)[(b2 >> 4) & 0x0f];
-  if (layer !== LAYER_III || sampleRate === undefined || kbps === undefined || kbps === 0) {
-    return undefined;
-  }
+  const kbps = (isMpeg1 ? MPEG1_BITRATES : MPEG2_BITRATES)[(b2 >> 4) & FOUR_BITS];
+  if (sampleRate === undefined || kbps === undefined || kbps === 0) return undefined;
 
-  const padding = (b2 >> 1) & 0x01;
-  const samples = isMpeg1 ? 1152 : 576;
+  // Size the frame: samples per frame set its byte length and its duration.
+  const padding = (b2 >> 1) & ONE_BIT;
+  const samples = isMpeg1 ? SAMPLES_PER_FRAME_MPEG1 : SAMPLES_PER_FRAME_MPEG2;
   const length = Math.floor(((samples / 8) * kbps * 1000) / sampleRate) + padding;
-  const isMono = ((b3 >> 6) & 0x03) === MONO;
+
+  // Locate where a Xing/Info tag would start, which depends on the channel layout.
+  const isMono = ((b3 >> 6) & TWO_BITS) === MONO;
   const sideInfo = SIDE_INFO_LENGTH[isMpeg1 ? "mpeg1" : "mpeg2"][isMono ? "mono" : "stereo"];
   return {
     offset,
@@ -174,20 +210,24 @@ export function openMp3(bytes: Uint8Array): CuttableAudio | undefined {
   return {
     durationSeconds: frames.length * frameSeconds,
     /**
-     * Cuts `[from, to)` seconds: rounded outward to whole frames, then clipped
-     * to the frames that lie wholly inside `hard`.
+     * Cuts `[from, to)` seconds (contract: `CuttableAudio.cut`).
      *
      * @param from - Start of the window, seconds.
      * @param to - End of the window, seconds.
-     * @param hard - Bounds no frame may cross (the neighbours' speech); unbounded when absent.
-     * @returns The cut bytes and the window they really cover (empty when the bounds leave nothing).
+     * @param hard - Bounds no frame may cross; unbounded when absent.
+     * @returns The cut bytes and the window they really cover.
      */
     cut(from: number, to: number, hard?: CutBounds): AudioPiece {
+      // Frames wholly inside the hard bounds (all of them when unbounded).
       const lowest = hard === undefined ? 0 : Math.ceil(hard.from / frameSeconds - EPSILON);
       const highest =
         hard === undefined ? frames.length : Math.floor(hard.to / frameSeconds + EPSILON);
+
+      // The window rounded outward to frames, then clipped inside those bounds.
       const firstIndex = Math.max(0, lowest, Math.floor(from / frameSeconds + EPSILON));
       const endIndex = Math.min(frames.length, highest, Math.ceil(to / frameSeconds - EPSILON));
+
+      // The chosen frames, byte for byte; an empty window picks none.
       const picked = frames.slice(firstIndex, Math.max(endIndex, firstIndex));
       const chunks = picked.map(frame => bytes.subarray(frame.offset, frame.offset + frame.length));
       return {

@@ -12,7 +12,6 @@ const DEFAULT_CONFIG: Config = {
   apiKeyEnv: "ELEVENLABS_API_KEY",
   baseUrl: "https://api.elevenlabs.io",
   defaultModel: "eleven_multilingual_v2",
-  defaultDialogueModel: "eleven_v4",
   dialogueMaxChars: 2000,
   timeoutMs: 60_000,
   musicTimeoutMs: 600_000,
