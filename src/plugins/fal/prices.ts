@@ -5,8 +5,9 @@
  * the `call` endpoints); this module merges them into the one table every task
  * reads, with `config.priceOverrides` last.
  * Video keys stay unprefixed; the other tasks' keys carry `image:`, `music:`,
- * `llm:`, `sfx:`, `sprite:` or `call:`. The merge runs at call time, never at module
- * load, so the import cycle with the task price modules is safe.
+ * `llm:`, `sfx:` or `sprite:`, and the `call` endpoints carry `call:`. The merge
+ * runs at call time, never at module load, so the import cycle with the task
+ * price modules is safe.
  */
 import { callPrices } from "./call/prices";
 import { TerminalProviderError } from "./errors";

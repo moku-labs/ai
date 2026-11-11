@@ -45,10 +45,6 @@ type Outcome = { output: CallOutput; code: number };
  * sink prints every entry with `console.log`, which would break the one-line stdout.
  *
  * @param context - CommandContext (branded console + log).
- * @example
- * ```ts
- * routeLogsToStderr(context);
- * ```
  */
 function routeLogsToStderr(context: CommandContext): void {
   context.log.clearSinks();
@@ -66,10 +62,6 @@ function routeLogsToStderr(context: CommandContext): void {
  * @param context - CommandContext (stdin reader).
  * @param raw - The raw `--input` value.
  * @returns The JSON text, or the usage message for an unreadable file.
- * @example
- * ```ts
- * await readInputText(context, "@body.json"); // { ok: true, value: "{…}" }
- * ```
  */
 async function readInputText(context: CommandContext, raw: string): Promise<Step<string>> {
   if (raw === "-") return { ok: true, value: await context.readIn() };
@@ -113,10 +105,6 @@ function parseInputObject(text: string): Step<Record<string, unknown>> {
  * @param context - CommandContext (stdin reader).
  * @param raw - The raw `--input` value, if given.
  * @returns The input object, or the usage message.
- * @example
- * ```ts
- * await readInput(context, "-");
- * ```
  */
 async function readInput(
   context: CommandContext,
@@ -138,10 +126,6 @@ async function readInput(
  * @param endpoint - The endpoint id.
  * @param input - The endpoint's own input.
  * @returns The compiled build, or the compiler's message as a usage error.
- * @example
- * ```ts
- * await compileCall(context, "fal-ai/sam-3/image", { prompt: "wall" });
- * ```
  */
 async function compileCall(
   context: CommandContext,
@@ -170,10 +154,6 @@ async function compileCall(
  *
  * @param records - The records so far (mutated).
  * @param event - The stream record.
- * @example
- * ```ts
- * recordEvent(records, { type: "item:dispatching", runId: "r", itemId: "i" });
- * ```
  */
 function recordEvent(records: Records, event: RunEvent): void {
   if (event.type === "item:dispatching") records.dispatched = true;
@@ -186,29 +166,57 @@ function recordEvent(records: Records, event: RunEvent): void {
 }
 
 /**
- * Starts the run and drains its event stream, which is opened synchronously
- * right after `run()` (the `moku run` pattern).
+ * Folds every record of one run's stream into `records` until the stream ends.
+ *
+ * @param context - CommandContext (runner).
+ * @param runId - The run to follow; other runs' records are never delivered.
+ * @param records - The records so far (mutated).
+ */
+async function drainEvents(
+  context: CommandContext,
+  runId: string,
+  records: Records
+): Promise<void> {
+  for await (const event of context.runner.events({ runId })) {
+    recordEvent(records, event);
+  }
+}
+
+/**
+ * Starts the run and follows only its own event stream, opened in `onStart`
+ * (before any item record). A rejected `run()` (the active-run cap, a locked
+ * journal) is not thrown: it comes back as a message, and the stream is left alone.
  *
  * @param context - CommandContext (runner).
  * @param build - The compiled one-item build.
  * @param signal - The SIGINT-wired abort signal.
- * @returns The run result and the records its stream held.
- * @example
- * ```ts
- * const { result, records } = await runBuild(context, build, signal);
- * ```
+ * @returns The run result and the records its stream held, or the message of the rejection.
  */
 async function runBuild(
   context: CommandContext,
   build: CompiledBuild,
   signal: AbortSignal
-): Promise<Finished> {
-  const running = context.runner.run({ builds: [build] }, { signal });
+): Promise<Step<Finished>> {
   const records: Records = { dispatched: false, failure: undefined };
-  for await (const event of context.runner.events()) {
-    recordEvent(records, event);
+  let drain: Promise<void> = Promise.resolve();
+
+  // Open this run's stream the moment its id is known.
+  const onStart = (runId: string): void => {
+    drain = drainEvents(context, runId, records);
+    // A rejection of the drain is raised where it is awaited; this keeps it from
+    // being unhandled while `run()` is still pending or has been rejected.
+    drain.catch(() => {});
+  };
+
+  let result: RunResult;
+  try {
+    result = await context.runner.run({ builds: [build] }, { signal, onStart });
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
-  return { result: await running, records };
+
+  await drain;
+  return { ok: true, value: { result, records } };
 }
 
 /**
@@ -221,10 +229,6 @@ async function runBuild(
  * @param item - The done journal item (with its content hash).
  * @param finished - The run result and its stream records.
  * @returns The `ok: true` output.
- * @example
- * ```ts
- * const output = await answerOf(context, undefined, "ep", item, finished);
- * ```
  */
 async function answerOf(
   context: CommandContext,
@@ -233,6 +237,7 @@ async function answerOf(
   item: ItemRow & { contentHash: string },
   finished: Finished
 ): Promise<CallOutput> {
+  // The fields every success shares; `reused` means no provider call started.
   const base = {
     ok: true as const,
     endpoint,
@@ -240,10 +245,13 @@ async function answerOf(
     reused: !finished.records.dispatched,
     runId: finished.result.runId
   };
+
+  // Without --out the answer is inline JSON.
   const bytes = await context.store.read(item.contentHash);
   if (outFile === undefined)
     return { ...base, result: JSON.parse(new TextDecoder().decode(bytes)) };
 
+  // With --out the bytes go to the file untouched and the output names its path.
   const out = path.resolve(outFile);
   await mkdir(path.dirname(out), { recursive: true });
   await writeFile(out, bytes);
@@ -268,6 +276,16 @@ function failure(endpoint: string, runId: string | null, error: CallError, code:
 }
 
 /**
+ * True when the item is done and its answer bytes are in the store.
+ *
+ * @param item - The journal item, if the run made one.
+ * @returns Whether the item carries a content hash to read the answer from.
+ */
+function hasAnswer(item: ItemRow | undefined): item is ItemRow & { contentHash: string } {
+  return item?.status === "done" && item.contentHash !== null;
+}
+
+/**
  * Maps a finished run to the outcome: a failed or flagged item first, then a
  * done item with its answer, then a drained run, else a run that failed
  * before an item ran (its own error message).
@@ -277,10 +295,6 @@ function failure(endpoint: string, runId: string | null, error: CallError, code:
  * @param endpoint - The endpoint id.
  * @param finished - The run result and its stream records.
  * @returns The outcome to print.
- * @example
- * ```ts
- * const { output, code } = await settle(context, flags, "ep", finished);
- * ```
  */
 async function settle(
   context: CommandContext,
@@ -289,20 +303,18 @@ async function settle(
   finished: Finished
 ): Promise<Outcome> {
   const { result, records } = finished;
+
+  // A failed or flagged item is the answer: report its class and message.
   if (records.failure) return failure(endpoint, result.runId, records.failure, EXIT_CODES.failure);
 
+  // A done item with stored bytes: print its answer.
   const item = context.journal.listItems(result.runId)[0];
-  if (item?.status === "done" && item.contentHash !== null) {
-    const output = await answerOf(
-      context,
-      flags.out,
-      endpoint,
-      { ...item, contentHash: item.contentHash },
-      finished
-    );
+  if (hasAnswer(item)) {
+    const output = await answerOf(context, flags.out, endpoint, item, finished);
     return { output, code: EXIT_CODES.ok };
   }
 
+  // A paused run: the same command again adopts the submitted job.
   if (result.status === "paused") {
     return failure(
       endpoint,
@@ -311,6 +323,8 @@ async function settle(
       EXIT_CODES.paused
     );
   }
+
+  // Neither an item nor a pause: the run's own error explains why.
   const message = result.error ?? NO_ANSWER_MESSAGE;
   return failure(endpoint, result.runId, { class: "run", message }, EXIT_CODES.failure);
 }
@@ -323,15 +337,13 @@ async function settle(
  * @param context - CommandContext (branded console, stdout writer).
  * @param outcome - The line and exit code.
  * @returns The exit code.
- * @example
- * ```ts
- * return await finish(context, outcome);
- * ```
  */
 async function finish(context: CommandContext, outcome: Outcome): Promise<number> {
   const { output } = outcome;
-  if (!output.ok && output.error.class === "paused") context.ui.warn(output.error.message);
-  if (!output.ok && output.error.class !== "paused") context.ui.error(output.error.message);
+  if (!output.ok) {
+    if (output.error.class === "paused") context.ui.warn(output.error.message);
+    else context.ui.error(output.error.message);
+  }
 
   await context.writeOut(`${JSON.stringify(output)}\n`);
   return outcome.code;
@@ -347,30 +359,37 @@ async function finish(context: CommandContext, outcome: Outcome): Promise<number
  * @param flags - Parsed command flags (`input`, `out`).
  * @param positionals - Positional args; `positionals[0]` is the endpoint.
  * @returns The exit code.
- * @example
- * ```ts
- * const code = await runCallCommand(context, { input: '{"prompt":"wall"}' }, ["fal-ai/sam-3/image"]);
- * ```
  */
 export async function runCallCommand(
   context: CommandContext,
   flags: CommandFlags,
   positionals: string[]
 ): Promise<number> {
+  // Keep stdout clean: logs go to stderr before anything can log.
   routeLogsToStderr(context);
 
+  // Every usage error prints one line and exits with the usage code; no run starts.
   const endpoint = positionals[0] ?? "";
   const usage = (message: string): Promise<number> =>
     finish(context, failure(endpoint, NO_RUN, { class: "usage", message }, EXIT_CODES.usage));
 
   if (endpoint === "") return usage("moku call requires an <endpoint> argument");
 
+  // Read and parse the endpoint input.
   const input = await readInput(context, flags.input);
   if (!input.ok) return usage(input.message);
 
+  // Compile the one-item build.
   const build = await compileCall(context, endpoint, input.value);
   if (!build.ok) return usage(build.message);
 
+  // Run it through the normal path, then print the outcome.
   const finished = await context.runWithAbort(signal => runBuild(context, build.value, signal));
-  return finish(context, await settle(context, flags, endpoint, finished));
+
+  // A rejected run never started one: print its message, with no run id.
+  if (!finished.ok) {
+    const error: CallError = { class: "run", message: finished.message };
+    return finish(context, failure(endpoint, NO_RUN, error, EXIT_CODES.failure));
+  }
+  return finish(context, await settle(context, flags, endpoint, finished.value));
 }

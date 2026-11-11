@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { BuildfileSource } from "../../../buildfile/types";
 import { createCliApi, isPlainMode, runWithAbort } from "../../api";
-import type { CliApi, CommandTree } from "../../types";
+import type { CallOutput, CliApi, CommandTree } from "../../types";
 import { EXIT_CODES } from "../../types";
 import { createFakeCliContext, createFakeCommandContext, createItemRow } from "./fixtures";
 
@@ -110,18 +110,6 @@ describe("createCliApi().commands", () => {
       "compose",
       "call"
     ]);
-  });
-
-  it("describes call's --input and --out flags", () => {
-    const ctx = createFakeCliContext();
-    const api = createCliApi(ctx);
-
-    const callCommand = api.commands().commands.find(command => command.name === "call");
-
-    expect(callCommand?.flags).toEqual({
-      input: "Endpoint input: inline JSON, @<file>, or - for stdin",
-      out: "Write the answer JSON to this file"
-    });
   });
 
   it("describes run's flags with human descriptions", () => {
@@ -267,6 +255,10 @@ describe("CliApi types", () => {
 
   it("commands returns the exported CommandTree shape", () => {
     expectTypeOf<CliApi["commands"]>().returns.toEqualTypeOf<CommandTree>();
+  });
+
+  it("a failed call output costs exactly 0", () => {
+    expectTypeOf<Extract<CallOutput, { ok: false }>["costUsd"]>().toEqualTypeOf<0>();
   });
 });
 

@@ -202,6 +202,8 @@ export type CliApi = {
    * Parses argv, routes to a command module, renders via the branded
    * console, and translates the outcome to the exit-code contract. Never
    * calls `process.exit` itself — the caller (`bin.ts`) owns the process.
+   * `call` replaces the log sinks for the rest of the process (warn and error go to
+   * stderr, info and debug are dropped): right for the bin, something a long-lived host should know.
    *
    * @param argv - Command-line arguments, excluding the node/script prefix (e.g. `["run", "--dry-run"]`).
    * @returns The exit code (see {@link EXIT_CODES}).

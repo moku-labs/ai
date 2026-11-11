@@ -120,6 +120,9 @@ describe("fal call through the runner", () => {
     }).createApp();
     await app.start();
 
+    // Bug: the handler is registered under another provider name and `moku call` finds no provider.
+    expect(app.registry.providers("call")).toEqual(["fal"]);
+
     const result = await app.runner.run({ files: path.join(tempDir, "*.moku.yaml") });
 
     expect(result).toMatchObject({ status: "done", totals: { total: 1, done: 1 } });

@@ -111,7 +111,7 @@ export type Config = {
   jobTimeoutMs: number;
   /**
    * JSONL request log path, relative to the working directory: one line per billable request of
-   * every task. "" = off. Default: "".
+   * every task and the `call` endpoints. "" = off. Default: "".
    *
    * @example
    * ```ts
@@ -122,13 +122,13 @@ export type Config = {
 };
 
 /**
- * fal plugin state: the effective price table of every task, computed once at
+ * fal plugin state: the effective price table of every task and the `call` endpoints, computed once at
  * first use (bundled prices merged with `config.priceOverrides`), the URLs
  * of the files this process already put in fal storage, and whether the
  * request log already warned about a failed write.
  */
 export type State = {
-  /** Effective price table of every task (bundled prices merged with config.priceOverrides), computed once at first use. */
+  /** Effective price table of every task and the `call` endpoints (bundled prices merged with config.priceOverrides), computed once at first use. */
   prices: Record<string, number> | null;
   /**
    * fal storage URLs of files uploaded by this process, keyed `storage:<mime>:<sha256 of the bytes>`,

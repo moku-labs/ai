@@ -18,6 +18,15 @@ type Scenario = {
   item?: ItemRow | undefined;
   events?: RunEvent[];
   answer?: string;
+  /** `run()` rejects with this error after it announced its run id (cap reached, journal locked). */
+  rejectWith?: Error;
+  /** The stream never ends, like a stream whose run was never closed. */
+  endlessStream?: boolean;
+};
+
+/** An event stream that yields nothing and never ends. */
+const ENDLESS_STREAM: AsyncIterable<RunEvent> = {
+  [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) })
 };
 
 // eslint-disable-next-line unicorn/no-null -- the usage output's runId is JSON null
@@ -53,6 +62,8 @@ function createCallContext(scenario: Scenario = {}) {
       run: (options, runOptions): Promise<RunResult> => {
         order.push("run");
         runCalls.push({ options: options ?? {}, signal: runOptions?.signal });
+        runOptions?.onStart?.("run-1");
+        if (scenario.rejectWith) return Promise.reject(scenario.rejectWith);
         const result: RunResult = {
           runId: "run-1",
           status: scenario.status ?? "done",
@@ -61,10 +72,14 @@ function createCallContext(scenario: Scenario = {}) {
         };
         return Promise.resolve(result);
       },
-      events: () =>
-        streamOf(
-          scenario.events ?? [{ type: "item:dispatching", runId: "run-1", itemId: "item-1" }]
-        )
+      // Like the real runner: a run filter keeps only that run's records.
+      events: opts => {
+        if (scenario.endlessStream) return ENDLESS_STREAM;
+        const events = scenario.events ?? [
+          { type: "item:dispatching", runId: "run-1", itemId: "item-1" }
+        ];
+        return streamOf(events.filter(event => !opts?.runId || event.runId === opts.runId));
+      }
     },
     journal: { listItems: () => (item === undefined ? [] : [item]) },
     store: {
@@ -412,6 +427,46 @@ describe("runCallCommand — failures", () => {
 
     expect(code).toBe(EXIT_CODES.failure);
     expect(outputOf(stdout)).toMatchObject({ ok: false, error: { class: "run" } });
+  });
+
+  it("a rejected run prints one line with class run and exits 1", async () => {
+    const { context, stdout, errorLines } = createCallContext({
+      rejectWith: new Error("database is locked"),
+      endlessStream: true
+    });
+
+    const code = await runCallCommand(context, { input: "{}" }, ["ep"]);
+
+    expect(code).toBe(EXIT_CODES.failure);
+    expect(outputOf(stdout)).toEqual({
+      ok: false,
+      endpoint: "ep",
+      costUsd: 0,
+      runId: NO_RUN,
+      error: { class: "run", message: "database is locked" }
+    });
+    expect(errorLines.join("\n")).toContain("database is locked");
+  });
+
+  it("an item:failed of another run is not taken as this call's failure", async () => {
+    const { context, stdout } = createCallContext({
+      events: [
+        dispatching,
+        {
+          type: "item:failed",
+          runId: "run-2",
+          itemId: "item-9",
+          label: "other",
+          errorClass: "http-4xx",
+          message: "other run failed"
+        }
+      ]
+    });
+
+    const code = await runCallCommand(context, { input: "{}" }, ["ep"]);
+
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(outputOf(stdout)).toMatchObject({ ok: true, reused: false });
   });
 
   it("an aborted signal gives exit 4, class paused and the rerun hint", async () => {

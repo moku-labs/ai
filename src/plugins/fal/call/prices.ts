@@ -120,7 +120,8 @@ export function callRate(prices: Readonly<Record<string, number>>, endpoint: str
  * ```
  */
 export function callUnitOf(endpoint: string): CallUnit {
-  return Object.hasOwn(callUnits, endpoint) ? (callUnits[endpoint] ?? "request") : "request";
+  if (!Object.hasOwn(callUnits, endpoint)) return "request";
+  return callUnits[endpoint] ?? "request";
 }
 
 /**

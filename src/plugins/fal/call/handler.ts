@@ -60,6 +60,9 @@ const JSON_MIME = "application/json";
 const INVALID_REQUEST =
   '[ai] Invalid fal call request.\n  Pass "endpoint" (a fal endpoint id, for example "fal-ai/sam-3/image") and "input" (a JSON object).';
 
+/** Fields of a resolved file: path, mimeType, hash. */
+const RESOLVED_FILE_FIELDS = 3;
+
 /** The input field `microsoft/moge-2` is billed by. */
 const MEGAPIXEL_FIELD = "image_url";
 
@@ -126,7 +129,7 @@ function isResolvedFile(value: unknown): value is LocalFile {
   if (!isPlainObject(value)) return false;
 
   const fields = Object.keys(value);
-  const hasExactFields = fields.length === 3;
+  const hasExactFields = fields.length === RESOLVED_FILE_FIELDS;
   return (
     hasExactFields &&
     typeof value.path === "string" &&

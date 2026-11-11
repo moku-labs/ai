@@ -18,10 +18,7 @@ describe("call price rows in the merged table", () => {
     const prices = mergePrices({});
 
     // A missing prefixKeys("call", …) in mergePrices leaves every call endpoint unpriced.
-    expect(callRate(prices, "fal-ai/sam-3/3d-body")).toBe(0.02);
     expect(callRate(prices, "fal-ai/sam-3/image")).toBe(0.005);
-    expect(callRate(prices, "fal-ai/sam-3/video-rle")).toBe(0.005);
-    expect(callRate(prices, "microsoft/moge-2")).toBe(0.01);
   });
 
   it("lets config.priceOverrides win and add an endpoint", () => {

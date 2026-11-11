@@ -256,6 +256,9 @@ stdout is exactly one JSON line (`Cli.CallOutput`), written with an awaited `pro
 (`CommandContext.writeOut`). Under node, `console.log` followed by `process.exit` cuts a piped
 answer at 65,536 bytes; the awaited write does not. The log sinks are replaced first: `warn` and
 `error` log entries go to stderr, `info` and `debug` are dropped, so no log line reaches stdout.
+`call` replaces the log sinks for the rest of the process (warn and error go to stderr, info and
+debug are dropped), which is right for the bin and something a long-lived host should know: the
+log API cannot hand the previous sinks back.
 
 ```json
 {"ok":true,"endpoint":"fal-ai/sam-3/image","costUsd":0.005,"reused":false,"runId":"7f3c…","result":{"masks":[…]}}
@@ -273,6 +276,7 @@ was dispatched in this run.
 | item `failed` | `1` | the item's error class | the item's message, else the class |
 | item `flagged` | `1` | `content-policy` | the item's message, else `content-policy` |
 | run `failed` before the item ran | `1` | `run` | the run's error, for example a missing price |
+| `run()` rejected (run cap reached, journal locked) | `1` | `run` | the error's message; `runId` is `null` |
 | paused (Ctrl-C) | `4` | `paused` | `[ai] The call was paused.` plus the rerun hint |
 | bad argument or `--input` | `3` | `usage` | one of the five lines below; `runId` is `null` |
 

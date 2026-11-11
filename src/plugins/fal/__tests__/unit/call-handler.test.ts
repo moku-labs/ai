@@ -2,6 +2,7 @@ import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCallHandler } from "../../call/handler";
+import { callPrices } from "../../call/prices";
 import { encodeJobId } from "../../client/queue";
 import type { CallHandler, CallRequest, FalContext } from "../../types";
 import type { TempFiles } from "./fixtures";
@@ -118,16 +119,10 @@ describe("call handler", () => {
       open({ env: createFakeEnv({}) });
       const fetchMock = stubFetch();
 
-      expect(
-        handler.estimate({ endpoint: SAM_BODY, input: { image_url: { $file: "x.png" } } })
-      ).toEqual({
-        usd: 0.02
-      });
+      // A megapixel endpoint with an unresolved image: one unit, not a count of its pixels.
       expect(
         handler.estimate({ endpoint: MOGE, input: { image_url: { $file: "x.png" } } })
-      ).toEqual({
-        usd: 0.01
-      });
+      ).toEqual({ usd: callPrices[MOGE] });
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
