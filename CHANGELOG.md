@@ -7,6 +7,24 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **cli: `moku call <endpoint> --input <json | @file | -> [--out <file>]`.** Runs one provider endpoint
+  as one item of task `call` through the normal run path, so the journal, retries, lanes and the content
+  cache apply. A local file in the input is marked `{"$file": "<path>"}`. stdout is exactly one JSON
+  line: `{ ok, endpoint, costUsd, reused, runId, result }` (`out` in place of `result` with `--out`), or
+  `{ ok: false, …, error: { class, message } }`; everything human goes to stderr. The same command
+  again reuses a done call at cost 0 and adopts a submitted job. Exit 0 done, 1 failed, 3 bad argument,
+  4 paused. New types `Cli.CallOutput` and `Cli.CallError`.
+- **fal: the `("call", "fal")` handler.** One fal queue endpoint as it is: request `{ endpoint, input }`,
+  every resolved `$file` in the input is uploaded and replaced by its URL, the result is fal's answer as
+  JSON. Price rows `call:<endpoint>` (overridable in `fal.priceOverrides`): `fal-ai/sam-3/3d-body` 0.02
+  and `fal-ai/sam-3/image` 0.005 per request, `fal-ai/sam-3/video-rle` 0.005 per 16 frames,
+  `microsoft/moge-2` 0.01 per megapixel, rounded up. An endpoint with no row is refused before any upload
+  or POST. `gpt-image-2.5` has no row: the `image` task serves it. New types `Fal.CallRequest`,
+  `Fal.CallResult`, `Fal.CallUnit`, `Fal.CallJobPoll`, `Fal.CallHandler`.
+- **runner: `RunOptions.builds` and `RunResult.error`.** `run({ builds })` plans compiled builds from
+  memory and never reads build files; the run's `glob` is `"(inline)"`. `resume()` skips such runs, and
+  `resume({ runId })` of one is refused: start it again. A failed run now resolves with `error`, the
+  message of what failed it.
 - **fal: Gemini 4 Carbon and Argon.** The ids `google/gemini-4-carbon` and `google/gemini-4-argon`
   are priced at 4 in, 20 out USD per 1M tokens and listed by `app.fal.models("prompt-gen")` after the
   six. Measured through fal on 2026-11-11: fal bills 4 / 20, where OpenRouter lists 2 / 10.
@@ -78,6 +96,9 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Fixed
 
+- **journal: `busy_timeout` is set before the WAL switch.** On a brand-new journal the
+  `journal_mode = WAL` pragma takes a lock. A second process that started at the same moment could
+  throw "database is locked" (1 of 280 parallel first starts). Now it waits.
 - **anthropic: Sonnet 5.5 cache read 0.20 → 0.10 USD per 1M.** The price page lists $0.10 per 1M
   tokens. `costUsd` on a cached Sonnet 5.5 call was twice too high.
 - **fal: ElevenLabs Music v2.5 0.80 → 0.60 USD per started minute.** fal lists $0.6 per minute.
