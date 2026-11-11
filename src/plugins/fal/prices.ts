@@ -1,12 +1,14 @@
 /**
  * @file fal price table — merge and prefix only. The tables live in the task
  * directories (`video/prices.ts`, `image/prices.ts`, `llm/prices.ts`,
- * `music/prices.ts`, `sfx/prices.ts`, `sprite/prices.ts`); this module merges
- * them into the one table every task reads, with `config.priceOverrides` last.
+ * `music/prices.ts`, `sfx/prices.ts`, `sprite/prices.ts`, and `call/prices.ts` for
+ * the `call` endpoints); this module merges them into the one table every task
+ * reads, with `config.priceOverrides` last.
  * Video keys stay unprefixed; the other tasks' keys carry `image:`, `music:`,
- * `llm:`, `sfx:` or `sprite:`. The merge runs at call time, never at module
+ * `llm:`, `sfx:`, `sprite:` or `call:`. The merge runs at call time, never at module
  * load, so the import cycle with the task price modules is safe.
  */
+import { callPrices } from "./call/prices";
 import { TerminalProviderError } from "./errors";
 import { imagePrices } from "./image/prices";
 import { llmPriceRows } from "./llm/prices";
@@ -42,11 +44,12 @@ export function prefixKeys(
  * Merges every task's bundled table with config overrides (overrides win).
  *
  * @param overrides - `config.priceOverrides`.
- * @returns The effective price table of all six tasks.
+ * @returns The effective price table of all six tasks and the `call` endpoints.
  * @example
  * ```ts
  * mergePrices({ "image:gpt-image-2.5": 0.07 })["image:gpt-image-2.5"]; // => 0.07
  * mergePrices({})["llm:anthropic/claude-opus-5.5#out"]; // => 20
+ * mergePrices({})["call:fal-ai/sam-3/image"]; // => 0.005
  * ```
  */
 export function mergePrices(overrides: Record<string, number>): Record<string, number> {
@@ -56,6 +59,7 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
     ...prefixKeys("music", musicPrices),
     ...prefixKeys("sfx", sfxPrices),
     ...prefixKeys("sprite", spritePrices),
+    ...prefixKeys("call", callPrices),
     ...llmPriceRows(),
     ...overrides
   };

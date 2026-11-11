@@ -1,7 +1,8 @@
 /**
  * @file fal provider plugin — API factory (`app.fal.info()`, `app.fal.models(task)`).
  * `models` lists each task's catalog with its effective price from the merged
- * table; no network, no key.
+ * table; no network, no key. `models` lists the six fal tasks: the `call` handler is the
+ * seventh registered handler but not a `FalTask`, so it has no lister.
  */
 import { resolveApiKey } from "./client/http";
 import { uploadPublic } from "./client/upload";

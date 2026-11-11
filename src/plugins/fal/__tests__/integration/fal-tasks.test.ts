@@ -113,17 +113,22 @@ describe("fal six-task integration", () => {
     vi.unstubAllGlobals();
   });
 
-  it("registers video, image, prompt-gen, music, sfx and sprite under fal in onInit", async () => {
+  it("registers video, image, prompt-gen, music, sfx, sprite and call under fal in onInit", async () => {
     const app = buildFramework(dbPath, requestLog).createApp();
     await app.start();
 
-    for (const task of ["video", "image", "prompt-gen", "music", "sfx", "sprite"]) {
+    for (const task of ["video", "image", "prompt-gen", "music", "sfx", "sprite", "call"]) {
       expect(app.registry.providers(task)).toContain("fal");
       expect(app.registry.resolve(task, "fal")).toBeTypeOf("object");
     }
     const image = app.registry.resolve("image", "fal");
     expect(image).toHaveProperty("submit");
     expect(image).toHaveProperty("poll");
+    // The runner drives call as a job handler: estimate plus submit and poll, no execute.
+    const call = app.registry.resolve("call", "fal");
+    expect(call).toHaveProperty("estimate");
+    expect(call).toHaveProperty("submit");
+    expect(call).toHaveProperty("poll");
 
     await app.stop();
   });
@@ -281,5 +286,7 @@ describe("fal six-task integration", () => {
     expectTypeOf(createImageHandler).parameter(0).toEqualTypeOf<FalContext>();
     // @ts-expect-error — "audio" is not a fal task
     expect(() => app.fal.models("audio")).toThrow('[ai] Unknown fal task "audio".');
+    // @ts-expect-error — "call" is a registered handler, not a fal task: no model list
+    expect(() => app.fal.models("call")).toThrow('[ai] Unknown fal task "call".');
   });
 });

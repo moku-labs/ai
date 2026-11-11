@@ -20,8 +20,8 @@ import type { FalContext, FalTask, LocalFile } from "./types";
  * ```
  */
 export type RequestLogEntry = {
-  /** The fal task. */
-  task: FalTask;
+  /** The fal task, or `"call"` for a `("call", "fal")` request (a handler, not a `FalTask`). */
+  task: FalTask | "call";
   /** Model alias or id. */
   model: string;
   /** fal endpoint id (prompt-gen: the chat path). */
