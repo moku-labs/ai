@@ -539,9 +539,12 @@ export type Config = {
   maxActiveRuns: number;   // default 1 (runs driven at once in this process)
 };
 
-export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean };
+// builds: compiled builds from memory; the run plans exactly these, never calls loadGlob,
+// ignores files, and records glob "(inline)". Such a run cannot be resumed: run it again.
+export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean; builds?: CompiledBuild[] };
 export type RunResultStatus = "done" | "failed" | "paused" | "budget-stopped";
-export type RunResult = { runId: string; status: RunResultStatus; totals: RunTotals };
+// error: the message of the error that failed the run; only with status "failed".
+export type RunResult = { runId: string; status: RunResultStatus; totals: RunTotals; error?: string };
 export type EstimateLine = { task: string; provider: string; items: number; usd: number };
 export type EstimateResult = { lines: EstimateLine[]; totalUsd: number };
 export type RunStatusReport = { runId: string; status: string; totals: RunTotals; updatedAt: number };
@@ -1607,6 +1610,19 @@ Commands:
   mitigation) until terminal. Exit 0.
 - moku compose "<prompt>" [--emit build|script] [--out <path>] — compose.compose;
   writes --out or prints; exits 0 ok, 3 usage, 2 repair-exhausted, else 1.
+- moku call <endpoint> --input <json | @file | -> [--out <file>] — one provider
+  endpoint as one item of task "call" through runner.run({ builds }) (an in-memory
+  build, no build file), so journal, retries, lanes and the content cache apply. A local
+  file in the input is marked {"$file": "<path>"}, relative to the cwd. stdout is exactly
+  one JSON line (Cli.CallOutput), everything human goes to stderr:
+  {"ok":true,"endpoint","costUsd","reused","runId","result"} — with --out the answer goes
+  to the file and the line has "out" (absolute path) in place of "result" — or
+  {"ok":false,"endpoint","costUsd":0,"runId","error":{"class","message"}}. The same
+  command again is the resume: a done call is reused (reused: true, costUsd 0), a
+  submitted job is adopted. Exits: done→0, failed/flagged/run failed→1 (class = the
+  item's error class, "content-policy", or "run"), bad argument or --input→3 (class
+  "usage", runner not called), paused→4 (class "paused"). An endpoint with no
+  call:<endpoint> price row is refused before any I/O (exit 1, class "run").
 
 --------------------------------------------------------------------------------
 4.15 asset — app.asset (Standard tier; depends: [registryPlugin]; stateless)
@@ -1940,9 +1956,26 @@ Errors: `[ai] No music provider named "<name>" is registered.\n  Available: <lis
 --------------------------------------------------------------------------------
 Every fal-hosted task over one client (client/http.ts, client/queue.ts,
 client/upload.ts), one FAL_KEY, one upload cache and one merged price table. onInit
-registers six handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
-("music","fal"), ("sfx","fal"), ("sprite","fal"). Emits no events. Each task directory
-(video/, image/, llm/, music/, sfx/, sprite/) owns its models and prices.
+registers seven handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
+("music","fal"), ("sfx","fal"), ("sprite","fal"), ("call","fal"). Emits no events. Each
+task directory (video/, image/, llm/, music/, sfx/, sprite/, call/) owns its models and
+prices. `call` is a handler, not a FalTask: app.fal.models(task) stays at six tasks.
+
+- call: estimate + submit + poll. One fal queue endpoint, as it is. Request
+  { endpoint, input }: endpoint is the path after the queue host
+  ("fal-ai/sam-3/image"), input is the endpoint's own JSON. A `{ $file }` in the build
+  item arrives as a resolved file; each one (any depth, arrays too) is uploaded and its
+  URL put in its place; other values are posted unchanged. The result is fal's answer
+  as JSON text (application/json, exported as .json). Price keys call:<endpoint>, USD
+  per billed unit: fal-ai/sam-3/3d-body 0.02 per request, fal-ai/sam-3/image 0.005 per
+  request, fal-ai/sam-3/video-rle 0.005 per 16 frames (ceil(result.rle.length / 16)),
+  microsoft/moge-2 0.01 per megapixel of input.image_url, rounded up (the image must be
+  a local PNG, JPEG or WebP file). An override for another endpoint is billed per
+  request. No price row → TerminalProviderError 400 before any upload or POST:
+  `[ai] No price for fal endpoint "<endpoint>".` The estimate is one unit. Units that
+  cannot be counted after a paid call cost one unit and warn fal:call:units-unknown.
+  gpt-image-2.5 has no call row: use the image task. The `moku call` command (4.14)
+  runs this handler from the shell.
 
 - video: submit + poll (no execute). Aliases seedance-2.5, seedance-2.5-ref,
   minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref,
@@ -2016,7 +2049,8 @@ export type Config = {
    * Price overrides, one table for every task. Video: `<alias>`, `<alias>@<resolution>`, `<alias>+audio`
    * (USD/s) or a `<alias>#ref*` surcharge key. Image: `image:<alias>` or `image:<alias>@<resolution>` (USD/image).
    * Music: `music:<alias>` (USD per started minute or per generation). prompt-gen: `llm:<id>#in` /
-   * `llm:<id>#out` (USD per M tokens). Default: {}.
+   * `llm:<id>#out` (USD per M tokens). Call: `call:<endpoint>` (USD per billed unit; per request for an
+   * endpoint with no bundled unit). Default: {}.
    */
   priceOverrides: Record<string, number>;
   /** Sync endpoint base; prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. Default: "https://fal.run". */

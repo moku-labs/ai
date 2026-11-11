@@ -1,7 +1,8 @@
 /**
  * @file fal provider plugin — types (Config/State/API), type aliases of the
  * errors.ts provider error classes, and the domain context type shared by `api.ts`,
- * `client/`, `log.ts` and the six task handlers (video, image, prompt-gen, music, sfx, sprite).
+ * `client/`, `log.ts` and the seven handlers: the six fal tasks (video, image, prompt-gen,
+ * music, sfx, sprite) plus the `call` handler.
  */
 import type { EnvApi, LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
@@ -56,7 +57,8 @@ export type Config = {
    * (USD/s) or a `<alias>#ref*` surcharge key. Image: `image:<alias>` or `image:<alias>@<resolution>` (USD/image).
    * Music: `music:<alias>` (USD per started minute or per generation). prompt-gen: `llm:<id>#in` /
    * `llm:<id>#out` (USD per M tokens). sfx: `sfx:<alias>` (USD per started second). sprite:
-   * `sprite:<alias>` (USD per image). Default: {}.
+   * `sprite:<alias>` (USD per image). call: `call:<endpoint>` (USD per billed unit of one
+   * endpoint; an endpoint with no bundled unit is billed per request). Default: {}.
    */
   priceOverrides: Record<string, number>;
   /**
@@ -109,7 +111,7 @@ export type Config = {
   jobTimeoutMs: number;
   /**
    * JSONL request log path, relative to the working directory: one line per billable request of
-   * every task. "" = off. Default: "".
+   * every task and the `call` endpoints. "" = off. Default: "".
    *
    * @example
    * ```ts
@@ -120,13 +122,13 @@ export type Config = {
 };
 
 /**
- * fal plugin state: the effective price table of every task, computed once at
+ * fal plugin state: the effective price table of every task and the `call` endpoints, computed once at
  * first use (bundled prices merged with `config.priceOverrides`), the URLs
  * of the files this process already put in fal storage, and whether the
  * request log already warned about a failed write.
  */
 export type State = {
-  /** Effective price table of every task (bundled prices merged with config.priceOverrides), computed once at first use. */
+  /** Effective price table of every task and the `call` endpoints (bundled prices merged with config.priceOverrides), computed once at first use. */
   prices: Record<string, number> | null;
   /**
    * fal storage URLs of files uploaded by this process, keyed `storage:<mime>:<sha256 of the bytes>`,
@@ -160,7 +162,8 @@ export type FalInfo = {
 };
 
 /**
- * The six tasks this plugin serves, as `app.fal.models(task)` names them.
+ * The six tasks this plugin serves, as `app.fal.models(task)` names them. The `call` handler is
+ * registered next to them but is not a task here: it has no model list.
  *
  * @example
  * ```ts
@@ -200,10 +203,96 @@ export type LocalFile = {
 };
 
 /**
+ * One fal endpoint call, as the runner hands it to the `("call", "fal")` handler.
+ *
+ * @example
+ * ```ts
+ * const request: CallRequest = {
+ *   endpoint: "fal-ai/sam-3/image",
+ *   input: { image_url: { path: "plates/s03.png", mimeType: "image/png", hash: "sha256:ab12" }, prompt: "wall" }
+ * };
+ * ```
+ */
+export type CallRequest = {
+  /** fal endpoint id, the path after the queue host, e.g. "fal-ai/sam-3/3d-body". */
+  endpoint: string;
+  /** The endpoint's own input. A `{ $file }` of the build item arrives here as a resolved local file. */
+  input: Record<string, unknown>;
+  /** Always present from the runner. Not sent to fal. */
+  params?: Record<string, unknown>;
+};
+
+/**
+ * How fal bills an endpoint: per request, per megapixel of the input image, or per 16 frames of video.
+ *
+ * @example
+ * ```ts
+ * const unit: CallUnit = "megapixel";
+ * ```
+ */
+export type CallUnit = "request" | "megapixel" | "16-frames";
+
+/**
+ * The answer of a finished call: fal's result body as JSON text.
+ *
+ * @example
+ * ```ts
+ * const result: CallResult = {
+ *   text: '{"masks":[]}',
+ *   mimeType: "application/json",
+ *   costUsd: 0.005,
+ *   meta: { endpoint: "fal-ai/sam-3/image", requestId: "019a-req", unit: "request", units: 1 }
+ * };
+ * ```
+ */
+export type CallResult = {
+  /** fal's result body, `JSON.stringify`-ed. */
+  text: string;
+  /** Always `application/json`. */
+  mimeType: "application/json";
+  /** Bundled or overridden rate times the units of this call, USD. */
+  costUsd: number;
+  /** The endpoint, fal's request id, the billing unit and how many units were billed. */
+  meta: { endpoint: string; requestId: string; unit: CallUnit; units: number };
+};
+
+/**
+ * One poll of a call job.
+ *
+ * @example
+ * ```ts
+ * const poll: CallJobPoll = { state: "pending" };
+ * ```
+ */
+export type CallJobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & CallResult)
+  | { state: "failed"; error: unknown };
+
+/**
+ * The `("call", "fal")` handler: estimate plus the job pair the runner drives
+ * (`isJobHandler`). There is no `execute` and no `app.fal.*` method.
+ *
+ * @example
+ * ```ts
+ * const { jobId } = await handler.submit({ endpoint: "fal-ai/sam-3/image", input: { prompt: "wall" } }, {});
+ * ```
+ */
+export type CallHandler = {
+  /** One unit of the endpoint's rate. No network, no key, no file read. Throws the missing-price error. */
+  estimate(request: CallRequest): { usd: number };
+  /** Prices and checks the request, uploads its files and queues the job; returns the opaque job id. */
+  submit(request: CallRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  /** Reads the job once; a completed job answers with fal's result body and its cost. */
+  poll(jobId: string, request: CallRequest, opts: { signal?: AbortSignal }): Promise<CallJobPoll>;
+};
+
+/**
  * Public API surface of the `fal` plugin, exposed as `app.fal`. A thin
- * observability surface — the real capability surface is the six registered
- * handlers, consumed through `app.video`, `app.image`, `app.promptGen`,
- * `app.music`, `app.sfx`, `app.sprite` and `app.runner`.
+ * observability surface — the real capability surface is the seven registered
+ * handlers: the six tasks through `app.video`, `app.image`, `app.promptGen`,
+ * `app.music`, `app.sfx`, `app.sprite`, and all seven through `app.runner`
+ * (`call` has no facade).
  *
  * @example
  * ```ts

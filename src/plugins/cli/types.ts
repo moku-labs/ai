@@ -8,9 +8,10 @@ import type { buildfilePlugin } from "../buildfile";
 import type { BuildfileApi } from "../buildfile/types";
 import type { composePlugin } from "../compose";
 import type { ComposeApi } from "../compose/types";
-import type { JournalApi } from "../journal/types";
+import type { ErrorClass, JournalApi } from "../journal/types";
 import type { runnerPlugin } from "../runner";
 import type { RunnerApi } from "../runner/types";
+import type { StoreApi } from "../store/types";
 
 /**
  * cli plugin configuration: whether ANSI color/spinners are disabled.
@@ -108,6 +109,21 @@ export type CommandContext = {
   journal: JournalApi;
   /** `ctx.log` — structured diagnostics (MC2). */
   log: LogApi;
+  /** `ctx.store`: reads the stored answer of a done item. */
+  store: StoreApi;
+  /**
+   * Reads stdin to its end as UTF-8 text.
+   *
+   * @returns The whole of stdin.
+   */
+  readIn(): Promise<string>;
+  /**
+   * Writes text to stdout and resolves when it is flushed. Machine output only, never styled.
+   *
+   * @param text - The text to write, newline included.
+   * @returns Resolves once stdout has taken the text.
+   */
+  writeOut(text: string): Promise<void>;
   /**
    * Runs `action` with a SIGINT-wired `AbortSignal`: the first Ctrl-C aborts
    * the signal (clean pause via drain); because the listener is installed
@@ -119,6 +135,37 @@ export type CommandContext = {
    */
   runWithAbort<T>(action: (signal: AbortSignal) => Promise<T>): Promise<T>;
 };
+
+/**
+ * Why a call did not end `ok`: a journal error class, or one of the command's own
+ * (`usage` for a bad argument, `run` for a run that failed before the item ran,
+ * `paused` for a drained run).
+ *
+ * @example
+ * ```ts
+ * const error: CallError = { class: "http-4xx", message: "[ai] fal rejected the request (HTTP 422)." };
+ * ```
+ */
+export type CallError = { class: ErrorClass | "usage" | "run" | "paused"; message: string };
+
+/**
+ * The one JSON line `moku call` writes to stdout: the answer (`result`, or `out`
+ * with `--out`), or `ok: false` with the reason.
+ *
+ * @example
+ * ```ts
+ * const done: CallOutput = {
+ *   ok: true, endpoint: "fal-ai/sam-3/image", costUsd: 0.005, reused: false, runId: "7f3c…", result: { masks: [] }
+ * };
+ * const failed: CallOutput = {
+ *   ok: false, endpoint: "fal-ai/sam-3/image", costUsd: 0, runId: null, error: { class: "usage", message: "--input is not valid JSON" }
+ * };
+ * ```
+ */
+export type CallOutput =
+  | { ok: true; endpoint: string; costUsd: number; reused: boolean; runId: string; result: unknown }
+  | { ok: true; endpoint: string; costUsd: number; reused: boolean; runId: string; out: string }
+  | { ok: false; endpoint: string; costUsd: 0; runId: string | null; error: CallError };
 
 /**
  * One mountable command: its argv name, description, accepted flags, and
@@ -155,6 +202,8 @@ export type CliApi = {
    * Parses argv, routes to a command module, renders via the branded
    * console, and translates the outcome to the exit-code contract. Never
    * calls `process.exit` itself — the caller (`bin.ts`) owns the process.
+   * `call` replaces the log sinks for the rest of the process (warn and error go to
+   * stderr, info and debug are dropped): right for the bin, something a long-lived host should know.
    *
    * @param argv - Command-line arguments, excluding the node/script prefix (e.g. `["run", "--dry-run"]`).
    * @returns The exit code (see {@link EXIT_CODES}).
@@ -174,7 +223,7 @@ export type CliApi = {
    * ```ts
    * // An umbrella CLI lists the commands it remounts under `moku ai <cmd>`.
    * const tree = app.cli.commands();
-   * tree.commands.map(command => command.name); // ["new", "validate", "estimate", "run", "export", "status", "compose"]
+   * tree.commands.map(command => command.name); // ["new", "validate", "estimate", "run", "export", "status", "compose", "call"]
    * ```
    */
   commands(): CommandTree;
@@ -197,7 +246,7 @@ export type CliRequire = ((plugin: typeof runnerPlugin) => RunnerApi) &
 /**
  * Domain context type for the cli API factory: plugin config plus empty
  * state (cli has no lifecycle and no `createState` — OQ1), `require`
- * narrowed to its three dependencies, plus the `journal`/`log`/`env` core
+ * narrowed to its three dependencies, plus the `journal`/`store`/`log`/`env` core
  * APIs the commands need.
  *
  * @example
@@ -208,6 +257,7 @@ export type CliRequire = ((plugin: typeof runnerPlugin) => RunnerApi) &
 export type CliContext = PluginCtx<Config, Record<string, never>> & {
   require: CliRequire;
   journal: JournalApi;
+  store: StoreApi;
   log: LogApi;
   env: EnvApi;
 };

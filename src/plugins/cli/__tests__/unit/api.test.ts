@@ -2,11 +2,13 @@ import type { EventEmitter } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { BuildfileSource } from "../../../buildfile/types";
 import { createCliApi, isPlainMode, runWithAbort } from "../../api";
-import type { CliApi, CommandTree } from "../../types";
+import type { CallOutput, CliApi, CommandTree } from "../../types";
 import { EXIT_CODES } from "../../types";
-import { createFakeCliContext, createFakeCommandContext } from "./fixtures";
+import { createFakeCliContext, createFakeCommandContext, createItemRow } from "./fixtures";
 
 // ---------------------------------------------------------------------------
 // dispatch() — argv routing table
@@ -91,7 +93,7 @@ describe("createCliApi().dispatch — routing", () => {
 // ---------------------------------------------------------------------------
 
 describe("createCliApi().commands", () => {
-  it("returns a stable tree naming all seven commands", () => {
+  it("returns a stable tree naming all eight commands, call last", () => {
     const ctx = createFakeCliContext();
     const api = createCliApi(ctx);
 
@@ -105,7 +107,8 @@ describe("createCliApi().commands", () => {
       "run",
       "export",
       "status",
-      "compose"
+      "compose",
+      "call"
     ]);
   });
 
@@ -145,6 +148,102 @@ describe("createCliApi().commands", () => {
 });
 
 // ---------------------------------------------------------------------------
+// call — the real stdin reader, stdout writer and store wiring
+// ---------------------------------------------------------------------------
+
+describe("createCliApi().dispatch — call wiring", () => {
+  const answer = JSON.stringify({ masks: ["x".repeat(100)] });
+  let compiledText: string | undefined;
+
+  /** A cli context whose journal and store play one done call item. */
+  function createCallCliContext() {
+    return createFakeCliContext({
+      buildfile: {
+        compile: (source: BuildfileSource) => {
+          compiledText = "text" in source ? source.text : undefined;
+          return Promise.resolve({ file: "<inline>", spec: JSON.parse(compiledText ?? "{}") });
+        }
+      },
+      journal: { listItems: () => [createItemRow()] },
+      store: { read: () => Promise.resolve(new TextEncoder().encode(answer)) }
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    compiledText = undefined;
+  });
+
+  it("writes the answer line to process.stdout and resolves only after the write flushed", async () => {
+    const written: string[] = [];
+    let flushed = false;
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      text: string,
+      callback: (error?: Error | null) => void
+    ) => {
+      written.push(text);
+      setTimeout(() => {
+        flushed = true;
+        callback();
+      }, 10);
+      return true;
+    }) as typeof process.stdout.write);
+    const api = createCliApi(createCallCliContext());
+
+    const code = await api.dispatch(["call", "ep", "--input", "{}"]);
+
+    expect(code).toBe(EXIT_CODES.ok);
+    expect(flushed).toBe(true);
+    expect(written).toHaveLength(1);
+    expect(JSON.parse(written[0] ?? "")).toMatchObject({
+      ok: true,
+      endpoint: "ep",
+      result: JSON.parse(answer)
+    });
+  });
+
+  it("rejects when stdout reports a write error", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      _text: string,
+      callback: (error?: Error | null) => void
+    ) => {
+      callback(new Error("EPIPE"));
+      return true;
+    }) as typeof process.stdout.write);
+    const api = createCliApi(createCallCliContext());
+
+    // dispatchCommand maps the rejected write to the generic failure code
+    expect(await api.dispatch(["call", "ep", "--input", "{}"])).toBe(EXIT_CODES.failure);
+  });
+
+  it("reads --input - from the whole of stdin as UTF-8", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      _text: string,
+      callback: (error?: Error | null) => void
+    ) => {
+      callback();
+      return true;
+    }) as typeof process.stdout.write);
+    // A multi-byte character split across two chunks must survive.
+    const bytes = new TextEncoder().encode('{"prompt":"стена"}');
+    const original = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", {
+      value: Readable.from([bytes.slice(0, 13), bytes.slice(13)]),
+      configurable: true
+    });
+    try {
+      const api = createCliApi(createCallCliContext());
+
+      await api.dispatch(["call", "ep", "--input", "-"]);
+    } finally {
+      if (original) Object.defineProperty(process, "stdin", original);
+    }
+
+    expect(JSON.parse(compiledText ?? "{}").items[0].input.input).toEqual({ prompt: "стена" });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Type-level: dispatch signature + CommandTree shape
 // ---------------------------------------------------------------------------
 
@@ -156,6 +255,10 @@ describe("CliApi types", () => {
 
   it("commands returns the exported CommandTree shape", () => {
     expectTypeOf<CliApi["commands"]>().returns.toEqualTypeOf<CommandTree>();
+  });
+
+  it("a failed call output costs exactly 0", () => {
+    expectTypeOf<Extract<CallOutput, { ok: false }>["costUsd"]>().toEqualTypeOf<0>();
   });
 });
 

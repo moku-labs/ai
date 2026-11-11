@@ -10,7 +10,7 @@ import type { buildfilePlugin } from "../../../buildfile";
 import type { BuildfileApi, CompiledBuild } from "../../../buildfile/types";
 import { composePlugin } from "../../../compose";
 import type { ComposeApi, ComposeResult } from "../../../compose/types";
-import type { JournalApi, RunSnapshot, RunTotals } from "../../../journal/types";
+import type { ItemRow, JournalApi, RunSnapshot, RunTotals } from "../../../journal/types";
 import { runnerPlugin } from "../../../runner";
 import type {
   EstimateResult,
@@ -19,6 +19,7 @@ import type {
   RunResult,
   RunStatusReport
 } from "../../../runner/types";
+import type { StoreApi } from "../../../store/types";
 import type { CliContext, CommandContext, Config } from "../../types";
 
 /** Ordered log of fake-dependency method calls, for step-ordering assertions. */
@@ -81,8 +82,46 @@ export type FakeCommandContextOverrides = {
   compose?: Partial<ComposeApi>;
   journal?: Partial<JournalApi>;
   log?: Partial<LogApi>;
+  store?: Partial<StoreApi>;
+  readIn?: CommandContext["readIn"];
+  writeOut?: CommandContext["writeOut"];
   runWithAbort?: CommandContext["runWithAbort"];
 };
+
+/**
+ * Builds one `ItemRow` for call tests: a done item with a content hash and a
+ * cost unless the overrides say otherwise.
+ *
+ * @param overrides - Fields to replace on the row.
+ * @returns The item row.
+ * @example
+ * ```ts
+ * createItemRow({ status: "failed", contentHash: null });
+ * ```
+ */
+export function createItemRow(overrides: Partial<ItemRow> = {}): ItemRow {
+  return {
+    id: "item-1",
+    runId: "run-1",
+    planningKey: "pk-1",
+    buildFile: "<inline>",
+    task: "call",
+    provider: "fal",
+    packVersion: FAKE_NULL,
+    estimatedCostUsd: 0.005,
+    status: "done",
+    label: "ep",
+    buildName: "call",
+    mimeType: "application/json",
+    outputs: FAKE_NULL,
+    artifactKey: "ak-1",
+    contentHash: "hash-1",
+    actualCostUsd: 0.005,
+    attemptCount: 1,
+    updatedAt: 0,
+    ...overrides
+  };
+}
 
 /**
  * Builds a fake `CommandContext` for command unit tests: a capturing plain
@@ -103,6 +142,7 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
   context: CommandContext;
   lines: string[];
   errorLines: string[];
+  stdout: string[];
 } {
   const { ui, lines, errorLines } = createCapturingConsole();
 
@@ -193,13 +233,45 @@ export function createFakeCommandContext(overrides: FakeCommandContextOverrides 
     ...overrides.log
   };
 
+  const store: StoreApi = {
+    put: vi.fn(),
+    has: vi.fn(),
+    pathOf: vi.fn(),
+    read: (): Promise<Uint8Array> => Promise.resolve(new Uint8Array()),
+    hashOf: vi.fn(),
+    gc: vi.fn(),
+    ...overrides.store
+  };
+
+  const stdout: string[] = [];
+  const writeOut: CommandContext["writeOut"] =
+    overrides.writeOut ??
+    ((text): Promise<void> => {
+      stdout.push(text);
+      return Promise.resolve();
+    });
+  const readIn: CommandContext["readIn"] =
+    overrides.readIn ?? ((): Promise<string> => Promise.resolve(""));
+
   const runWithAbort: CommandContext["runWithAbort"] =
     overrides.runWithAbort ?? (action => action(new AbortController().signal));
 
   return {
-    context: { ui, buildfile, runner, compose, journal, log, runWithAbort },
+    context: {
+      ui,
+      buildfile,
+      runner,
+      compose,
+      journal,
+      log,
+      store,
+      readIn,
+      writeOut,
+      runWithAbort
+    },
     lines,
-    errorLines
+    errorLines,
+    stdout
   };
 }
 
@@ -210,6 +282,8 @@ export type FakeCliContextOverrides = {
   buildfile?: Partial<BuildfileApi>;
   runner?: Partial<RunnerApi>;
   compose?: Partial<ComposeApi>;
+  journal?: Partial<JournalApi>;
+  store?: Partial<StoreApi>;
 };
 
 /**
@@ -229,7 +303,9 @@ export function createFakeCliContext(overrides: FakeCliContextOverrides = {}): C
   const { context: commandContext } = createFakeCommandContext({
     ...(overrides.buildfile === undefined ? {} : { buildfile: overrides.buildfile }),
     ...(overrides.runner === undefined ? {} : { runner: overrides.runner }),
-    ...(overrides.compose === undefined ? {} : { compose: overrides.compose })
+    ...(overrides.compose === undefined ? {} : { compose: overrides.compose }),
+    ...(overrides.journal === undefined ? {} : { journal: overrides.journal }),
+    ...(overrides.store === undefined ? {} : { store: overrides.store })
   });
 
   const env: EnvApi = {
@@ -266,6 +342,7 @@ export function createFakeCliContext(overrides: FakeCliContextOverrides = {}): C
     emit: vi.fn(),
     require: requireImpl,
     journal: commandContext.journal,
+    store: commandContext.store,
     log: commandContext.log,
     env
   };

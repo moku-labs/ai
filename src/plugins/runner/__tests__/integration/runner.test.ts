@@ -4,12 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore, createPlugin } from "../../../../config";
 import { buildfilePlugin } from "../../../buildfile";
+import type { CompiledBuild } from "../../../buildfile/types";
 import { openSqliteDriver } from "../../../journal/driver/select";
 import { registryPlugin } from "../../../registry";
 import { runnerPlugin } from "../../index";
 import type {
   Config,
   ExecutableHandler,
+  JobPoll,
   RunEvent,
   RunnerApi,
   RunResult,
@@ -148,6 +150,72 @@ function buildFileYaml(name: string, itemInput: Record<string, string>): string 
     .map(([key, value]) => `      ${key}: ${value}`)
     .join("\n");
   return `version: 1\nname: ${name}\nitems:\n  - task: fakeTask\n    provider: fakeProvider\n    input:\n${inputLines}\n`;
+}
+
+/**
+ * Builds a job-style (`submit` + `poll`) fake handler that records every
+ * submit and poll. A poll is `pending` until `release` is called, then `done`.
+ *
+ * @param onPoll - Called on every poll, before it answers (e.g. to abort the run).
+ * @returns The handler, its logs and the release switch.
+ * @example
+ * ```ts
+ * const job = createJobHandler();
+ * job.release();
+ * ```
+ */
+function createJobHandler(onPoll?: () => void) {
+  const submits: string[] = [];
+  const polls: string[] = [];
+  const state = { released: false };
+  const handler: ExecutableHandler = {
+    estimate: (): { usd: number } => ({ usd: 0.005 }),
+    submit: async (): Promise<{ jobId: string }> => {
+      submits.push("submit");
+      return { jobId: `job-${submits.length}` };
+    },
+    poll: async (jobId): Promise<JobPoll> => {
+      polls.push(jobId);
+      onPoll?.();
+      if (!state.released) return { state: "pending" };
+      return {
+        state: "done",
+        body: new TextEncoder().encode("answer"),
+        mimeType: "application/json",
+        costUsd: 0.005
+      };
+    }
+  };
+  return {
+    handler,
+    submits,
+    polls,
+    release: (): void => {
+      state.released = true;
+    }
+  };
+}
+
+/**
+ * One in-memory build with a single `callTask` item, the way `moku call` plans it.
+ *
+ * @returns The compiled build.
+ * @example
+ * ```ts
+ * await app.runner.run({ builds: [inlineBuild()] });
+ * ```
+ */
+function inlineBuild(): CompiledBuild {
+  return {
+    file: "<inline>",
+    spec: {
+      version: 1,
+      name: "call",
+      items: [
+        { task: "callTask", provider: "fakeProvider", id: "fal-ai/x", input: { prompt: "hi" } }
+      ]
+    }
+  };
 }
 
 describe("runner plugin integration", () => {
@@ -489,6 +557,71 @@ describe("runner plugin integration", () => {
     driver.close();
     expect(attempts).toEqual([{ outcome: "terminal-error", error_class: "invalid-request" }]);
     expect(items).toEqual([{ status: "failed" }]);
+  });
+
+  // -------------------------------------------------------------------------
+  // In-memory builds: the same call again reuses or adopts, never pays twice
+  // -------------------------------------------------------------------------
+
+  describe("in-memory builds (moku call)", () => {
+    it("the same build run twice submits once, and the second item:done costs 0", async () => {
+      const job = createJobHandler();
+      job.release();
+      const fixture = createFakeProviderPlugin("fixtureK", "callTask", "fakeProvider", job.handler);
+      const { createApp } = buildFramework(tempDir);
+      const app = createApp({
+        plugins: [fixture],
+        pluginConfigs: { runner: { pollIntervalMs: 1 } }
+      });
+      await app.start();
+
+      const first = await app.runner.run({ builds: [inlineBuild()] });
+      let second: Promise<RunEvent[]> | undefined;
+      await app.runner.run(
+        { builds: [inlineBuild()] },
+        {
+          onStart: runId =>
+            (second = (async () => {
+              const records: RunEvent[] = [];
+              for await (const event of app.runner.events({ runId })) records.push(event);
+              return records;
+            })())
+        }
+      );
+      await app.stop();
+
+      expect(first).toMatchObject({ status: "done", totals: { done: 1, spendUsd: 0.005 } });
+      expect(job.submits).toHaveLength(1);
+      const secondRecords = await second;
+      expect(secondRecords?.find(event => event.type === "item:done")).toMatchObject({
+        costUsd: 0
+      });
+    });
+
+    it("a run interrupted with a submitted job polls that job when the same build starts again", async () => {
+      const controller = new AbortController();
+      const job = createJobHandler(() => controller.abort());
+      const fixture = createFakeProviderPlugin("fixtureL", "callTask", "fakeProvider", job.handler);
+      const { createApp } = buildFramework(tempDir);
+      const app = createApp({
+        plugins: [fixture],
+        pluginConfigs: { runner: { pollIntervalMs: 1 } }
+      });
+      await app.start();
+
+      const paused = await app.runner.run(
+        { builds: [inlineBuild()] },
+        { signal: controller.signal }
+      );
+      expect(paused).toMatchObject({ status: "paused", totals: { dispatching: 1 } });
+      job.release();
+      const again = await app.runner.run({ builds: [inlineBuild()] });
+      await app.stop();
+
+      expect(again).toMatchObject({ status: "done", totals: { done: 1 } });
+      expect(job.submits).toHaveLength(1);
+      expect(job.polls).toEqual(["job-1", "job-1"]);
+    });
   });
 
   // -------------------------------------------------------------------------

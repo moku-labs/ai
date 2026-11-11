@@ -73,4 +73,14 @@ describe("openSqliteDriver — runtime detection", () => {
     expect(fakeDriver.exec).toHaveBeenCalledWith("PRAGMA fullfsync = 1");
     expect(fakeDriver.exec).toHaveBeenCalledWith("PRAGMA busy_timeout = 7000");
   });
+
+  it("sets busy_timeout before the WAL switch so a parallel first start waits instead of throwing", () => {
+    (globalThis as { Bun?: typeof Bun }).Bun = originalBun ?? ({} as typeof Bun);
+    const fakeDriver = createFakeDriver();
+    mocks.openBunSqliteDriver.mockReturnValue(fakeDriver);
+
+    openSqliteDriver({ path: ":memory:", busyTimeoutMs: 7000 });
+
+    expect(vi.mocked(fakeDriver.exec).mock.calls[0]).toEqual(["PRAGMA busy_timeout = 7000"]);
+  });
 });

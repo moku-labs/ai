@@ -1,10 +1,10 @@
 # fal
 
-> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")`, `("music", "fal")`, `("sfx", "fal")` and `("sprite", "fal")` with the registry in `onInit`. Emits no events.
+> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")`, `("music", "fal")`, `("sfx", "fal")`, `("sprite", "fal")` and `("call", "fal")` with the registry in `onInit`. Emits no events.
 
 ## Purpose
 
-One plugin per vendor: the six fal tasks share `client/` (HTTP and error classification, the queue, the
+One plugin per vendor: seven handlers, the six fal tasks and `call`. They share `client/` (HTTP and error classification, the queue, the
 upload), one `FAL_KEY`, one upload cache keyed by content sha256, one merged price table and one opt-in
 request log.
 
@@ -17,6 +17,8 @@ request log.
 - **sfx** and **sprite**: `estimate` + `execute` over the generic queue. Their contracts have no job form:
   `execute` submits and waits in process, like the image and music `execute`. A sprite with model `none`
   makes no call at all.
+- **call**: `estimate` + `submit` + `poll`, one fal queue endpoint of the caller's choice (`moku call`). It is a
+  registered handler, not a `FalTask`: `app.fal.models(task)` stays at six tasks. See [Call](#call).
 
 Every handler validates and prices a request before it reads the key, uploads or POSTs: nothing is billed for a
 bad request. A model without a price throws from `estimate`, so `moku estimate` and `--max-cost` never count it
@@ -33,7 +35,7 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallo
 | `uploadUrl` | `string` | `"https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"` | Storage upload initiate URL. |
 | `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (frames, refs, prompt-gen images, sprite sources) reach fal. `storage` falls back to a data URI when the upload fails. |
 | `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download, chat POST). |
-| `priceOverrides` | `Record<string, number>` | `{}` | One table for every task; keys in [Prices](#prices). |
+| `priceOverrides` | `Record<string, number>` | `{}` | One table for every task; keys in [Prices](#prices). `call:<endpoint>` sets USD per billed unit of one call endpoint; an endpoint with no bundled unit is billed per request. |
 | `runUrl` | `string` | `"https://fal.run"` | Sync endpoint base. prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. |
 | `imageDefaultModel` | `string` | `"gpt-image-2.5"` | Image model when `ImageRequest.model` is omitted. |
 | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` | prompt-gen model when `PromptGenRequest.model` is omitted or `"default"`. |
@@ -54,6 +56,7 @@ llm/     handler.ts chat.ts conversation.ts models.ts prices.ts tokens.ts
 music/   handler.ts models.ts prices.ts
 sfx/     handler.ts models.ts prices.ts
 sprite/  handler.ts models.ts prices.ts                 the pixel step is ../sprite/process.ts (D6)
+call/    handler.ts prices.ts                           ("call", "fal"): any priced fal queue endpoint
 ```
 
 Each task directory owns its models and prices; a new model touches one directory.
@@ -571,6 +574,84 @@ source, the pixel options (`padding` a whole number ≥ 0, `size` whole numbers 
 then `processSprite`. `none` reads the source file and calls `processSprite`; it needs no key. `meta` is
 `{ model, endpoint?, requestId?, width, height, trimBox }`.
 
+## Call
+
+`("call", "fal")` runs one fal queue endpoint of the caller's choice through the normal run path: cost, retries,
+lanes, the journal and the content cache are the runner's. `moku call <endpoint> --input <json>` builds one item of
+this task; a build file can carry many (`task: call`, `provider: fal`). There is no `execute` and no `app.fal.*`
+method: the runner drives `submit` + `poll`, so the fal job id is journaled before any wait.
+
+```yaml
+items:
+  - id: mask
+    task: call
+    provider: fal
+    input:
+      endpoint: fal-ai/sam-3/image
+      input:
+        prompt: wall
+        image_url:
+          $file: plates/s03.png
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `endpoint` | `string` | fal endpoint id, the path after the queue host. Must have a price row (the table is the allow-list). |
+| `input` | `object` | The endpoint's own body. Strings, numbers and booleans are posted as they are. |
+| `params` | `object` | The runner always sends it. Not posted. |
+
+**`$file`.** A local file in `input` is marked `{ "$file": "<path>" }` at any depth, in arrays too. The runner hashes
+its bytes into the artifact key and hands the handler a resolved file `{ path, mimeType, hash }`. `submit` uploads
+each resolved file once (the shared upload and its cache) and posts its URL where the file was. An object counts as a
+resolved file only with exactly the string fields `path`, `mimeType` and `hash`; any other value is posted as it is,
+so an `https://` string stays a string.
+
+**Answer.** fal's result body as JSON text, mime `application/json`. The store, and so the cache, holds exactly what
+fal said. `meta` is `{ endpoint, requestId, unit, units }`. fal gives no cost with an answer (the queue status has
+only `metrics.inference_time`), so the cost is the bundled row times the units of the call.
+
+### Units and prices
+
+fal page lines read 2026-11-11.
+
+| Endpoint | Unit | USD | fal page line | Units of one call |
+| --- | --- | --- | --- | --- |
+| `fal-ai/sam-3/3d-body` | request | 0.02 | "Your request will cost $0.02 per unit." https://fal.ai/models/fal-ai/sam-3/3d-body/llms.txt . The unit is not named: not confirmed. | 1 |
+| `fal-ai/sam-3/image` | request | 0.005 | "Your request will cost $0.005 per request." https://fal.ai/models/fal-ai/sam-3/image/llms.txt | 1 |
+| `fal-ai/sam-3/video-rle` | 16-frames | 0.005 | "Your request will cost $0.005 per 16 frames of video." https://fal.ai/models/fal-ai/sam-3/video-rle/llms.txt | `ceil(result.rle.length / 16)`: the answer has one `rle` entry per frame |
+| `microsoft/moge-2` | megapixel | 0.01 | "Billing is calculated per megapixel of the input image, rounded up to the next whole megapixel", "Each megapixel costs $0.01." https://fal.ai/models/microsoft/moge-2/llms.txt | `ceil(width * height / 1_000_000)` of `input.image_url`. 1080x1920 is 3 units. |
+| `openai/gpt-image-2.5/sunburst/edit` | no row | | per 1M text and image tokens, by quality: https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit/llms.txt | run it as the `image` task, which has the price by size and quality |
+
+`estimate` is one unit of the row: no network, no key, no file read (the `$file` is not resolved yet). For `megapixel`
+and `16-frames` the units are known only with the file or the answer, so a `--max-cost` check can be off by the
+difference; the journal's `actual_cost_usd` is exact.
+
+### Errors
+
+Both are `TerminalProviderError` (400), thrown before the key is read, any upload or the POST:
+
+```
+[ai] No price for fal endpoint "<endpoint>".
+  Add "call:<endpoint>" to fal.priceOverrides (USD per request).
+```
+
+```
+[ai] Cannot price fal endpoint "<endpoint>".
+  It is billed per megapixel of input.image_url: pass that image as a local PNG, JPEG or WebP file.
+```
+
+The first is thrown by `estimate` and `submit` for an endpoint with no `call:<endpoint>` row. The second is thrown by
+`submit` when the unit is `megapixel` and `input.image_url` is not a resolved file that is still there and whose size
+the header reader (PNG, JPEG, WebP) understands. A request that is not an `endpoint` string plus an `input` object is
+`[ai] Invalid fal call request.` (400).
+
+**Units unknown.** After a paid call the units may still be unknown: no `rle` array in the answer, or the image file
+is gone when a later process adopts the job. The cost is then one unit and the handler warns once,
+`fal:call:units-unknown { endpoint, requestId }`. The item is never failed for it: the answer is paid for.
+
+With `requestLog` set, each submit writes one line with `task: "call"`, `model` and `endpoint` the endpoint id,
+`prompt` the `input.prompt` string (else `""`), and the body cut like every task's.
+
 ## Shared client
 
 **Upload.** Every task uploads the same way: `POST uploadUrl { file_name, content_type }` → `{ upload_url, file_url }`,
@@ -578,7 +659,7 @@ then `PUT upload_url`. Files of one call go 4 at a time, in order. A failed uplo
 to data URIs, logged once as `fal:upload:fallback`. Storage URLs are cached in `state.uploads` by
 `storage:<mime>:<sha256>`, shared by every task and kept for the life of the process.
 
-**Queue (image, music, sfx, sprite).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
+**Queue (image, music, sfx, sprite, call).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
 returns its id; an abort is checked after the uploads). The job id is JSON `{ endpoint, requestId, statusUrl, responseUrl }`,
 the same codec as video. `poll` reads the status once: `IN_QUEUE` / `IN_PROGRESS` pending, `COMPLETED` with `error`
 failed, `COMPLETED` collected (result, then the CDN download without the key), an unknown status pending with a
@@ -586,7 +667,7 @@ failed, `COMPLETED` collected (result, then the CDN download without the key), a
 (`fal:poll:retry`), an abort ends the wait with the signal's reason.
 
 **Request log.** Off by default. With `requestLog` set, every billable request writes one JSONL line: each queue
-submit of video, image, music, sfx and sprite, and each prompt-gen POST attempt.
+submit of video, image, music, sfx, sprite and call, and each prompt-gen POST attempt.
 
 ```json
 {"at":"2026-09-29T10:00:00.000Z","task":"image","model":"gpt-image-2.5","endpoint":"openai/gpt-image-2.5/sunburst/edit","requestId":"019a…","prompt":"hero shot","body":{"image_size":"portrait_16_9","quality":"high","num_images":1,"output_format":"jpeg","image_urls":["face.png"]}}
@@ -618,6 +699,9 @@ other tasks' keys carry the task:
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
 | `sfx:elevenlabs-sfx-v2` | 0.002 | per started second |
 | `sprite:birefnet` | 0.002 | per image, an estimate: fal bills $0.0008 per compute second and publishes no per-image figure |
+| `call:fal-ai/sam-3/3d-body` / `call:fal-ai/sam-3/image` | 0.02 / 0.005 | per request |
+| `call:fal-ai/sam-3/video-rle` | 0.005 | per 16 frames of video |
+| `call:microsoft/moge-2` | 0.01 | per megapixel of the input image, rounded up |
 
 GPT Image prices are the `high` quality price. `params.quality` `xhigh` multiplies the row by 1.78, `max` by 4,
 the same ratio at every size in fal's table. Lower qualities keep the `high` price as an upper bound.
@@ -629,6 +713,10 @@ a terminal error before any upload or charge:
 [ai] No price for fal image model "gpt-image-2.5".
   Add it to fal.priceOverrides.
 ```
+
+A `call:<endpoint>` override sets the rate of that endpoint (USD per billed unit) and adds an endpoint with no bundled
+row, which is then billed per request. An endpoint with no row is refused before any upload or POST (see [Call](#call)).
+There is no `call:` row for GPT Image: fal bills it per token, so it runs as the `image` task.
 
 Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-second).
 
@@ -649,6 +737,8 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | Job `COMPLETED` + other error | `failed`, terminal 400 |
 | `FAL_KEY` not set, unknown model, missing image, too many refs, end frame on a model without one | Plain error: terminal after one attempt, nothing billed |
 | Poll with `FAL_KEY` not set, or the status call answers 401 / 403 | Plain error with no `status` and no `kind` (`[ai] fal cannot poll without a valid API key.`): the runner marks the job `expired`, not `failed`, so the next run adopts the same job instead of paying again |
+| Call: an endpoint with no price row, a megapixel endpoint whose `input.image_url` is not a readable local PNG, JPEG or WebP, or a request that is not an `endpoint` plus an `input` object | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
+| Call: a paid answer whose units cannot be counted (no `rle` array, the image file gone) | Billed as one unit, warns `fal:call:units-unknown`, never failed |
 | Image, prompt-gen, music, sfx or sprite: unknown model, too many refs, bad resolution, aspect or params, invalid music, sfx or sprite request, unresolved sprite source, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
 | sfx: the result is not mp3 | `TerminalProviderError` (415), never returned |
 | sprite: the cut-out is fully transparent | Plain error from `processSprite`: `[ai] Sprite is empty after background removal.` |
