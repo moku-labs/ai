@@ -1962,7 +1962,7 @@ registers six handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
   `<runUrl>/openrouter/router/openai/v1/chat/completions`. `model` is an OpenRouter id;
   undefined or "default" → llmDefaultModel. Listed: anthropic/claude-opus-5.5 (default),
   anthropic/claude-sonnet-5, openai/gpt-6-sol, openai/gpt-6-astra,
-  google/gemini-3.8-flash, x-ai/grok-4.7. Params: reasoning, responseSchema,
+  google/gemini-3.8-flash, x-ai/grok-4.7, google/gemini-4-carbon, google/gemini-4-argon. Params: reasoning, responseSchema,
   strictSchema, images, max_tokens. 401/403 → PromptGenUnavailableError reason auth,
   402/429 → reason limit (promptGen moves to its next fallback provider). Tool calling:
   messages → chat messages after system (image parts uploaded like params.images), tools →
@@ -1993,7 +1993,7 @@ Video keys are unprefixed (`<alias>`, `<alias>@<resolution>`, `<alias>+audio`,
 or per generation), `sfx:<alias>` (USD per started second), `sprite:<alias>` (USD per
 image), `llm:<id>#in` / `llm:<id>#out` (USD per M tokens). Bundled:
 image:nano-banana-pro@1K/@2K/@4K 0.15/0.15/0.30, image:seedream-4.5-edit 0.04,
-image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.80, music:stable-audio-2.5 0.20,
+image:gpt-image-2.5 0.05, image:gpt-image-2.5@2K 0.06, music:elevenlabs-music-v2.5 0.60, music:stable-audio-2.5 0.20,
 sfx:elevenlabs-sfx-v2 0.002, sprite:birefnet 0.002.
 
 Types (src/plugins/fal/types.ts; `Fal.*` namespace):
@@ -2084,7 +2084,7 @@ export type FalApi = {
 
 ```ts
 app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } }
-app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.6, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
 app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
 app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
 ```
