@@ -18,7 +18,9 @@ export const llmModels: readonly string[] = [
   "openai/gpt-6-sol",
   "openai/gpt-6-astra",
   "google/gemini-3.8-flash",
-  "x-ai/grok-4.7"
+  "x-ai/grok-4.7",
+  "google/gemini-4-carbon",
+  "google/gemini-4-argon"
 ];
 
 /** The request model that means "the configured default". */

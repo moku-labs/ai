@@ -28,7 +28,7 @@ import { musicPriceOf } from "./prices";
  *
  * @example
  * ```ts
- * planMusic(ctx, { prompt: "tense synth", model: "elevenlabs-music-v2.5", lengthMs: 65_000 }).costUsd; // => 1.6
+ * planMusic(ctx, { prompt: "tense synth", model: "elevenlabs-music-v2.5", lengthMs: 65_000 }).costUsd; // => 1.2
  * ```
  */
 export type MusicPlan = {

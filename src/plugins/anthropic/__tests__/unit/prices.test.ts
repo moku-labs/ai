@@ -32,7 +32,7 @@ function bundled(model: string) {
 describe("anthropic prices: bundled table", () => {
   it.each([
     ["claude-opus-5-5", [4, 20, 0.2, 5, 8]],
-    ["claude-sonnet-5-5", [2, 10, 0.2, 2.5, 4]],
+    ["claude-sonnet-5-5", [2, 10, 0.1, 2.5, 4]],
     ["claude-sonnet-5", [2, 10, 0.2, 2.5, 4]],
     ["claude-haiku-5-5", [0.1, 0.5, 0.01, 0.125, 0.2]],
     ["claude-fable-5-1", [10, 50, 0.25, 12.5, 20]],

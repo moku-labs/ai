@@ -145,7 +145,7 @@ describe("journey: music build items through the runner and fal", () => {
     const app = buildApp(tempDir);
     await app.start();
 
-    // Author: one ElevenLabs Music item, 65 s → two started minutes at $0.80.
+    // Author: one ElevenLabs Music item, 65 s → two started minutes at $0.60.
     await writeFile(
       path.join(tempDir, "score.moku.yaml"),
       buildFileYaml("score", [
@@ -157,7 +157,7 @@ describe("journey: music build items through the runner and fal", () => {
       ])
     );
     const glob = path.join(tempDir, "*.moku.yaml");
-    const expectedUsd = 1.6;
+    const expectedUsd = 1.2;
 
     // Estimate: the fal music price table, no network.
     const estimate = await app.runner.estimate({ files: glob });

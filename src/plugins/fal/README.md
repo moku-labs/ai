@@ -302,6 +302,10 @@ sent as is and needs a price. `app.fal.models("prompt-gen")` lists:
 | `openai/gpt-6-astra` | 10 | 50 |
 | `google/gemini-3.8-flash` | 0.75 | 3.75 |
 | `x-ai/grok-4.7` | 2 | 6 |
+| `google/gemini-4-carbon` | 4 | 20 |
+| `google/gemini-4-argon` | 4 | 20 |
+
+The two Gemini 4 rows were measured through fal on 2026-11-11: fal bills 4 / 20, where OpenRouter lists 2 / 10.
 
 Also priced, not listed: `anthropic/claude-haiku-4.5` (1 / 5) and `google/gemini-2.5-flash` (0.3 / 2.5).
 
@@ -609,7 +613,7 @@ other tasks' keys carry the task:
 | `image:seedream-4.5-edit` | 0.04 | per image |
 | `image:gpt-image-2.5` | 0.05 | per image |
 | `image:gpt-image-2.5@2K` | 0.06 | per image, estimated from fal's high-quality size table |
-| `music:elevenlabs-music-v2.5` | 0.80 | per started minute |
+| `music:elevenlabs-music-v2.5` | 0.60 | per started minute |
 | `music:stable-audio-2.5` | 0.20 | per generation |
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
 | `sfx:elevenlabs-sfx-v2` | 0.002 | per started second |
@@ -667,7 +671,7 @@ classes, never prompts.
 ```ts
 app.fal.info(); // => { provider: "fal", configured: true, models: ["seedance-2.5", ...] }
 app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } }
-app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.6, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
 app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
 app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
 app.fal.models("sfx"); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]

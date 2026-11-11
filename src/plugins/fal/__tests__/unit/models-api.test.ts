@@ -9,7 +9,7 @@ import { createFakeEnv, createTestCtx } from "./fixtures";
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("createFalApi().models()", () => {
-  it("lists the six prompt-gen models with their per-M-token prices", () => {
+  it("lists the eight prompt-gen models with their per-M-token prices", () => {
     const models = createFalApi(createTestCtx()).models("prompt-gen");
     expect(models).toEqual([
       { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } },
@@ -17,13 +17,15 @@ describe("createFalApi().models()", () => {
       { id: "openai/gpt-6-sol", price: { inputPerM: 2, outputPerM: 10 } },
       { id: "openai/gpt-6-astra", price: { inputPerM: 10, outputPerM: 50 } },
       { id: "google/gemini-3.8-flash", price: { inputPerM: 0.75, outputPerM: 3.75 } },
-      { id: "x-ai/grok-4.7", price: { inputPerM: 2, outputPerM: 6 } }
+      { id: "x-ai/grok-4.7", price: { inputPerM: 2, outputPerM: 6 } },
+      { id: "google/gemini-4-carbon", price: { inputPerM: 4, outputPerM: 20 } },
+      { id: "google/gemini-4-argon", price: { inputPerM: 4, outputPerM: 20 } }
     ]);
   });
 
   it("lists the two music models with their billing unit", () => {
     expect(createFalApi(createTestCtx()).models("music")).toEqual([
-      { id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } },
+      { id: "elevenlabs-music-v2.5", price: { usd: 0.6, per: "minute" } },
       { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }
     ]);
   });

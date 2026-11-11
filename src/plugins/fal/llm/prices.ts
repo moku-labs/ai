@@ -19,7 +19,7 @@ export type LlmPrice = {
 };
 
 /**
- * Bundled prices by OpenRouter id: the six listed models plus two priced
+ * Bundled prices by OpenRouter id: the eight listed models plus two priced
  * ids that `models("prompt-gen")` does not list. Override with
  * `llm:<id>#in` / `llm:<id>#out` in `config.priceOverrides`.
  *
@@ -35,6 +35,9 @@ export const llmPrices: Readonly<Record<string, LlmPrice>> = {
   "openai/gpt-6-astra": { inputPerM: 10, outputPerM: 50 },
   "google/gemini-3.8-flash": { inputPerM: 0.75, outputPerM: 3.75 },
   "x-ai/grok-4.7": { inputPerM: 2, outputPerM: 6 },
+  // Measured through fal on 2026-11-11 at 4 / 20 per 1M (OpenRouter lists 2 / 10).
+  "google/gemini-4-carbon": { inputPerM: 4, outputPerM: 20 },
+  "google/gemini-4-argon": { inputPerM: 4, outputPerM: 20 },
   "anthropic/claude-haiku-4.5": { inputPerM: 1, outputPerM: 5 },
   "google/gemini-2.5-flash": { inputPerM: 0.3, outputPerM: 2.5 }
 };

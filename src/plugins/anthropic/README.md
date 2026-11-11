@@ -53,7 +53,7 @@ USD per 1M tokens (`prices.ts`). Cache writes are priced per lifetime.
 | Model | Input | Output | Cache read | Cache write 5m | Cache write 1h | Long context |
 |---|---|---|---|---|---|---|
 | `claude-opus-5-5` | 4 | 20 | 0.20 | 5 | 8 | — |
-| `claude-sonnet-5-5` | 2 | 10 | 0.20 | 2.50 | 4 | — |
+| `claude-sonnet-5-5` | 2 | 10 | 0.10 | 2.50 | 4 | — |
 | `claude-sonnet-5` | 2 | 10 | 0.20 | 2.50 | 4 | — |
 | `claude-haiku-5-5` | 0.10 | 0.50 | 0.01 | 0.125 | 0.20 | above 100 000 input: ×5 in, ×5 out |
 | `claude-fable-5-1` | 10 | 50 | 0.25 | 12.50 | 20 | — |
