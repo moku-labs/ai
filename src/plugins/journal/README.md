@@ -20,7 +20,7 @@ The journal is a Core plugin, so its config lives at Layer 1 — it is set where
 
 ## Lifecycle
 
-- **`onStart`** — ensures the parent directory exists, opens the runtime-appropriate driver (`bun:sqlite` on Bun, `better-sqlite3` on Node, selected via `typeof Bun`), applies the durability pragma set (`journal_mode=WAL`, `synchronous=FULL`, `fullfsync=1`, `busy_timeout`), creates the schema idempotently, and starts the checkpoint timer.
+- **`onStart`** — ensures the parent directory exists, opens the runtime-appropriate driver (`bun:sqlite` on Bun, `better-sqlite3` on Node, selected via `typeof Bun`), applies the durability pragma set (`busy_timeout` first, then `journal_mode=WAL`, `synchronous=FULL`, `fullfsync=1`), creates the schema idempotently, and starts the checkpoint timer.
 - **`onStop`** — stops the checkpoint timer, runs a final `wal_checkpoint(TRUNCATE)`, and closes the connection.
 
 Every API method except `isOpen()` throws if called before `onStart` has run or after `onStop`:
@@ -370,5 +370,5 @@ if (run) {
   );
   ```
 - **Driver seam** (`driver/`) — a structural `SqliteDriver` interface with two implementations: `better-sqlite3` on Node, `bun:sqlite` on Bun. Selection is `typeof Bun === "undefined"` in `driver/select.ts`, which also applies the durability pragma set to every opened connection.
-- **Durability pragmas** — `journal_mode=WAL`, `synchronous=FULL` (never `NORMAL` — last-commit durability is the product), `fullfsync=1` (macOS `F_FULLFSYNC`; harmless elsewhere), and `busy_timeout`. Every potentially-writing transaction opens with `BEGIN IMMEDIATE`, since `busy_timeout` does not cover read-to-write lock upgrades.
+- **Durability pragmas** — `busy_timeout` first (the WAL switch on a new database takes a lock, so a parallel first start must wait, not throw "database is locked"), then `journal_mode=WAL`, `synchronous=FULL` (never `NORMAL` — last-commit durability is the product), and `fullfsync=1` (macOS `F_FULLFSYNC`; harmless elsewhere). Every potentially-writing transaction opens with `BEGIN IMMEDIATE`, since `busy_timeout` does not cover read-to-write lock upgrades.
 - **Checkpointing** — the writer runs `wal_checkpoint(TRUNCATE)` on a timer to protect against checkpoint starvation from long-lived `--follow` readers.
