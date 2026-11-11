@@ -53,10 +53,11 @@ USD per 1M tokens (`prices.ts`). Cache writes are priced per lifetime.
 | Model | Input | Output | Cache read | Cache write 5m | Cache write 1h | Long context |
 |---|---|---|---|---|---|---|
 | `claude-opus-5-5` | 4 | 20 | 0.20 | 5 | 8 | — |
-| `claude-sonnet-5-5` | 2 | 10 | 0.20 | 2.50 | 4 | — |
+| `claude-sonnet-5-5` | 2 | 10 | 0.10 | 2.50 | 4 | — |
 | `claude-sonnet-5` | 2 | 10 | 0.20 | 2.50 | 4 | — |
 | `claude-haiku-5-5` | 0.10 | 0.50 | 0.01 | 0.125 | 0.20 | above 100 000 input: ×5 in, ×5 out |
 | `claude-fable-5-1` | 10 | 50 | 0.25 | 12.50 | 20 | — |
+| `claude-fable-5-2` | 8 | 40 | 0.20 | 10 | 16 | — |
 
 Aliases (`models.ts`), the fal/OpenRouter ids the studio uses today:
 
@@ -67,6 +68,7 @@ Aliases (`models.ts`), the fal/OpenRouter ids the studio uses today:
 | `anthropic/claude-sonnet-5` | `claude-sonnet-5` |
 | `anthropic/claude-haiku-5.5` | `claude-haiku-5-5` |
 | `anthropic/claude-fable-5.1` | `claude-fable-5-1` |
+| `anthropic/claude-fable-5.2` | `claude-fable-5-2` |
 
 Any other id is sent as is. It needs a complete price (all five rates) in `priceOverrides`,
 otherwise the request is refused with a terminal 400 before any I/O:
@@ -103,7 +105,7 @@ createApp({
 | `messages` | user / assistant turns | `prompt` is ignored. |
 | `cacheTtl` | `ttl` of every `cache_control` | `"1h"` → `ttl: "1h"`; unset or `"5m"` → no `ttl` (5 minutes); other → 400. |
 | `tools` | `{ name, description, input_schema }` | Sent only when there is at least one tool. |
-| `toolChoice` | auto → `auto`, none → `none`, required → `any`, `{ name }` → `tool` | Opus 5.5, Sonnet 5.5 and Fable 5.1 answer a forced choice with a terminal 400. |
+| `toolChoice` | auto → `auto`, none → `none`, required → `any`, `{ name }` → `tool` | Opus 5.5, Sonnet 5.5, Fable 5.1 and Fable 5.2 answer a forced choice with a terminal 400. |
 | `params.reasoning` | `output_config.effort` | off → low, low → low, medium → medium, high → high; unset → medium; other → 400. No `thinking` field. |
 | `params.responseSchema` | `output_config.format: { type: "json_schema", schema }` | Normalized by the SDK's `transformJSONSchema`; a schema it cannot read (no `type`) is sent as given. Not a plain object → 400. `params.strictSchema` is not read. |
 | `params.max_tokens` | `max_tokens` | Positive integer, else `config.maxTokens`. |

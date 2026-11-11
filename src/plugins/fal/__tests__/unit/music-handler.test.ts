@@ -44,7 +44,7 @@ describe("estimate", () => {
   it("bills ElevenLabs per started minute and Stable Audio per generation, without the key", () => {
     const fetchMock = stubFetch();
     const handler = createMusicHandler(createTestCtx({ env: createFakeEnv({}) }));
-    expect(handler.estimate(REQUEST)).toEqual({ usd: 1.6 });
+    expect(handler.estimate(REQUEST)).toEqual({ usd: 1.2 });
     expect(handler.estimate({ ...REQUEST, model: "stable-audio-2.5", lengthMs: 30_000 })).toEqual({
       usd: 0.2
     });
@@ -127,7 +127,7 @@ describe("poll", () => {
       state: "done",
       audio: MP3,
       mimeType: "audio/wav",
-      costUsd: 1.6,
+      costUsd: 1.2,
       meta: {
         model: "elevenlabs-music-v2.5",
         endpoint: "fal-ai/elevenlabs/music/v2.5",
@@ -192,7 +192,7 @@ describe("execute", () => {
 
     const result = await createMusicHandler(createTestCtx()).execute(REQUEST, {});
 
-    expect(result).toMatchObject({ audio: MP3, mimeType: "audio/mpeg", costUsd: 1.6 });
+    expect(result).toMatchObject({ audio: MP3, mimeType: "audio/mpeg", costUsd: 1.2 });
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 

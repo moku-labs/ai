@@ -16,11 +16,11 @@ const MICRO_DOLLARS = 1_000_000;
  *
  * @example
  * ```ts
- * musicPrices["elevenlabs-music-v2.5"]; // => 0.8
+ * musicPrices["elevenlabs-music-v2.5"]; // => 0.6
  * ```
  */
 export const musicPrices: Readonly<Record<string, number>> = {
-  "elevenlabs-music-v2.5": 0.8,
+  "elevenlabs-music-v2.5": 0.6,
   "stable-audio-2.5": 0.2
 };
 

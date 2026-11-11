@@ -7,6 +7,13 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **fal: Gemini 4 Carbon and Argon.** The ids `google/gemini-4-carbon` and `google/gemini-4-argon`
+  are priced at 4 in, 20 out USD per 1M tokens and listed by `app.fal.models("prompt-gen")` after the
+  six. Measured through fal on 2026-11-11: fal bills 4 / 20, where OpenRouter lists 2 / 10.
+- **anthropic: Claude Fable 5.2.** The alias `anthropic/claude-fable-5.2` maps to the native id
+  `claude-fable-5-2`, and the bundled price table has its row: 8 in, 40 out, 0.20 cache read, 10 cache
+  write 5m, 16 cache write 1h, USD per 1M tokens. Before this a request naming it stopped with
+  "has no price". Like Fable 5.1 it answers a forced `toolChoice` with a terminal 400.
 - **dialogue: a new task for multi-speaker scenes.** `task: dialogue` (and `app.dialogue.generate` /
   `estimate` / `providers`, config `dialogue.defaultProvider`, default `"elevenlabs"`) speaks a whole
   scene in one request, so the voices answer each other in one take. A line is `{ id?, text, voice }`;
@@ -71,6 +78,10 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Fixed
 
+- **anthropic: Sonnet 5.5 cache read 0.20 → 0.10 USD per 1M.** The price page lists $0.10 per 1M
+  tokens. `costUsd` on a cached Sonnet 5.5 call was twice too high.
+- **fal: ElevenLabs Music v2.5 0.80 → 0.60 USD per started minute.** fal lists $0.6 per minute.
+  `moku estimate` and `costUsd` for this model drop by a quarter.
 - **anthropic, openai: a tool loop no longer answers 400 on a union tool.** Anthropic and OpenAI
   refuse `oneOf` / `anyOf` / `allOf` at the top of a tool's input schema; a zod discriminated
   union (the studio's `captions` and `music`) made every director call fail. The schema is now

@@ -218,13 +218,13 @@ describe("merged table of every task", () => {
   });
 
   it("carries the music rows under music:", () => {
-    expect(merged["music:elevenlabs-music-v2.5"]).toBe(0.8);
+    expect(merged["music:elevenlabs-music-v2.5"]).toBe(0.6);
     expect(merged["music:stable-audio-2.5"]).toBe(0.2);
   });
 
-  it("carries two llm: rows per priced model, eight models", () => {
+  it("carries two llm: rows per priced model, ten models", () => {
     const llmKeys = Object.keys(merged).filter(key => key.startsWith("llm:"));
-    expect(llmKeys).toHaveLength(16);
+    expect(llmKeys).toHaveLength(20);
     expect(merged["llm:anthropic/claude-opus-5.5#in"]).toBe(4);
     expect(merged["llm:anthropic/claude-opus-5.5#out"]).toBe(20);
     expect(merged["llm:google/gemini-2.5-flash#out"]).toBe(2.5);
@@ -267,9 +267,9 @@ describe("task price lookups", () => {
   });
 
   it("musicPriceOf bills per started minute or per generation", () => {
-    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_000)).toBe(0.8);
-    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_001)).toBe(1.6);
-    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 3000)).toBe(0.8);
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_000)).toBe(0.6);
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 60_001)).toBe(1.2);
+    expect(musicPriceOf(merged, "elevenlabs-music-v2.5", "minute", 3000)).toBe(0.6);
     expect(musicPriceOf(merged, "stable-audio-2.5", "generation", 190_000)).toBe(0.2);
     expect(() => musicPriceOf(merged, "x", "generation", 1000)).toThrow(
       '[ai] No price for fal music model "x".'
@@ -283,7 +283,7 @@ describe("task price lookups", () => {
     );
   });
 
-  it("llmPriceRows lists the eight bundled models", () => {
-    expect(Object.keys(llmPriceRows())).toHaveLength(16);
+  it("llmPriceRows lists the ten bundled models", () => {
+    expect(Object.keys(llmPriceRows())).toHaveLength(20);
   });
 });

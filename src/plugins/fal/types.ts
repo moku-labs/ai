@@ -236,7 +236,7 @@ export type FalApi = {
    * ```ts
    * // A picker lists prompt-gen models with their per-M-token prices.
    * app.fal.models("prompt-gen")[0]; // => { id: "anthropic/claude-opus-5.5", price: { inputPerM: 4, outputPerM: 20 } }
-   * app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
+   * app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.6, per: "minute" } }, { id: "stable-audio-2.5", price: { usd: 0.2, per: "generation" } }]
    * app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, per: "image" } }
    * app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
    * app.fal.models("sfx"); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]

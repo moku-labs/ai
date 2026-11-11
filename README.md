@@ -350,7 +350,7 @@ a model with no price fails the estimate instead of counting as $0.
 provider default. The same request works one-off:
 
 ```ts
-app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.8, per: "minute" } }, ...]
+app.fal.models("music"); // => [{ id: "elevenlabs-music-v2.5", price: { usd: 0.6, per: "minute" } }, ...]
 const track = await app.music.generate({
   prompt: "tense synth pulse", model: "elevenlabs-music-v2.5", lengthMs: 60_000
 });
