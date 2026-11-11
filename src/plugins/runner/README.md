@@ -60,6 +60,11 @@ file, plans and inserts every item, then drives the pipeline to completion.
 
 - **`options.files?: string`** — glob pattern for build files; defaults to the buildfile
   plugin's configured default (the run's `glob` is recorded as `"(default)"`).
+- **`options.builds?: CompiledBuild[]`** — builds to run as they are, instead of loading `files`.
+  The run plans exactly these builds, never calls `buildfile.loadGlob`, and records its `glob` as
+  `"(inline)"`. `dryRun` reads them too, and `files` is not read. Items are keyed like those of a
+  build file (task, provider, input, `$file` bytes), so the same builds started again reuse a done
+  artifact at cost 0 and adopt a live provider job. `resume()` refuses such a run (see below).
 - **`options.maxCostUsd?: number`** — budget ceiling; when the atomic gate reports the budget
   reached, the run drains and settles `{ status: "budget-stopped" }`.
 - **`options.dryRun?: boolean`** — short-circuits to a pure estimate: no journal writes, returns
@@ -70,7 +75,9 @@ file, plans and inserts every item, then drives the pipeline to completion.
 - **`opts.onStart?: (runId: string) => void`** — called once, synchronously, with the new run id,
   before any item record. Open `events({ runId })` here to see the whole run. A throwing
   `onStart` fails the run.
-- **Returns** `RunResult`: `{ runId, status: "done" | "failed" | "paused" | "budget-stopped", totals }`.
+- **Returns** `RunResult`: `{ runId, status: "done" | "failed" | "paused" | "budget-stopped", totals, error? }`.
+  `error` is set only when `status` is `"failed"`: the message of the error that failed the run
+  (the same text as the `run:failed` event), for example which endpoint has no price.
 - **Throws** when `maxActiveRuns` is not a whole number >= 1, or when `maxActiveRuns` runs are
   already active (`[ai] A run is already active: <ids>.`). Unrecoverable errors *inside* the run
   (plan failures, missing handlers) do not reject — the run is marked `failed` and the promise
@@ -82,6 +89,10 @@ file, plans and inserts every item, then drives the pipeline to completion.
 
 ```ts
 const result = await app.runner.run({ files: "voice/*.moku.yaml", maxCostUsd: 25 });
+
+// One build from memory, no file on disk; a failed run says why.
+const call = await app.runner.run({ builds: [callBuild] });
+if (call.status === "failed") console.error(call.error);
 ```
 
 ### `resume(opts?): Promise<RunResult>`
@@ -92,14 +103,17 @@ is idempotent (`insertItems` no-ops on existing planning keys), so already-`done
 re-billed.
 
 - **`opts.runId?: string`** — run to resume; defaults to the newest resumable run that this
-  process does not drive now.
+  process does not drive now and that was started from files. Runs started from in-memory builds
+  (`glob` `"(inline)"`) are skipped: they have no files to plan from.
 - **`opts.signal?: AbortSignal`** — same clean-pause semantics as `run()`.
 - **`opts.onStart?: (runId: string) => void`** — same as `run()`.
 - **Returns** `RunResult` for the resumed run.
 - **Throws** in this order: `maxActiveRuns` invalid; `maxActiveRuns` runs already active;
   `opts.runId` is a run this process drives now (`[ai] Run is already active in this process:
   <id>.` — follow it with `events({ runId })` instead); `opts.runId` doesn't exist; no resumable
-  run exists.
+  run exists. A `runId` of a run started from in-memory builds is refused before anything is
+  re-queued: `[ai] Run <runId> was started from in-memory builds and cannot be resumed.` Start the
+  same builds again with `run({ builds })`: done items are reused and live provider jobs are adopted.
 
 ```ts
 const result = await app.runner.resume();

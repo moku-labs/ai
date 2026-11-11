@@ -423,3 +423,124 @@ describe("createRunnerApi — an item that throws", () => {
     expect(ctx.state.active.size).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// In-memory builds — `RunOptions.builds`, the "(inline)" run, `RunResult.error`
+// ---------------------------------------------------------------------------
+
+/**
+ * Two resumable run rows, the newest first: an inline run and an older file run.
+ *
+ * @returns The rows, built from the fake journal's own `openRun`.
+ * @example
+ * ```ts
+ * const [inline, older] = pausedRuns();
+ * ```
+ */
+function pausedRuns() {
+  const opened = createFakeRunnerContext([]).journal.openRun({ glob: "(default)" });
+  return [
+    { ...opened, id: "run-inline", glob: "(inline)", status: "paused" as const },
+    { ...opened, id: "run-file", glob: "older/*.moku.yaml", status: "paused" as const }
+  ];
+}
+
+describe("createRunnerApi — in-memory builds", () => {
+  const INLINE_MESSAGE =
+    "[ai] Run run-inline was started from in-memory builds and cannot be resumed.\n  Start it again: done items are reused and live provider jobs are adopted.";
+  const inlineBuild: CompiledBuild = {
+    file: "<inline>",
+    spec: {
+      version: 1,
+      name: "call",
+      items: [{ task: "fakeTask", provider: "fakeProvider", id: "fal-ai/x", input: { text: "hi" } }]
+    }
+  };
+
+  it("run({ builds }) drives the given item, never loads the glob, and records glob (inline)", async () => {
+    const log: CallLog = [];
+    const loadGlob = vi.fn(async (): Promise<CompiledBuild[]> => []);
+    const ctx = createFakeRunnerContext(log, { buildfile: { loadGlob } });
+    const openRun = vi.spyOn(ctx.journal, "openRun");
+    const api = createRunnerApi(ctx);
+
+    const result = await api.run({ builds: [inlineBuild], files: "ignored/*.moku.yaml" });
+
+    expect(result.status).toBe("done");
+    expect(loadGlob).not.toHaveBeenCalled();
+    expect(openRun).toHaveBeenCalledWith({ glob: "(inline)" });
+    expect(log).toContain("handler.execute");
+  });
+
+  it("dryRun with builds prices them and never loads the glob", async () => {
+    const loadGlob = vi.fn(async (): Promise<CompiledBuild[]> => []);
+    const ctx = createFakeRunnerContext([], { buildfile: { loadGlob } });
+    const api = createRunnerApi(ctx);
+
+    const result = await api.run({ builds: [inlineBuild], dryRun: true });
+
+    expect(loadGlob).not.toHaveBeenCalled();
+    expect(result.totals).toMatchObject({ total: 1, estimatedRemainingUsd: 0.1 });
+  });
+
+  it("resume() with no id skips an inline run and resumes the older file run", async () => {
+    const rows = pausedRuns();
+    const loadGlob = vi.fn(async (): Promise<CompiledBuild[]> => []);
+    const requeueDispatching = vi.fn(() => 0);
+    const ctx = createFakeRunnerContext([], {
+      buildfile: { loadGlob },
+      journal: {
+        requeueDispatching,
+        latestResumableRun: opts => rows.find(row => !opts?.exclude?.includes(row.id))
+      }
+    });
+    const api = createRunnerApi(ctx);
+
+    const result = await api.resume();
+
+    expect(result.runId).toBe("run-file");
+    expect(requeueDispatching).toHaveBeenCalledExactlyOnceWith("run-file");
+    expect(loadGlob).toHaveBeenCalledExactlyOnceWith("older/*.moku.yaml");
+  });
+
+  it("resume() with no id and only an inline run says no run can be resumed", async () => {
+    const [inline] = pausedRuns();
+    const ctx = createFakeRunnerContext([], {
+      journal: {
+        latestResumableRun: opts => (opts?.exclude?.includes("run-inline") ? undefined : inline)
+      }
+    });
+    const api = createRunnerApi(ctx);
+
+    await expect(api.resume()).rejects.toThrow(/^\[ai\] No resumable run found/);
+  });
+
+  it("resume({ runId }) of an inline run rejects with the start-again message and touches nothing", async () => {
+    const [inline] = pausedRuns();
+    const requeueDispatching = vi.fn(() => 0);
+    const setRunStatus = vi.fn();
+    const ctx = createFakeRunnerContext([], {
+      journal: { getRun: () => inline, requeueDispatching, setRunStatus }
+    });
+    const api = createRunnerApi(ctx);
+
+    await expect(api.resume({ runId: "run-inline" })).rejects.toThrow(INLINE_MESSAGE);
+
+    expect(requeueDispatching).not.toHaveBeenCalled();
+    expect(setRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a run whose planning throws resolves failed with the thrown message", async () => {
+    const message = "[ai] fal: no price for endpoint fal-ai/x.\n  Pass priceOverrides.";
+    const handler = fakeHandler([]);
+    handler.estimate = (): { usd: number } => {
+      throw new Error(message);
+    };
+    const ctx = createFakeRunnerContext([], { registry: { resolve: (): unknown => handler } });
+    const api = createRunnerApi(ctx);
+
+    const result = await api.run({ builds: [inlineBuild] });
+
+    expect(result).toMatchObject({ runId: "run-1", status: "failed", error: message });
+  });
+});

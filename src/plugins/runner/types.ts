@@ -5,7 +5,7 @@
 import type { LogApi } from "@moku-labs/common";
 import type { PluginCtx } from "@moku-labs/core";
 import type { buildfilePlugin } from "../buildfile";
-import type { BuildfileApi } from "../buildfile/types";
+import type { BuildfileApi, CompiledBuild } from "../buildfile/types";
 import type { ErrorClass, ItemIntent, JournalApi, RunTotals } from "../journal/types";
 import type { LimitsApi } from "../limits/types";
 import type { RegistryApi, registryPlugin } from "../registry";
@@ -37,12 +37,47 @@ export type Config = {
   maxActiveRuns: number;
 };
 
-/** Options accepted by {@link RunnerApi.run}. */
-export type RunOptions = { files?: string; maxCostUsd?: number; dryRun?: boolean };
+/**
+ * Options accepted by {@link RunnerApi.run}.
+ *
+ * @example
+ * ```ts
+ * // One call planned in memory: no build file on disk, the run's glob is "(inline)".
+ * const options: RunOptions = { builds: [callBuild], maxCostUsd: 1 };
+ * ```
+ */
+export type RunOptions = {
+  /** Glob of build files; default the buildfile default glob. Not read when `builds` is set. */
+  files?: string;
+  /** Budget cap in USD; the run stops admitting items once it is reached. */
+  maxCostUsd?: number;
+  /** Plan and price the builds without opening a journal run. */
+  dryRun?: boolean;
+  /**
+   * Builds to run as they are, instead of loading `files`. `buildfile.loadGlob` is never
+   * called, the run's `glob` is `"(inline)"`, and `dryRun` reads these builds too. Such a run
+   * cannot be resumed: start the same builds again, done items are reused and live jobs adopted.
+   */
+  builds?: CompiledBuild[];
+};
 /** Terminal (or paused) status of one `run()`/`resume()` invocation. */
 export type RunResultStatus = "done" | "failed" | "paused" | "budget-stopped";
-/** Settlement value returned by {@link RunnerApi.run} and {@link RunnerApi.resume}. */
-export type RunResult = { runId: string; status: RunResultStatus; totals: RunTotals };
+/**
+ * Settlement value returned by {@link RunnerApi.run} and {@link RunnerApi.resume}.
+ *
+ * @example
+ * ```ts
+ * // A planning failure resolves with its reason; it does not reject.
+ * const result: RunResult = { runId: "7f3c…", status: "failed", totals, error: "[ai] fal: no price for fal-ai/x." };
+ * ```
+ */
+export type RunResult = {
+  runId: string;
+  status: RunResultStatus;
+  totals: RunTotals;
+  /** Why the run ended `failed`: the message of the error that failed it. Absent for every other status. */
+  error?: string;
+};
 
 /** One task/provider line of an {@link EstimateResult} cost breakdown. */
 export type EstimateLine = { task: string; provider: string; items: number; usd: number };
@@ -407,17 +442,27 @@ export type RunnerApi = {
    * run at once, up to `maxActiveRuns`; each keeps its own budget, totals,
    * signal and status, and they share lanes and artifacts.
    *
-   * @param options - Glob, budget cap, dry-run.
+   * With `options.builds` the run plans exactly those builds and never loads a glob; its
+   * `glob` is `"(inline)"` and `resume()` refuses it. A run that fails resolves with
+   * `status: "failed"` and the reason in `error`.
+   *
+   * @param options - Glob, budget cap, dry-run, in-memory builds.
    * @param opts - Optional abort signal and start callback.
    * @param opts.signal - Abort signal; aborting drains to `paused`.
    * @param opts.onStart - Called once, synchronously, with the new runId, before any item record.
-   * @returns The run's final result.
+   * @returns The run's final result; `error` is set when it ended `failed`.
    * @throws {Error} When `maxActiveRuns` is invalid or already reached.
    * @example
    * ```ts
    * // Episode 2 starts while episode 1 renders (maxActiveRuns: 2); its runId is known at once.
    * const ep2 = app.runner.run({ files: "ep02/*.moku.yaml", maxCostUsd: 20 }, { onStart: runId => watch(runId) });
    * await ep2; // { runId: "7f3c…", status: "done", totals: { total: 14, done: 14, … } }
+   * ```
+   * @example
+   * ```ts
+   * // One call from memory: nothing on disk. The same call again reuses the answer at cost 0.
+   * const result = await app.runner.run({ builds: [callBuild] });
+   * result.status === "failed" ? result.error : result.totals.spendUsd; // "[ai] fal: no price …" or 0.005
    * ```
    */
   run(
@@ -427,14 +472,16 @@ export type RunnerApi = {
   /**
    * Continues the latest (or a given) resumable run; live provider jobs are
    * polled, not re-submitted. Works while other runs are active; the default
-   * target skips the runs this process drives now.
+   * target skips the runs this process drives now and every run started from
+   * in-memory builds (`glob` `"(inline)"`). A `runId` of such a run is refused:
+   * it has no files to plan from, so start the same builds again instead.
    *
    * @param opts - Optional run id, abort signal and start callback.
    * @param opts.runId - Run to resume; default the newest resumable run that is not active here.
    * @param opts.signal - Abort signal; aborting drains to `paused`.
    * @param opts.onStart - Called once, synchronously, with the runId, before any item record.
    * @returns The run's final result.
-   * @throws {Error} When `maxActiveRuns` is reached, the run is already active here, or no run can be resumed.
+   * @throws {Error} When `maxActiveRuns` is reached, the run is already active here, the run was started from in-memory builds, or no run can be resumed.
    * @example
    * ```ts
    * // Yesterday's paused episode continues while today's run keeps going.

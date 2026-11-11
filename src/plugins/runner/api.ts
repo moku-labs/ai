@@ -6,6 +6,7 @@
  * coalesced progress, the terminal transition, and closing the run's streams.
  */
 import { buildfilePlugin } from "../buildfile";
+import type { CompiledBuild } from "../buildfile/types";
 import type { ItemRow, RunRow, RunTotals } from "../journal/types";
 import { exportRun } from "./export";
 import type { ItemSettlement } from "./pipeline";
@@ -35,6 +36,8 @@ type ResumeOptions = RunCallOptions & { runId?: string };
 
 /** Label recorded as a run's `glob` when the caller omitted an explicit pattern. */
 const DEFAULT_GLOB_LABEL = "(default)";
+/** Label recorded as a run's `glob` when it was started from in-memory builds. */
+const INLINE_GLOB_LABEL = "(inline)";
 /** Synthetic runId returned by a `dryRun: true` call (no journal row is opened). */
 const DRY_RUN_ID = "dry-run";
 /** Minimum interval between coalesced `run:progress` bus emissions, ms. */
@@ -204,7 +207,7 @@ function failRun(ctx: RunnerContext, run: RunRow, error: unknown): RunResult {
   broadcastEvent(ctx.state, { type: "terminal", runId: run.id, status: "failed", totals });
   ctx.emit("run:failed", { runId: run.id, error: message });
 
-  return { runId: run.id, status: "failed", totals };
+  return { runId: run.id, status: "failed", totals, error: message };
 }
 
 /**
@@ -418,6 +421,19 @@ async function drivePipeline(
 }
 
 /**
+ * The builds a run plans: the in-memory `options.builds` as given, else the
+ * build files matched by `options.files`. `loadGlob` is never called when
+ * `builds` is set.
+ *
+ * @param ctx - Runner domain context.
+ * @param options - Run options.
+ * @returns The compiled builds to plan.
+ */
+async function loadRunBuilds(ctx: RunnerContext, options: RunOptions): Promise<CompiledBuild[]> {
+  return options.builds ?? (await ctx.require(buildfilePlugin).loadGlob(options.files));
+}
+
+/**
  * Computes the same per-item estimate arithmetic the budget gate uses,
  * without opening a journal run: plans the matched build files and totals
  * their estimated costs, grouped by task/provider.
@@ -427,7 +443,7 @@ async function drivePipeline(
  * @returns The dry-run's `done` result, with `estimatedRemainingUsd` set to the plan's total.
  */
 async function dryRunEstimate(ctx: RunnerContext, options: RunOptions): Promise<RunResult> {
-  const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
+  const builds = await loadRunBuilds(ctx, options);
   const planned = await planItems(ctx, builds);
   const totalUsd = planned.reduce((sum, p) => sum + p.intent.estimatedCostUsd, 0);
 
@@ -450,10 +466,12 @@ async function dryRunEstimate(ctx: RunnerContext, options: RunOptions): Promise<
  * every glob-matched build file, plans and inserts every item, then drives
  * the pipeline to completion. `dryRun: true` short-circuits to
  * {@link dryRunEstimate} — no journal writes. The run is active from before
- * its first `await` until it settles; `opts.onStart` gets its id then.
+ * its first `await` until it settles; `opts.onStart` gets its id then. With
+ * `options.builds` it plans those builds, never loads a glob, and records the
+ * run's glob as {@link INLINE_GLOB_LABEL}.
  *
  * @param ctx - Runner domain context.
- * @param options - Run options (glob, budget cap, dry-run).
+ * @param options - Run options (glob, budget cap, dry-run, in-memory builds).
  * @param opts - Optional external abort signal and start callback.
  * @param opts.signal - Abort signal; on abort, stop admitting queued items and resolve `{ status: "paused" }` once in-flight items drain.
  * @param opts.onStart - Called once, synchronously, with the new run id.
@@ -468,7 +486,7 @@ async function run(
   ensureRunCapacity(ctx);
   if (options.dryRun) return dryRunEstimate(ctx, options);
 
-  const globLabel = options.files ?? DEFAULT_GLOB_LABEL;
+  const globLabel = options.builds ? INLINE_GLOB_LABEL : (options.files ?? DEFAULT_GLOB_LABEL);
   const openedRun =
     options.maxCostUsd === undefined
       ? ctx.journal.openRun({ glob: globLabel })
@@ -476,7 +494,7 @@ async function run(
 
   try {
     const active = startActiveRun(ctx, openedRun.id, opts);
-    const builds = await ctx.require(buildfilePlugin).loadGlob(options.files);
+    const builds = await loadRunBuilds(ctx, options);
     const planned = await planItems(ctx, builds);
     const items = ctx.journal.insertItems(
       openedRun.id,
@@ -491,19 +509,54 @@ async function run(
 }
 
 /**
+ * Whether a run was started from in-memory builds: it has no files to plan
+ * from, so `resume()` cannot continue it.
+ *
+ * @param run - The run row.
+ * @returns True when its `glob` is {@link INLINE_GLOB_LABEL}.
+ */
+function isInlineRun(run: RunRow): boolean {
+  return run.glob === INLINE_GLOB_LABEL;
+}
+
+/**
+ * The newest resumable run that this process does not drive now and that
+ * was started from files: each inline run met is added to `exclude` and the
+ * journal is asked again.
+ *
+ * @param ctx - Runner domain context.
+ * @returns The run row, or undefined when no such run exists.
+ */
+function latestFileRun(ctx: RunnerContext): RunRow | undefined {
+  const exclude = [...ctx.state.active.keys()];
+  let candidate = ctx.journal.latestResumableRun({ exclude });
+  while (candidate && isInlineRun(candidate)) {
+    exclude.push(candidate.id);
+    candidate = ctx.journal.latestResumableRun({ exclude });
+  }
+  return candidate;
+}
+
+/**
  * Picks the run `resume()` continues: the given id, else the newest
- * resumable run that this process does not drive now.
+ * resumable run that this process does not drive now and that was started
+ * from files.
  *
  * @param ctx - Runner domain context.
  * @param runId - The run asked for, if any.
  * @returns The target run row.
- * @throws {Error} When the given run does not exist, or no run can be resumed.
+ * @throws {Error} When the given run does not exist or was started from in-memory builds, or no run can be resumed.
  */
 function resumeTarget(ctx: RunnerContext, runId: string | undefined): RunRow {
-  const exclude = [...ctx.state.active.keys()];
-  const targetRun = runId ? requireRun(ctx, runId) : ctx.journal.latestResumableRun({ exclude });
+  const targetRun = runId ? requireRun(ctx, runId) : latestFileRun(ctx);
   if (!targetRun) {
     throw new Error("[ai] No resumable run found.\n  Start a new run with run() instead.");
+  }
+
+  if (runId && isInlineRun(targetRun)) {
+    throw new Error(
+      `[ai] Run ${runId} was started from in-memory builds and cannot be resumed.\n  Start it again: done items are reused and live provider jobs are adopted.`
+    );
   }
   return targetRun;
 }
@@ -517,11 +570,11 @@ function resumeTarget(ctx: RunnerContext, runId: string | undefined): RunRow {
  *
  * @param ctx - Runner domain context.
  * @param opts - Optional run id (else the newest resumable run not active here), abort signal and start callback.
- * @param opts.runId - Run id to resume; defaults to the newest resumable run this process does not drive.
+ * @param opts.runId - Run id to resume; defaults to the newest resumable file run this process does not drive (inline runs are skipped).
  * @param opts.signal - Abort signal; on abort, stop admitting queued items and resolve `{ status: "paused" }` once in-flight items drain.
  * @param opts.onStart - Called once, synchronously, with the run id.
  * @returns The run's final result.
- * @throws {Error} When `maxActiveRuns` is invalid or reached, the run is already active here, or no resumable run exists.
+ * @throws {Error} When `maxActiveRuns` is invalid or reached, the run is already active here, the run was started from in-memory builds, or no resumable run exists.
  */
 async function resume(ctx: RunnerContext, opts?: ResumeOptions): Promise<RunResult> {
   ensureRunCapacity(ctx);
