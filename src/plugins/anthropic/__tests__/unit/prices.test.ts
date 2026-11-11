@@ -35,7 +35,8 @@ describe("anthropic prices: bundled table", () => {
     ["claude-sonnet-5-5", [2, 10, 0.2, 2.5, 4]],
     ["claude-sonnet-5", [2, 10, 0.2, 2.5, 4]],
     ["claude-haiku-5-5", [0.1, 0.5, 0.01, 0.125, 0.2]],
-    ["claude-fable-5-1", [10, 50, 0.25, 12.5, 20]]
+    ["claude-fable-5-1", [10, 50, 0.25, 12.5, 20]],
+    ["claude-fable-5-2", [8, 40, 0.2, 10, 16]]
   ])("prices 100 000 tokens of each kind on %s at in, out, read, write 5m, write 1h = %o per 1M", (model, rates) => {
     const price = bundled(model);
 

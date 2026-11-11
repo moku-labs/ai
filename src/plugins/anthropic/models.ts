@@ -17,7 +17,8 @@ export const modelAliases: ReadonlyMap<string, string> = new Map([
   ["anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"],
   ["anthropic/claude-sonnet-5", "claude-sonnet-5"],
   ["anthropic/claude-haiku-5.5", "claude-haiku-5-5"],
-  ["anthropic/claude-fable-5.1", "claude-fable-5-1"]
+  ["anthropic/claude-fable-5.1", "claude-fable-5-1"],
+  ["anthropic/claude-fable-5.2", "claude-fable-5-2"]
 ]);
 
 /** The request model that means "the configured default". */

@@ -73,6 +73,13 @@ export const bundledPrices: Readonly<Record<string, AnthropicPrice>> = {
     cacheReadPerM: 0.25,
     cacheWrite5mPerM: 12.5,
     cacheWrite1hPerM: 20
+  },
+  "claude-fable-5-2": {
+    inputPerM: 8,
+    outputPerM: 40,
+    cacheReadPerM: 0.2,
+    cacheWrite5mPerM: 10,
+    cacheWrite1hPerM: 16
   }
 };
 

@@ -657,6 +657,7 @@ describe("anthropic prompt-gen request: input and model", () => {
     ["anthropic/claude-sonnet-5", "claude-sonnet-5"],
     ["anthropic/claude-haiku-5.5", "claude-haiku-5-5"],
     ["anthropic/claude-fable-5.1", "claude-fable-5-1"],
+    ["anthropic/claude-fable-5.2", "claude-fable-5-2"],
     ["claude-sonnet-5-5", "claude-sonnet-5-5"]
   ])("sends model %s as %s", async (model, expected) => {
     const request: PromptGenRequest =

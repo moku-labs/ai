@@ -7,6 +7,10 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **anthropic: Claude Fable 5.2.** The alias `anthropic/claude-fable-5.2` maps to the native id
+  `claude-fable-5-2`, and the bundled price table has its row: 8 in, 40 out, 0.20 cache read, 10 cache
+  write 5m, 16 cache write 1h, USD per 1M tokens. Before this a request naming it stopped with
+  "has no price". Like Fable 5.1 it answers a forced `toolChoice` with a terminal 400.
 - **dialogue: a new task for multi-speaker scenes.** `task: dialogue` (and `app.dialogue.generate` /
   `estimate` / `providers`, config `dialogue.defaultProvider`, default `"elevenlabs"`) speaks a whole
   scene in one request, so the voices answer each other in one take. A line is `{ id?, text, voice }`;
