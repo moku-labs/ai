@@ -4,10 +4,12 @@
  * and translates its outcome to the exit-code contract. Never calls
  * `process.exit` — `bin.ts` owns the process (post-start dispatch, OQ1).
  */
+import { text as readStreamText } from "node:stream/consumers";
 import { parseArgs } from "node:util";
 import { buildfilePlugin } from "../buildfile";
 import { composePlugin } from "../compose";
 import { runnerPlugin } from "../runner";
+import { runCallCommand } from "./commands/call";
 import { runComposeCommand } from "./commands/compose";
 import { runEstimateCommand } from "./commands/estimate";
 import { runExportCommand } from "./commands/export";
@@ -87,6 +89,18 @@ const COMMAND_REGISTRY: CommandDefinition[] = [
       out: { type: "string", description: "File path to write the emitted text to" }
     },
     run: runComposeCommand
+  },
+  {
+    name: "call",
+    description: "Run one provider endpoint with a JSON input and print the answer as JSON",
+    flags: {
+      input: {
+        type: "string",
+        description: "Endpoint input: inline JSON, @<file>, or - for stdin"
+      },
+      out: { type: "string", description: "Write the answer JSON to this file" }
+    },
+    run: runCallCommand
   }
 ];
 
@@ -266,6 +280,37 @@ export function isPlainMode(ctx: CliContext): boolean {
 }
 
 /**
+ * Reads stdin to its end as UTF-8 text.
+ *
+ * @returns The whole of stdin.
+ * @example
+ * ```ts
+ * const body = await readStandardInput(); // `echo '{"a":1}' | moku call ep --input -`
+ * ```
+ */
+function readStandardInput(): Promise<string> {
+  return readStreamText(process.stdin);
+}
+
+/**
+ * Writes text to stdout and resolves when the stream has taken it. `console.log` followed by
+ * `process.exit` cuts a piped answer at 65,536 bytes under node; awaiting the write callback does not.
+ * Machine output only: a raw JSON line, no ANSI.
+ *
+ * @param text - The text to write, newline included.
+ * @returns Resolves once stdout has flushed the text.
+ * @example
+ * ```ts
+ * await writeStandardOutput('{"ok":true}\n');
+ * ```
+ */
+function writeStandardOutput(text: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(text, error => (error ? reject(error) : resolve()));
+  });
+}
+
+/**
  * Assembles the shared {@link CommandContext} every command renders through
  * and calls into, resolving each dependency once via `ctx.require`.
  *
@@ -284,6 +329,9 @@ function buildCommandContext(ctx: CliContext): CommandContext {
     compose: ctx.require(composePlugin),
     journal: ctx.journal,
     log: ctx.log,
+    store: ctx.store,
+    readIn: readStandardInput,
+    writeOut: writeStandardOutput,
     runWithAbort
   };
 }

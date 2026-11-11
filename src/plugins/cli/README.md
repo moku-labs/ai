@@ -5,10 +5,14 @@
 ## Purpose
 
 `cli` is the Complex-tier plugin that puts a terminal in front of the build system. It owns the
-seven `moku` commands (`new`, `validate`, `estimate`, `run`, `export`, `status`, `compose`), parses argv with
+eight `moku` commands (`new`, `validate`, `estimate`, `run`, `export`, `status`, `compose`, `call`), parses argv with
 `node:util`'s `parseArgs`, routes to one command module, and renders everything through the
 branded console from `@moku-labs/common/cli` (MC1) — no hand-rolled ANSI escapes, box-drawing, or
 spinner animations anywhere in the plugin.
+
+`call` is the one command made for machines: it runs a single provider endpoint through the normal
+run path (cost, retries, lanes, journal and content cache included) and prints exactly one JSON
+line on stdout. Everything human it prints goes to stderr.
 
 By ratified design (OQ1) the plugin has **no lifecycle** — no `onInit`, `onStart`, `onStop`, and
 no state. Dispatch is an ordinary post-start API method: the package `bin` entry (`src/bin.ts`, a
@@ -31,6 +35,12 @@ Every `dispatch()` call resolves to one of these codes (`EXIT_CODES` in `types.t
 | `3` | `usage` | Usage/argument error (unknown command, bad flag, bad flag value) |
 | `4` | `paused` | Clean pause (SIGINT drain) |
 | `5` | `budgetStop` | Budget stop (`--max-cost` reached) |
+
+`moku call` maps the outcome of its one item: `0` done, `1` the item failed or was flagged (or the
+run failed before the item ran), `3` a bad argument or `--input` (no run starts), `4` paused by
+Ctrl-C. On every one of these paths stdout holds one `ok: true` or `ok: false` JSON line; the one
+exception is an unknown flag, which `dispatch` rejects with exit `3` before the command runs and so
+prints no line.
 
 An empty or unrecognized command name renders the top-level usage listing (a `moku ai` lockup
 banner plus one rail line per command) and returns `3`.
@@ -227,6 +237,59 @@ cost: $0.0132
 Exit: `0` on success, `3` for a missing prompt or bad `--emit`, `2` when compose exhausted every
 repair attempt without producing a valid build file, else `1`.
 
+### `moku call <endpoint> --input <json | @file | -> [--out <file>]`
+
+Runs one provider endpoint with a JSON input and prints the answer as JSON. The command compiles
+a one-item build in memory (`task: call`, `id` = the endpoint, `input: { endpoint, input }`; no
+`provider`, so the first one registered for `call` runs it) and runs it with
+`runner.run({ builds: [build] }, { signal })`. Cost, retries, lanes, the journal and the content
+cache are the runner's: the same endpoint with the same input and the same file bytes is answered
+from the cache at cost `0`. A local file in the input is marked `{"$file": "<path>"}`, relative to
+the cwd. The cli has no dependency on the provider: the handler is reached through the registry.
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--input <json \| @file \| ->` | string | Required. Endpoint input: inline JSON, `@<file>` to read a file, or `-` to read stdin. Must be a JSON object. |
+| `--out <file>` | string | Write the answer JSON to this file (parent folders are created). stdout then has `out` (absolute path) and no `result`. |
+
+stdout is exactly one JSON line (`Cli.CallOutput`), written with an awaited `process.stdout.write`
+(`CommandContext.writeOut`). Under node, `console.log` followed by `process.exit` cuts a piped
+answer at 65,536 bytes; the awaited write does not. The log sinks are replaced first: `warn` and
+`error` log entries go to stderr, `info` and `debug` are dropped, so no log line reaches stdout.
+
+```json
+{"ok":true,"endpoint":"fal-ai/sam-3/image","costUsd":0.005,"reused":false,"runId":"7f3c…","result":{"masks":[…]}}
+{"ok":true,"endpoint":"fal-ai/sam-3/video-rle","costUsd":0.02,"reused":false,"runId":"81aa…","out":"/abs/mask/s03.json"}
+{"ok":true,"endpoint":"fal-ai/sam-3/image","costUsd":0,"reused":true,"runId":"90b1…","result":{"masks":[…]}}
+{"ok":false,"endpoint":"fal-ai/sam-3/image","costUsd":0,"runId":"a2c4…","error":{"class":"http-4xx","message":"[ai] fal rejected the request (HTTP 422)."}}
+```
+
+`costUsd` is the item's journaled cost. `reused` is true when the item is done and no provider call
+was dispatched in this run.
+
+| Outcome | Exit | `error.class` | `error.message` |
+|---------|------|---------------|-----------------|
+| item `done` | `0` | | |
+| item `failed` | `1` | the item's error class | the item's message, else the class |
+| item `flagged` | `1` | `content-policy` | the item's message, else `content-policy` |
+| run `failed` before the item ran | `1` | `run` | the run's error, for example a missing price |
+| paused (Ctrl-C) | `4` | `paused` | `[ai] The call was paused.` plus the rerun hint |
+| bad argument or `--input` | `3` | `usage` | one of the five lines below; `runId` is `null` |
+
+```text
+moku call requires an <endpoint> argument
+moku call requires --input <json | @file | ->
+cannot read --input file "<path>"
+--input is not valid JSON
+--input must be a JSON object
+```
+
+A build the compiler rejects is also a `usage` error. A paused call is resumed by running the same
+command again: a submitted job is adopted, not paid twice (an in-memory run cannot be `resume`d).
+Not built: `--fresh`, a batch form, `--provider`.
+
+Exit: `0` done, `1` failed, flagged or run failed, `3` usage, `4` paused.
+
 ## Configuration
 
 | Key | Type | Default | Description |
@@ -252,7 +315,7 @@ with flags flattened to `Record<flagName, description>` — exported for a futur
 remount under `moku ai <cmd>`.
 
 Supporting types (`CommandTree`, `CommandContext`, `CommandDefinition`, `CommandFlags`,
-`CommandFlagSpec`, `CliApi`, `Config`) and the `EXIT_CODES` constant are exported from the
+`CommandFlagSpec`, `CallOutput`, `CallError`, `CliApi`, `Config`) and the `EXIT_CODES` constant are exported from the
 framework entry under the `Cli` namespace (`import { Cli } from "@moku-labs/ai"`).
 
 ## Events
@@ -262,7 +325,7 @@ rendering consumes `runner.events()`, an `AsyncIterable<RunEvent>`, not bus hook
 
 ## SIGINT wiring
 
-`run` and `compose` execute through the shared `runWithAbort` helper on `CommandContext`:
+`run`, `compose` and `call` execute through the shared `runWithAbort` helper on `CommandContext`:
 
 - The first Ctrl-C aborts the operation's `AbortSignal` — a clean pause via drain (exit `4` when
   the run reports `paused`).
@@ -287,6 +350,25 @@ moku status --follow
 
 # Generate a build file from a prompt
 moku compose "voiceover for every scene in scenes/" --emit build --out scenes.moku.yaml
+
+# One fal endpoint, inline JSON (a local file is marked {"$file": "<path>"}, relative to the cwd)
+moku call fal-ai/sam-3/image --input '{"image_url":{"$file":"plates/s03.png"},"prompt":"wall","apply_mask":false}'
+
+# Body from a file, answer to a file (stdout then has "out" and no "result")
+moku call fal-ai/sam-3/video-rle --input @clips/s03.json --out mask/s03.json
+
+# Body from stdin
+echo '{"image_url":{"$file":"ref/c1/f_0001.png"},"include_3d_keypoints":true}' | moku call fal-ai/sam-3/3d-body --input -
+```
+
+### Python (`moku call` from a script)
+
+```python
+import json, subprocess
+p = subprocess.run(["bun", f"{ROOT}/node_modules/@moku-labs/ai/dist/bin.mjs", "call", "fal-ai/sam-3/3d-body", "--input", "-"],
+                   input=json.dumps({"image_url": {"$file": "/abs/ref/c1/f_0001.png"}, "include_3d_keypoints": True}),
+                   capture_output=True, text=True, cwd=ROOT)
+r = json.loads(p.stdout)          # r["result"] is fal's answer, r["costUsd"] is what it cost
 ```
 
 ### TypeScript (programmatic dispatch)
@@ -332,8 +414,16 @@ await app.stop();
 - `runnerPlugin` — `run` / `estimate` / `status` / `events` (drives `run`, `estimate`, `status`).
 - `buildfilePlugin` — `template` / `loadGlob` / `jsonSchema` (drives `new`, `validate`).
 - `composePlugin` — `compose` (drives `compose`).
-- Core-plugin APIs: `ctx.journal.readSnapshot` (`status --follow`'s short-lived polling reads),
-  `ctx.log` (structured diagnostics, MC2), `ctx.env` (`NO_COLOR` detection, MC3).
+- Core-plugin APIs: `ctx.journal.readSnapshot` (`status --follow`'s short-lived polling reads) and
+  `ctx.journal.listItems` (`call` reads its one item), `ctx.store.read` (`call` reads the stored
+  answer of a done item), `ctx.log` (structured diagnostics, MC2), `ctx.env` (`NO_COLOR`
+  detection, MC3).
+- No edge to the `fal` plugin: `call` runs `task: call` and the runner finds the handler in the
+  registry (`("call", "fal")` registers there). A second provider registering `("call", "<name>")`
+  needs no change here.
+
+`CommandContext` also carries `readIn()` (stdin to its end as UTF-8) and `writeOut(text)` (an awaited
+`process.stdout.write`, machine output only, never styled), both built in `api.ts`.
 
 **Rendering** — `render.ts` is the MC1 seam: it composes one `BrandConsole` via
 `createBrandConsole({ color: !plain })` from `@moku-labs/common/cli`, and every command renders
@@ -348,7 +438,8 @@ making it a plain Layer-3 consumer of `app.cli.dispatch`. A config that does not
 before any app is created.
 
 **File layout** — `index.ts` (plugin definition), `types.ts` (types + `EXIT_CODES`), `api.ts`
-(registry, argv parsing, dispatch, `CommandContext` assembly), `render.ts` (branded-console
-composition), one module per command under `commands/`, and `project-config.ts` (the bin's
+(registry, argv parsing, dispatch, `CommandContext` assembly incl. `readIn`/`writeOut`), `render.ts`
+(branded-console composition), one module per command under `commands/` (`call.ts` is the
+machine-output one), and `project-config.ts` (the bin's
 `loadProjectConfig` + `renderLoadError`; not re-exported). No `state.ts` — the plugin is
 stateless.
