@@ -88,6 +88,7 @@ Each task directory owns its models and prices; a new model touches one director
 | `vidu-q3-ref` | `fal-ai/vidu/q3/reference-to-video/mix` | `reference_image_urls[0]` | none | rest of `reference_image_urls` (max 3) | none | none | 0 | integer | `audio` |
 | `gemini-omni-1.1-flash` | `google/gemini-omni-flash/v1.1/image-to-video` | `image_url` | `end_image_url` | none | none | none | 0 | integer 3-10 | no flag |
 | `gemini-omni-1.1-flash-ref` | `google/gemini-omni-flash/v1.1/reference-to-video` | `image_urls[0]` (`<IMAGE_REF_0>` in the prompt) | none | rest of `image_urls` (max 9) | none | `reference_video_urls` (max 3) | 3 s each (9 s combined) | integer 3-10 | no flag |
+| `gemini-omni-1.2-flash-ref` | `google/gemini-omni-flash/v1.2/reference-to-video` | `image_urls[0]` (named in plain words: "the first image") | none | rest of `image_urls` (max 9) | none | `reference_video_urls` (max 1) | 3 s | integer 3-15 | no flag |
 
 Video-ref limits are from the fal model pages of 2026-09-25; `minimax-h3-ref` and the Gemini Omni rows
 from the fal schemas of 2026-09-26. End frames and the `minimax-h3-max-i2v` row are from the fal schemas
@@ -155,7 +156,7 @@ Any other model fails the item with a terminal error before any upload:
       endImage: { $ref: s01.end }
 ```
 
-**Video refs.** `minimax-h3-max-ref`, `minimax-h3-ref`, `wan-3.0-ref` and `gemini-omni-1.1-flash-ref` send them as `reference_video_urls`; the Seedance reference models send
+**Video refs.** `minimax-h3-max-ref`, `minimax-h3-ref`, `wan-3.0-ref`, `gemini-omni-1.1-flash-ref` and `gemini-omni-1.2-flash-ref` send them as `reference_video_urls`; the Seedance reference models send
 them as `video_urls`; `kling-o3-v2v-ref` sends its one video ref as `video_url`. A body gets the field only when the request has video refs.
 `kling-o3-v2v-ref` needs its video ref: without one fal answers 422 (`video_url` is required). The plugin does not read
 clip lengths: `maxVideoRefSec` is data for the caller, which keeps the clips within it. The plugin does not
@@ -200,6 +201,7 @@ Any of these can be changed with `params`. The plugin does not check the source'
 | `vidu-q3@360p` / `@540p` / `@720p` / `@1080p` | 0.07 / 0.07 / 0.154 / 0.154 |
 | `vidu-q3-ref@360p` / `@540p` / `@720p` / `@1080p` | 0.07 / 0.07 / 0.154 / 0.154 |
 | `gemini-omni-1.1-flash@360p` / `@720p` / `@1080p` / `@4k`, same for `gemini-omni-1.1-flash-ref` | 0.03 / 0.10 / 0.15 / 0.30 |
+| `gemini-omni-1.2-flash-ref@360p` / `@720p` / `@1080p` / `@4k` | 0.0273 / 0.0819 / 0.1229 / 0.2457 |
 
 Lookup order: `<alias>@<resolution>`, then `<alias>+audio` when audio is on, then `<alias>`.
 `veo-3.1-fast` has a resolution row only for `4k`. At `720p` it takes `veo-3.1-fast+audio` with audio on,
@@ -729,6 +731,7 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | The runtime's socket idle timer fires (a `TimeoutError` that is not `timeoutMs`) | Retryable, `kind: "timeout"`, the message names the seconds. Bun's timer is off for every fal call (`timeout: false`), so only `timeoutMs` ends a silent long call |
 | 429 | Retryable, `status: 429`, `Retry-After` honored |
 | 5xx | Retryable, `status` |
+| Any answer whose text says the request "isn't available in your region" (Gemini Omni with an uploaded video; fal types it `content_policy_violation`) | `RegionBlockedError`, a retryable 503, never flagged. On a job's status or result it ends the job `failed`, so the next attempt submits again |
 | 422 `content_policy_violation`, `error_type` with `content_policy`, or fal's text matching `sensitive` / `likeness` / `nsfw` / `moderation` (any case) | Flagged, never re-queued |
 | Other 4xx | Terminal, `status` |
 | Result or download of a `COMPLETED` job answers 400 or 422 | `failed`, terminal: fal's verdict on the job, never polled again |

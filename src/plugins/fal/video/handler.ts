@@ -26,7 +26,12 @@ import {
   resolveApiKey
 } from "../client/http";
 import { isKeyRejection, pollKeyError, submitJob } from "../client/queue";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
+import {
+  FlaggedProviderError,
+  RegionBlockedError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../errors";
 import type { RequestLog, RequestLogEntry } from "../log";
 import { createRequestLog, withRequestLog } from "../log";
 import type { FalContext } from "../types";
@@ -364,7 +369,9 @@ async function submitVideo(
 
 /**
  * Whether a result or download failure is fal's verdict on the job: a
- * content-policy flag, or a terminal 400 / 422.
+ * content-policy flag, a terminal 400 / 422, or fal's region answer (the job
+ * ends `failed` with a retryable error, so the next attempt re-submits it
+ * instead of polling the same job again).
  *
  * @param error - What the result or download call threw.
  * @returns True when the job should end as `failed`.
@@ -373,8 +380,10 @@ async function submitVideo(
  * isJobVerdict(new TerminalProviderError("[ai] fal rejected the request (HTTP 400).", 400)); // => true
  * ```
  */
-function isJobVerdict(error: unknown): error is FlaggedProviderError | TerminalProviderError {
-  if (error instanceof FlaggedProviderError) return true;
+function isJobVerdict(
+  error: unknown
+): error is FlaggedProviderError | TerminalProviderError | RegionBlockedError {
+  if (error instanceof FlaggedProviderError || error instanceof RegionBlockedError) return true;
   return error instanceof TerminalProviderError && JOB_VERDICT_STATUSES.has(error.status);
 }
 

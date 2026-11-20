@@ -62,6 +62,34 @@ export class RetryableProviderError extends Error {
 }
 
 /**
+ * fal's "isn't available in your region" answer (Gemini Omni with an uploaded
+ * video, 2026-11-20): sent as a 422 `content_policy_violation`, but no
+ * refusal of the content. The same request passed on a plain resend 8 times
+ * of 9. A retryable 503: the job ends `failed` and the next attempt
+ * re-submits it unchanged.
+ *
+ * @example
+ * ```ts
+ * throw new RegionBlockedError("[ai] fal blocked the request in this region: …");
+ * ```
+ */
+export class RegionBlockedError extends RetryableProviderError {
+  /**
+   * Creates a region error, a retryable 503.
+   *
+   * @param message - Human-readable message (never the key or the prompt).
+   * @example
+   * ```ts
+   * new RegionBlockedError("[ai] fal blocked the request in this region.");
+   * ```
+   */
+  constructor(message: string) {
+    super(message, { status: 503 });
+    this.name = "RegionBlockedError";
+  }
+}
+
+/**
  * Deterministic failure (a 4xx other than 429, or a fal job that finished
  * with a non-transient error) — never retried. Carries the `status` field
  * the runner's `classifyError` reads to bucket it as `"http-4xx"`.

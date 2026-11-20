@@ -34,7 +34,8 @@ export type FalAlias =
   | "vidu-q3"
   | "vidu-q3-ref"
   | "gemini-omni-1.1-flash"
-  | "gemini-omni-1.1-flash-ref";
+  | "gemini-omni-1.1-flash-ref"
+  | "gemini-omni-1.2-flash-ref";
 
 /**
  * Everything a body builder needs, already resolved: uploaded URLs,
@@ -369,7 +370,8 @@ export type GeminiOmniImageBody = {
 };
 
 /**
- * Request body of `google/gemini-omni-flash/v1.1/reference-to-video`: no
+ * Request body of `google/gemini-omni-flash/v1.1/reference-to-video` and
+ * `…/v1.2/reference-to-video`: no
  * first-frame field, so the first frame leads `image_urls` (`<IMAGE_REF_0>`
  * in the prompt); no audio refs.
  *
@@ -867,7 +869,10 @@ function geminiOmniReferenceBody(input: BodyInput): GeminiOmniReferenceBody {
  * Video-ref limits follow the fal docs of 2026-09-25: H3 Max takes 3 clips
  * of 2–15 s, 15 s combined; Seedance 2.5 takes 10 clips of 1.8–30.2 s,
  * 30.2 s combined. H3 and Gemini Omni Flash 1.1 follow the fal schemas of
- * 2026-09-26: H3 as H3 Max; Gemini takes 3 clips of at most 3 s each. End
+ * 2026-09-26: H3 as H3 Max; Gemini takes 3 clips of at most 3 s each.
+ * Gemini Omni Flash 1.2 ref takes one clip of at most 3 s (Google's rule for
+ * an 11–15 s clip, measured on fal 2026-11-20: a 4.88 s clip refused, 3 s
+ * passed), so one clip of 3 s fits every length. End
  * frames follow the fal schemas of 2026-09-29: `end_image_url` on the seven
  * image-to-video rows with `endFrame: true`; Veo 3.1 Fast has none.
  * Wan 3.0 ref and both Kling O3 rows follow three sources of 2026-10-02, the
@@ -1098,6 +1103,17 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
     maxVideoRefs: 3,
     maxVideoRefSec: 9,
     body: geminiOmniReferenceBody
+  },
+  "gemini-omni-1.2-flash-ref": {
+    endpoint: "google/gemini-omni-flash/v1.2/reference-to-video",
+    resolution: GEMINI_OMNI_RESOLUTION,
+    audio: false,
+    endFrame: false,
+    maxRefs: 9,
+    maxAudioRefs: 0,
+    maxVideoRefs: 1,
+    maxVideoRefSec: 3,
+    body: geminiOmniReferenceBody
   }
 };
 
@@ -1108,7 +1124,7 @@ export const falModels: Readonly<Record<FalAlias, FalModel>> = {
  * @example
  * ```ts
  * falAliases(); // => ["seedance-2.5", "seedance-2.5-ref", "minimax-h3", "minimax-h3-max-ref", "minimax-h3-max-i2v", "minimax-h3-ref", "minimax-h3-max-extend", "kling-3-pro", "kling-o3-ref",
- * //   "kling-o3-v2v-ref", "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref"]
+ * //   "kling-o3-v2v-ref", "seedance-2.0-mini", "seedance-2.0-mini-ref", "seedance-2.0-ref", "wan-3.0-ref", "veo-3.1-fast", "vidu-q3", "vidu-q3-ref", "gemini-omni-1.1-flash", "gemini-omni-1.1-flash-ref", "gemini-omni-1.2-flash-ref"]
  * ```
  */
 export function falAliases(): string[] {

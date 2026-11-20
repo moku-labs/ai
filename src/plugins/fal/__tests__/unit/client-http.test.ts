@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FalRequest } from "../../client/http";
 import { falFetch, jobFailure, parseJson } from "../../client/http";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
+import {
+  FlaggedProviderError,
+  RegionBlockedError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../../errors";
 import { callsOf, jsonResponse, stubFetch, TEST_KEY } from "./fixtures";
 
 const BASE: FalRequest = {
@@ -122,6 +127,25 @@ describe("falFetch classification table", () => {
     const error = await rejectionOf();
     expect(error).toBeInstanceOf(FlaggedProviderError);
     expect((error as FlaggedProviderError).kind).toBe("content-policy");
+  });
+
+  it("422 with the region text is retryable, not flagged, though typed content_policy_violation", async () => {
+    stubFetch(
+      jsonResponse(422, {
+        detail: [
+          {
+            loc: ["body", "prompt"],
+            msg: "Input blocked: Using uploaded video or audio for video generation isn't available in your region.",
+            type: "content_policy_violation"
+          }
+        ]
+      })
+    );
+    const error = await rejectionOf();
+    expect(error).toBeInstanceOf(RegionBlockedError);
+    expect(error).not.toBeInstanceOf(FlaggedProviderError);
+    expect((error as RegionBlockedError).status).toBe(503);
+    expect((error as Error).message).toContain("in this region");
   });
 
   it("an error_type containing content_policy is flagged", async () => {

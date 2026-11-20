@@ -7,6 +7,11 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **fal: Gemini Omni 1.2 Flash reference-to-video.** The alias `gemini-omni-1.2-flash-ref` posts to
+  `google/gemini-omni-flash/v1.2/reference-to-video` with the 1.1 body: the first frame leads `image_urls`,
+  then up to 9 refs, and one `reference_video_urls` clip of at most 3 s (Google's rule for an 11–15 s clip;
+  on fal a 4.88 s clip was refused and a 3 s cut passed, 2026-11-20). Prices from fal's page, USD per
+  second: 0.0273 at 360p, 0.0819 at 720p, 0.1229 at 1080p, 0.2457 at 4k.
 - **cli: `moku call <endpoint> --input <json | @file | -> [--out <file>]`.** Runs one provider endpoint
   as one item of task `call` through the normal run path, so the journal, retries, lanes and the content
   cache apply. A local file in the input is marked `{"$file": "<path>"}`. stdout is exactly one JSON
@@ -82,6 +87,10 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Changed
 
+- **fal: the "isn't available in your region" answer is retryable, never flagged.** fal sends it as a 422
+  `content_policy_violation` (Gemini Omni with an uploaded video), so it was read as a refusal. The same
+  request passed on a plain resend 8 times of 9. It is now `FalErrors.RegionBlockedError`, a retryable
+  503; on a job's status or result it ends the job `failed`, so the next attempt submits it again.
 - **elevenlabs: voice prices follow the API pricing page (checked 2026-11-10).** `eleven_multilingual_v2`
   drops from $0.30 to $0.08 per 1K characters, `eleven_flash_v2_5` and `eleven_turbo_v2_5` from
   $0.06 / $0.15 to $0.04 per 1K. `moku estimate` shows the new numbers; a `priceOverrides` entry still wins.

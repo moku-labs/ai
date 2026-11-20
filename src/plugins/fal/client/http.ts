@@ -7,7 +7,12 @@
  * taxonomy. It also narrows fal's untrusted JSON bodies, reads the key through
  * `ctx.env` (MC3) and redacts errors for the logs. Shared by every task.
  */
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
+import {
+  FlaggedProviderError,
+  RegionBlockedError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../errors";
 import type { FalContext, FalProviderError } from "../types";
 
 /**
@@ -107,6 +112,13 @@ const CONTENT_POLICY = "content_policy";
  * `content_policy` marker. Case-insensitive.
  */
 const CONTENT_POLICY_WORDS = /sensitive|likeness|nsfw|moderation/i;
+
+/**
+ * fal's text when a provider serves no request of this kind in the caller's
+ * region (Gemini Omni with an uploaded video). fal types it
+ * `content_policy_violation`, yet a resend passes: it is checked first.
+ */
+const REGION_BLOCKED = /available in your region/i;
 
 /** Job `error_type`s that are transient: the next attempt re-submits. */
 const TRANSIENT_JOB_ERRORS: ReadonlySet<string> = new Set([
@@ -326,6 +338,7 @@ function classifyHttpFailure(response: FalResponse): Error {
   const { status } = response;
   const info = describeFalError(tryParseJson(response.body));
 
+  if (REGION_BLOCKED.test(info.text ?? "")) return regionBlocked(info.text);
   if (isContentPolicy(info)) {
     return new FlaggedProviderError(
       `[ai] fal flagged the request (content policy)${suffixOf(info.text)}`
@@ -502,6 +515,20 @@ export function parseJson(response: FalResponse, what: string): unknown {
 }
 
 /**
+ * The error of fal's region answer: retryable, never a refusal.
+ *
+ * @param text - fal's shortened text, if any.
+ * @returns The error.
+ * @example
+ * ```ts
+ * regionBlocked("Input blocked: … isn't available in your region.").name; // => "RegionBlockedError"
+ * ```
+ */
+function regionBlocked(text: string | undefined): RegionBlockedError {
+  return new RegionBlockedError(`[ai] fal blocked the request in this region${suffixOf(text)}`);
+}
+
+/**
  * Turns a finished job's `error` into the error `poll` reports: a transient
  * `error_type` is retryable (status 503, the next attempt re-submits), a
  * content-policy type or text is flagged, anything else is terminal (400).
@@ -518,6 +545,7 @@ export function jobFailure(body: unknown): FalProviderError {
   const label = info.types[0] ?? "error";
   const text = info.text ?? label;
 
+  if (REGION_BLOCKED.test(text)) return regionBlocked(text);
   if (info.types.some(type => TRANSIENT_JOB_ERRORS.has(type))) {
     return new RetryableProviderError(`[ai] fal job failed (${label}): ${text}`, { status: 503 });
   }

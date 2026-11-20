@@ -70,7 +70,11 @@ describe("bundled price table", () => {
       "gemini-omni-1.1-flash-ref@360p": 0.03,
       "gemini-omni-1.1-flash-ref@720p": 0.1,
       "gemini-omni-1.1-flash-ref@1080p": 0.15,
-      "gemini-omni-1.1-flash-ref@4k": 0.3
+      "gemini-omni-1.1-flash-ref@4k": 0.3,
+      "gemini-omni-1.2-flash-ref@360p": 0.0273,
+      "gemini-omni-1.2-flash-ref@720p": 0.0819,
+      "gemini-omni-1.2-flash-ref@1080p": 0.1229,
+      "gemini-omni-1.2-flash-ref@4k": 0.2457
     });
   });
 
