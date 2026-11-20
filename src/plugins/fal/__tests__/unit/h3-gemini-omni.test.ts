@@ -270,6 +270,51 @@ describe("gemini-omni-1.1-flash-ref body", () => {
   });
 });
 
+describe("gemini-omni-1.2-flash-ref body", () => {
+  it("posts to the v1.2 endpoint with the first frame leading image_urls", async () => {
+    const { url, body } = await submitted({
+      model: "gemini-omni-1.2-flash-ref",
+      prompt: "The first image is the opening frame: start on it.",
+      image,
+      refs: [face, tail]
+    });
+
+    expect(url).toBe("https://queue.fal.run/google/gemini-omni-flash/v1.2/reference-to-video");
+    expect(body).toEqual({
+      prompt: "The first image is the opening frame: start on it.",
+      image_urls: [
+        expect.stringMatching(/^data:image\/png;base64,/),
+        expect.stringMatching(/^data:image\/png;base64,/)
+      ],
+      reference_video_urls: [expect.stringMatching(/^data:video\/mp4;base64,/)],
+      duration: 5,
+      resolution: "720p",
+      aspect_ratio: "9:16"
+    });
+  });
+
+  it("takes one video ref and rejects a 2nd before any request", async () => {
+    const { message, fetchMock } = await rejected({
+      model: "gemini-omni-1.2-flash-ref",
+      prompt: "p",
+      image,
+      refs: [tail, tail]
+    });
+    expect(message).toBe(
+      `[ai] fal model "gemini-omni-1.2-flash-ref" takes at most 1 video references, got 2.${SECOND_LINE}`
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("costs $0.0273 / $0.0819 / $0.1229 / $0.2457 per second at 360p / 720p / 1080p / 4k", () => {
+    const alias = "gemini-omni-1.2-flash-ref";
+    expect(cost(alias, [], { resolution: "360p", seconds: 10 })).toBe(0.273);
+    expect(cost(alias, [], { seconds: 10 })).toBe(0.819);
+    expect(cost(alias, [], { resolution: "1080p", seconds: 10 })).toBe(1.229);
+    expect(cost(alias, [], { resolution: "4k", seconds: 10 })).toBe(2.457);
+  });
+});
+
 describe("gemini-omni-1.1-flash prices", () => {
   it.each([
     "gemini-omni-1.1-flash",

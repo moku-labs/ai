@@ -1,7 +1,12 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { classifyError } from "../../../runner/retry";
 import type { VideoFile, VideoJobPoll, VideoRequest } from "../../../video/contract";
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../../errors";
+import {
+  FlaggedProviderError,
+  RegionBlockedError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../../errors";
 import { createVideoHandler } from "../../video/handler";
 import type { TempFiles } from "./fixtures";
 import {
@@ -416,6 +421,43 @@ describe("poll", () => {
       await createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
     );
     expect(error).toBeInstanceOf(FlaggedProviderError);
+  });
+
+  it("a 422 region result fails retryable, so the next attempt re-submits", async () => {
+    stubFetch(
+      jsonResponse(200, { status: "COMPLETED" }),
+      jsonResponse(422, {
+        detail: [
+          {
+            msg: "Input blocked: Using uploaded video or audio for video generation isn't available in your region.",
+            type: "content_policy_violation"
+          }
+        ]
+      })
+    );
+    const error = failedError(
+      await createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
+    );
+    expect(error).toBeInstanceOf(RegionBlockedError);
+    expect(classifyError(error)).not.toBe("content-policy");
+    expect(classifyError(error)).toBe(
+      classifyError(new RetryableProviderError("x", { status: 503 }))
+    );
+  });
+
+  it("COMPLETED + the region text fails retryable, not flagged", async () => {
+    stubFetch(
+      jsonResponse(200, {
+        status: "COMPLETED",
+        error:
+          "Input blocked: Using uploaded video or audio for video generation isn't available in your region.",
+        error_type: "content_policy_violation"
+      })
+    );
+    const error = failedError(
+      await createVideoHandler(createTestCtx()).poll(JOB_ID, minimaxRequest(), {})
+    );
+    expect(error).toBeInstanceOf(RegionBlockedError);
   });
 
   it("a 422 result is fal's verdict and fails terminal", async () => {

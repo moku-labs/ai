@@ -22,7 +22,7 @@ function bodyFor(model: string, overrides: Partial<VideoRequest> = {}): Record<s
 }
 
 describe("fal model catalog", () => {
-  it("lists the nineteen aliases in catalog order", () => {
+  it("lists the twenty aliases in catalog order", () => {
     expect(falAliases()).toEqual([
       "seedance-2.5",
       "seedance-2.5-ref",
@@ -42,7 +42,8 @@ describe("fal model catalog", () => {
       "vidu-q3",
       "vidu-q3-ref",
       "gemini-omni-1.1-flash",
-      "gemini-omni-1.1-flash-ref"
+      "gemini-omni-1.1-flash-ref",
+      "gemini-omni-1.2-flash-ref"
     ]);
   });
 
@@ -62,7 +63,7 @@ describe("fal model catalog", () => {
 
   it("rejects a model that is not an alias with the pinned two-line error", () => {
     expect(() => resolveFalModel("sora-9")).toThrow(
-      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref.'
+      '[ai] Unknown fal video model "sora-9".\n  Use one of: seedance-2.5, seedance-2.5-ref, minimax-h3, minimax-h3-max-ref, minimax-h3-max-i2v, minimax-h3-ref, minimax-h3-max-extend, kling-3-pro, kling-o3-ref, kling-o3-v2v-ref, seedance-2.0-mini, seedance-2.0-mini-ref, seedance-2.0-ref, wan-3.0-ref, veo-3.1-fast, vidu-q3, vidu-q3-ref, gemini-omni-1.1-flash, gemini-omni-1.1-flash-ref, gemini-omni-1.2-flash-ref.'
     );
   });
 
@@ -295,7 +296,8 @@ describe("video refs: catalog limits and body fields", () => {
     ["vidu-q3", 0, 0],
     ["vidu-q3-ref", 0, 0],
     ["gemini-omni-1.1-flash", 0, 0],
-    ["gemini-omni-1.1-flash-ref", 3, 9]
+    ["gemini-omni-1.1-flash-ref", 3, 9],
+    ["gemini-omni-1.2-flash-ref", 1, 3]
   ])("%s takes %i video refs, %d s combined", (alias, maxVideoRefs, maxVideoRefSec) => {
     expect(resolveFalModel(alias)).toMatchObject({ maxVideoRefs, maxVideoRefSec });
   });

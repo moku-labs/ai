@@ -111,7 +111,8 @@ describe("fal integration", () => {
         "vidu-q3",
         "vidu-q3-ref",
         "gemini-omni-1.1-flash",
-        "gemini-omni-1.1-flash-ref"
+        "gemini-omni-1.1-flash-ref",
+        "gemini-omni-1.2-flash-ref"
       ]
     });
 
