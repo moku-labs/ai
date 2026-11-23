@@ -1,8 +1,8 @@
 /**
  * Complex tier — fal provider: every fal-hosted task over one client, one key,
- * one upload cache and one price table: the six fal-hosted tasks plus the `call` handler
- * (seven handlers). Registers `video`, `image`, `prompt-gen`, `music`, `sfx`, `sprite` and
- * `call` in onInit. Emits no events.
+ * one upload cache and one price table: the seven fal-hosted tasks plus the `call` handler
+ * (eight handlers). Registers `video`, `image`, `prompt-gen`, `music`, `sfx`, `sprite`,
+ * `upscale` and `call` in onInit. Emits no events.
  *
  * @see README.md
  */
@@ -17,6 +17,7 @@ import { createSfxHandler } from "./sfx/handler";
 import { createSpriteHandler } from "./sprite/handler";
 import { createFalState } from "./state";
 import type { Config } from "./types";
+import { createUpscaleHandler } from "./upscale/handler";
 import { createVideoHandler } from "./video/handler";
 
 const defaultConfig: Config = {
@@ -35,8 +36,8 @@ const defaultConfig: Config = {
 };
 
 /**
- * fal — Complex tier provider plugin. Registers the six fal-hosted tasks plus the `call`
- * handler (seven handlers) in onInit over one client, key, upload cache and price table. Depends on
+ * fal — Complex tier provider plugin. Registers the seven fal-hosted tasks plus the `call`
+ * handler (eight handlers) in onInit over one client, key, upload cache and price table. Depends on
  * registry only; the task contracts are module imports. The upload cache
  * lives for the process.
  *
@@ -48,10 +49,10 @@ export const falPlugin = createPlugin("fal", {
   createState: createFalState,
   api: createFalApi,
   /**
-   * Registers the fal handlers (video, image, prompt-gen, music, sfx, sprite, call) with the registry.
+   * Registers the fal handlers (video, image, prompt-gen, music, sfx, sprite, upscale, call) with the registry.
    *
    * @param ctx - Plugin context (registry access via ctx.require).
-   * @returns {void} Nothing; the seven handlers are registered.
+   * @returns {void} Nothing; the eight handlers are registered.
    */
   onInit: ctx => {
     const registry = ctx.require(registryPlugin);
@@ -61,6 +62,7 @@ export const falPlugin = createPlugin("fal", {
     registry.register("music", "fal", createMusicHandler(ctx));
     registry.register("sfx", "fal", createSfxHandler(ctx));
     registry.register("sprite", "fal", createSpriteHandler(ctx));
+    registry.register("upscale", "fal", createUpscaleHandler(ctx));
     registry.register("call", "fal", createCallHandler(ctx));
   }
 });

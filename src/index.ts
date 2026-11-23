@@ -24,6 +24,7 @@
  * | image | `defaultProvider` | `"codex"` |
  * | video | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | music | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
+ * | upscale | `defaultProvider` · `pollIntervalMs` | `"fal"` · `5000` |
  * | sfx | `defaultProvider` | `"elevenlabs"` |
  * | sprite | `defaultProvider` | `"fal"` |
  * | asset | `defaultProvider` · `pollIntervalMs` | `"ark"` · `3000` |
@@ -82,6 +83,7 @@ import {
   sfxPlugin,
   spritePlugin,
   translatePlugin,
+  upscalePlugin,
   videoPlugin,
   voiceoverPlugin
 } from "./plugins";
@@ -99,6 +101,7 @@ const framework = createCore(coreConfig, {
     imagePlugin,
     videoPlugin,
     musicPlugin,
+    upscalePlugin,
     sfxPlugin,
     spritePlugin,
     assetPlugin,
@@ -216,6 +219,7 @@ export {
   spritePlugin,
   storePlugin,
   translatePlugin,
+  upscalePlugin,
   videoPlugin,
   voiceoverPlugin
 } from "./plugins";
@@ -255,6 +259,7 @@ export {
   Sprite,
   Store,
   Translate,
+  Upscale,
   Video,
   Voiceover
 } from "./plugins";
