@@ -1,24 +1,24 @@
 # fal
 
-> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")`, `("music", "fal")`, `("sfx", "fal")`, `("sprite", "fal")` and `("call", "fal")` with the registry in `onInit`. Emits no events.
+> Every fal-hosted task over one client, one key, one upload cache and one price table. Complex tier. Registers `("video", "fal")`, `("image", "fal")`, `("prompt-gen", "fal")`, `("music", "fal")`, `("sfx", "fal")`, `("sprite", "fal")`, `("upscale", "fal")` and `("call", "fal")` with the registry in `onInit`. Emits no events.
 
 ## Purpose
 
-One plugin per vendor: seven handlers, the six fal tasks and `call`. They share `client/` (HTTP and error classification, the queue, the
+One plugin per vendor: eight handlers, the seven fal tasks and `call`. They share `client/` (HTTP and error classification, the queue, the
 upload), one `FAL_KEY`, one upload cache keyed by content sha256, one merged price table and one opt-in
 request log.
 
 - **video**: the async contract, `submit` + `poll`. A job takes 2 to 10 minutes; the runner journals the
   fal request id before it waits, so a crash, Ctrl-C or a timeout continues the same job and never pays twice.
-- **image** and **music**: `estimate` + `execute` + `submit` + `poll` over the generic queue. The runner drives
-  `submit` + `poll`; the one-off facades (`app.image.generate`, `app.music.generate`) call `execute`, which
+- **image**, **music** and **upscale**: `estimate` + `execute` + `submit` + `poll` over the generic queue. The runner drives
+  `submit` + `poll`; the one-off facades (`app.image.generate`, `app.music.generate`, `app.upscale.generate`) call `execute`, which
   submits and waits in process every `pollIntervalMs`, at most `jobTimeoutMs`.
 - **prompt-gen**: `estimate` + `execute`, one sync POST to fal's OpenRouter router.
 - **sfx** and **sprite**: `estimate` + `execute` over the generic queue. Their contracts have no job form:
   `execute` submits and waits in process, like the image and music `execute`. A sprite with model `none`
   makes no call at all.
 - **call**: `estimate` + `submit` + `poll`, one fal queue endpoint of the caller's choice (`moku call`). It is a
-  registered handler, not a `FalTask`: `app.fal.models(task)` stays at six tasks. See [Call](#call).
+  registered handler, not a `FalTask`: `app.fal.models(task)` stays at seven tasks. See [Call](#call).
 
 Every handler validates and prices a request before it reads the key, uploads or POSTs: nothing is billed for a
 bad request. A model without a price throws from `estimate`, so `moku estimate` and `--max-cost` never count it
@@ -31,15 +31,15 @@ Set via `createApp({ pluginConfigs: { fal: { ... } } })`. Flat keys only (shallo
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `apiKeyEnv` | `string` | `"FAL_KEY"` | Env var with the key, read through `ctx.env` per request. Estimates and `models()` never need it. |
-| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>` (video, image, music, sfx, sprite). |
+| `queueUrl` | `string` | `"https://queue.fal.run"` | Queue base URL. Submit is `POST <queueUrl>/<endpoint>` (video, image, music, sfx, sprite, upscale). |
 | `uploadUrl` | `string` | `"https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3"` | Storage upload initiate URL. |
 | `upload` | `"storage" \| "data-uri"` | `"storage"` | How local files (frames, refs, prompt-gen images, sprite sources) reach fal. `storage` falls back to a data URI when the upload fails. |
-| `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download, chat POST). |
+| `timeoutMs` | `number` | `60_000` | Timeout of one HTTP request (submit, status, result, download, chat POST). The upscale video upload and result download run under `jobTimeoutMs` instead. |
 | `priceOverrides` | `Record<string, number>` | `{}` | One table for every task; keys in [Prices](#prices). `call:<endpoint>` sets USD per billed unit of one call endpoint; an endpoint with no bundled unit is billed per request. |
 | `runUrl` | `string` | `"https://fal.run"` | Sync endpoint base. prompt-gen POSTs `<runUrl>/openrouter/router/openai/v1/chat/completions`. |
 | `imageDefaultModel` | `string` | `"gpt-image-2.5"` | Image model when `ImageRequest.model` is omitted. |
 | `llmDefaultModel` | `string` | `"anthropic/claude-opus-5.5"` | prompt-gen model when `PromptGenRequest.model` is omitted or `"default"`. |
-| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image, music, sfx and sprite `execute`. |
+| `pollIntervalMs` | `number` | `2000` | Status-check cadence of the in-process wait of image, music, sfx, sprite and upscale `execute`. |
 | `jobTimeoutMs` | `number` | `900_000` | The in-process wait gives up after this (retryable `timeout`); the job keeps running on fal. |
 | `requestLog` | `string` | `""` | JSONL request log path, relative to the working directory. `""` = off. |
 
@@ -56,6 +56,7 @@ llm/     handler.ts chat.ts conversation.ts models.ts prices.ts tokens.ts
 music/   handler.ts models.ts prices.ts
 sfx/     handler.ts models.ts prices.ts
 sprite/  handler.ts models.ts prices.ts                 the pixel step is ../sprite/process.ts (D6)
+upscale/ handler.ts models.ts prices.ts
 call/    handler.ts prices.ts                           ("call", "fal"): any priced fal queue endpoint
 ```
 
@@ -515,6 +516,44 @@ Audio too, though its body ignores them. `params` never reach the body. Every fa
 The result is `audio`: the MIME type is fal's `content_type`, else the download's `content-type`, else the URL
 extension (`mp3 wav ogg opus`), else `audio/mpeg`. `meta` is `{ model, endpoint, requestId, lengthMs }`.
 
+## Upscale
+
+`UpscaleRequest.model` is required and names one of these aliases; there is no fallback between them. The input is
+one video by `$ref` or `$file`, a `factor` from 1 to 4 and the source length in `seconds`.
+
+| Alias | Endpoint | Fixed body fields | Billing |
+| --- | --- | --- | --- |
+| `starlight-fast-2` | `topaz/upscale/video/generative` | `model: "Starlight Fast 2"`, `H264_output: true` | per second of source video |
+| `starlight-precise-2.6` | `topaz/upscale/video/generative` | `model: "Starlight Precise 2.6"`, `H264_output: true` | per second of source video |
+| `proteus` | `fal-ai/topaz/upscale/video` | `H264_output: true` | per second of source video |
+
+The body is `{ ...params, ...fixed, upscale_factor: factor, video_url }`. The fixed fields and `upscale_factor` win
+over `params`, so a build item cannot flip `H264_output` or the model; any other param (`target_fps`,
+`enable_safety_checker`, ...) passes through. `video_url` is the uploaded source.
+
+The request is validated with zod first (the message names the bad field): `model` a non-empty string, `factor`
+1–4, `seconds` above 0, `params` an object. `estimate` does not read `video`: the runner estimates before the `$ref`
+resolves. `submit` also needs a resolved `{ path, mimeType, hash }` whose `mimeType` starts with `video/`. Every
+failure is a terminal 400 before the key is read, e.g.
+
+```
+[ai] Invalid upscale request: factor Too small: expected number to be >=1.
+  Fix the build item that produced it.
+```
+
+The video goes to fal storage through the shared upload (cached in `state.uploads` by content, so one process uploads
+the same video once). It never goes as a data URI, whatever `upload` says, and a failed upload fails the submit. The upload and
+the result download run under `jobTimeoutMs`, not `timeoutMs`: a minute of 1080×1920 video does not fit the 60 s
+limit of one request. The queue submit, status and result calls keep `timeoutMs`. `poll` is stateless across
+processes: the runner adopts the journaled job id after a crash.
+
+The result is `video`: the MIME type is fal's `content_type`, else the download's `content-type`, else the URL
+extension (`mp4 mov webm`), else `video/mp4`. A result without `video.url` throws
+`[ai] fal returned an incomplete upscale result.` `meta` is `{ model, endpoint, requestId, seconds, factor }`.
+
+The price is the rate times `seconds`: 62.4 s of `starlight-fast-2` is $3.744. fal bills more for output above
+1080p / 30 fps; the bundled rates are the ≤1080p / 30 fps rates, so override `upscale:<alias>` when you go above.
+
 ## Sfx
 
 `SfxRequest.model` is required and names this alias. The output is always mp3 (`audio/mpeg`): the game engine
@@ -659,7 +698,7 @@ then `PUT upload_url`. Files of one call go 4 at a time, in order. A failed uplo
 to data URIs, logged once as `fal:upload:fallback`. Storage URLs are cached in `state.uploads` by
 `storage:<mime>:<sha256>`, shared by every task and kept for the life of the process.
 
-**Queue (image, music, sfx, sprite, call).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
+**Queue (image, music, sfx, sprite, upscale, call).** `submit` POSTs `<queueUrl>/<endpoint>` without the caller's signal (a billed job always
 returns its id; an abort is checked after the uploads). The job id is JSON `{ endpoint, requestId, statusUrl, responseUrl }`,
 the same codec as video. `poll` reads the status once: `IN_QUEUE` / `IN_PROGRESS` pending, `COMPLETED` with `error`
 failed, `COMPLETED` collected (result, then the CDN download without the key), an unknown status pending with a
@@ -667,7 +706,7 @@ failed, `COMPLETED` collected (result, then the CDN download without the key), a
 (`fal:poll:retry`), an abort ends the wait with the signal's reason.
 
 **Request log.** Off by default. With `requestLog` set, every billable request writes one JSONL line: each queue
-submit of video, image, music, sfx, sprite and call, and each prompt-gen POST attempt.
+submit of video, image, music, sfx, sprite, upscale and call, and each prompt-gen POST attempt.
 
 ```json
 {"at":"2026-09-29T10:00:00.000Z","task":"image","model":"gpt-image-2.5","endpoint":"openai/gpt-image-2.5/sunburst/edit","requestId":"019a…","prompt":"hero shot","body":{"image_size":"portrait_16_9","quality":"high","num_images":1,"output_format":"jpeg","image_urls":["face.png"]}}
@@ -699,6 +738,7 @@ other tasks' keys carry the task:
 | `llm:<id>#in` / `llm:<id>#out` | the prompt-gen table | per M tokens |
 | `sfx:elevenlabs-sfx-v2` | 0.002 | per started second |
 | `sprite:birefnet` | 0.002 | per image, an estimate: fal bills $0.0008 per compute second and publishes no per-image figure |
+| `upscale:starlight-fast-2` / `upscale:starlight-precise-2.6` / `upscale:proteus` | 0.06 / 0.12 / 0.02 | per second of source video, the ≤1080p / 30 fps rate: fal bills more above it |
 | `call:fal-ai/sam-3/3d-body` / `call:fal-ai/sam-3/image` | 0.02 / 0.005 | per request |
 | `call:fal-ai/sam-3/video-rle` | 0.005 | per 16 frames of video |
 | `call:microsoft/moge-2` | 0.01 | per megapixel of the input image, rounded up |
@@ -739,18 +779,19 @@ Video keys, lookup and surcharges are in [Video prices](#video-prices-usd-per-se
 | Poll with `FAL_KEY` not set, or the status call answers 401 / 403 | Plain error with no `status` and no `kind` (`[ai] fal cannot poll without a valid API key.`): the runner marks the job `expired`, not `failed`, so the next run adopts the same job instead of paying again |
 | Call: an endpoint with no price row, a megapixel endpoint whose `input.image_url` is not a readable local PNG, JPEG or WebP, or a request that is not an `endpoint` plus an `input` object | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
 | Call: a paid answer whose units cannot be counted (no `rle` array, the image file gone) | Billed as one unit, warns `fal:call:units-unknown`, never failed |
-| Image, prompt-gen, music, sfx or sprite: unknown model, too many refs, bad resolution, aspect or params, invalid music, sfx or sprite request, unresolved sprite source, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
+| Image, prompt-gen, music, sfx, sprite or upscale: unknown model, too many refs, bad resolution, aspect or params, invalid music, sfx, sprite or upscale request, a source that is not a video, unresolved sprite source, missing price | `TerminalProviderError` (400) before the key is read, anything is uploaded or anything is billed |
 | sfx: the result is not mp3 | `TerminalProviderError` (415), never returned |
 | sprite: the cut-out is fully transparent | Plain error from `processSprite`: `[ai] Sprite is empty after background removal.` |
-| Image or music: result or download of a `COMPLETED` job answers 400 / 422, or is flagged | `failed`: fal's verdict, logged `fal:image:failed` / `fal:music:failed` |
-| Image or music: result or download fails with another 4xx | Retryable 503 (`fal:result:unreadable`), same rule as video |
-| Image or music `execute`: the in-process wait passes `jobTimeoutMs` | Retryable, `kind: "timeout"`; the job keeps running on fal and stays adoptable through `poll` |
+| Image, music or upscale: result or download of a `COMPLETED` job answers 400 / 422, or is flagged | `failed`: fal's verdict, logged `fal:image:failed` / `fal:music:failed` / `fal:upscale:failed` |
+| Image, music or upscale: result or download fails with another 4xx | Retryable 503 (`fal:result:unreadable`), same rule as video |
+| Image, music or upscale `execute`: the in-process wait passes `jobTimeoutMs` | Retryable, `kind: "timeout"`; the job keeps running on fal and stays adoptable through `poll` |
 | prompt-gen: 401 / 403 | `PromptGenUnavailableError`, reason `auth`, never retried: `promptGen` moves to its next fallback provider |
 | prompt-gen: 402 / 429 | `PromptGenUnavailableError`, reason `limit`, never retried |
 | prompt-gen: 5xx or request timeout | Retried in the handler, 3 attempts at most, backoff 1 s then 2 s (logged `fal:llm:retry`) |
 | prompt-gen: a 2xx answer with `error.message` | Flagged when it names `content_policy`, else terminal 400 `[ai] fal LLM returned an error: <text>` |
 | prompt-gen: tool-call `arguments` that are not JSON | `ToolArgumentsError` (`toolName`, `raw`), never retried |
-| Incomplete result body (no `images[0].url`, `audio.url`, `image.url`, `choices[0].message.content`) | Plain two-line error |
+| upscale: the video upload fails | The provider error of the upload, nothing is queued, no data-URI fallback |
+| Incomplete result body (no `images[0].url`, `audio.url`, `image.url`, `video.url`, `choices[0].message.content`) | Plain two-line error |
 | `upload`: a new storage upload returns a file URL without `https://` | Plain error: `[ai] fal returned an unreadable upload target.\n  Expected an https file URL.` |
 
 Messages start with `[ai]` and never contain the key or the prompt. Logs carry ids, statuses, counts and error
@@ -766,11 +807,12 @@ app.fal.models("image")[0]; // => { id: "nano-banana-pro", price: { usd: 0.15, p
 app.fal.models("video")[0]; // => { id: "seedance-2.5", price: { usd: 0.473, per: "second" } }
 app.fal.models("sfx"); // => [{ id: "elevenlabs-sfx-v2", price: { usd: 0.002, per: "second" } }]
 app.fal.models("sprite"); // => [{ id: "birefnet", price: { usd: 0.002, per: "image" } }, { id: "none", price: { usd: 0, per: "image" } }]
+app.fal.models("upscale"); // => [{ id: "starlight-fast-2", price: { usd: 0.06, per: "second" } }, { id: "starlight-precise-2.6", price: { usd: 0.12, per: "second" } }, { id: "proteus", price: { usd: 0.02, per: "second" } }]
 ```
 
 `info()` is unchanged: `configured` is true when `FAL_KEY` (or the configured variable) is set; `models` are the
 video aliases. `models(task)` lists one task's models in catalog order with their effective price (video and image
-at the model's default resolution, video with audio off and no refs); no network, no key. The price shape narrows
+at the model's default resolution, video with audio off and no refs; sfx and upscale per second); no network, no key. The price shape narrows
 on `"inputPerM" in info.price`. Any other task string throws `[ai] Unknown fal task "x".`
 
 ### `app.fal.upload(file, opts?)`
@@ -830,11 +872,16 @@ items:
     task: sprite
     provider: fal
     input: { source: { $ref: btn-raw }, model: birefnet, size: { width: 128, height: 64 }, padding: 2 }
+  - id: up
+    task: upscale
+    provider: fal
+    input: { model: starlight-fast-2, video: { $ref: clean }, factor: 1.5, seconds: 62.4 }
 ```
 
 ```ts
 app.video.estimate({ model: "minimax-h3", prompt: "push-in", seconds: 5 }, { provider: "fal" }); // { usd: 0.3 }
 app.music.estimate({ prompt: "x", model: "stable-audio-2.5", lengthMs: 30_000 }, { provider: "fal" }); // { usd: 0.2 }
 app.sfx.estimate({ prompt: "x", model: "elevenlabs-sfx-v2" }, { provider: "fal" }); // { usd: 0.044 }, the 22 s cap
+app.upscale.estimate({ video: { $ref: "clean" }, model: "starlight-fast-2", factor: 1.5, seconds: 62.4 }, { provider: "fal" }); // { usd: 3.744 }
 await app.promptGen.generate({ prompt: "Caption a sunset in five words." }, { provider: "fal" });
 ```

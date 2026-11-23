@@ -7,6 +7,16 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **upscale: a new task, with the fal Topaz provider.** `task: upscale` takes one video and returns the
+  same video upscaled: input `{ model, video, factor (1 to 4), seconds, params? }`, where `video` is a
+  `$ref` or a `$file`. The new `upscale` plugin owns the contract (execute, or submit + poll) and the
+  one-off facade `app.upscale.generate / estimate / providers`; `estimate` also accepts a `$ref` /
+  `$file` video, as the runner estimates before references resolve. New types `Upscale.UpscaleFile`,
+  `Upscale.UpscaleRequest`, `Upscale.UpscaleEstimateRequest`, `Upscale.UpscaleResult`,
+  `Upscale.UpscaleJobPoll`, `Upscale.UpscaleHandler`. The fal handler `("upscale", "fal")` runs the
+  Topaz models `starlight-fast-2`, `starlight-precise-2.6` and `proteus`, priced per second of source
+  video (rows `upscale:<alias>`, overridable in `fal.priceOverrides`), and `app.fal.models("upscale")`
+  lists them. The runner, journal and store need no change.
 - **cli: `moku call <endpoint> --input <json | @file | -> [--out <file>]`.** Runs one provider endpoint
   as one item of task `call` through the normal run path, so the journal, retries, lanes and the content
   cache apply. A local file in the input is marked `{"$file": "<path>"}`. stdout is exactly one JSON
