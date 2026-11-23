@@ -35,11 +35,6 @@ import { upscalePriceOf } from "./prices";
 
 /**
  * Everything checked before any I/O: the model, the request, the body and the cost.
- *
- * @example
- * ```ts
- * planUpscale(ctx, { video, model: "starlight-fast-2", factor: 1.5, seconds: 62.4 }).costUsd; // => 3.744
- * ```
  */
 export type UpscalePlan = {
   /** The resolved catalog row. */
