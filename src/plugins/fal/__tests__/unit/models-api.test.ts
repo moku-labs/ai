@@ -36,6 +36,15 @@ describe("createFalApi().models()", () => {
     ]);
   });
 
+  it("lists the three upscale models per second of source video", () => {
+    // Bug: upscale has no lister, or its rows carry another billing unit than per second.
+    expect(createFalApi(createTestCtx()).models("upscale")).toEqual([
+      { id: "starlight-fast-2", price: { usd: 0.06, per: "second" } },
+      { id: "starlight-precise-2.6", price: { usd: 0.12, per: "second" } },
+      { id: "proteus", price: { usd: 0.02, per: "second" } }
+    ]);
+  });
+
   it("lists the sprite models per image, none at 0", () => {
     expect(createFalApi(createTestCtx()).models("sprite")).toEqual([
       { id: "birefnet", price: { usd: 0.002, per: "image" } },
@@ -79,7 +88,8 @@ describe("createFalApi().models()", () => {
           "music:stable-audio-2.5": 0.3,
           "llm:anthropic/claude-opus-5.5#out": 25,
           "sfx:elevenlabs-sfx-v2": 0.003,
-          "sprite:birefnet": 0.004
+          "sprite:birefnet": 0.004,
+          "upscale:proteus": 0.03
         }
       }
     });
@@ -90,6 +100,7 @@ describe("createFalApi().models()", () => {
     expect(api.models("prompt-gen")[0]?.price).toEqual({ inputPerM: 4, outputPerM: 25 });
     expect(api.models("sfx")[0]?.price).toEqual({ usd: 0.003, per: "second" });
     expect(api.models("sprite")[0]?.price).toEqual({ usd: 0.004, per: "image" });
+    expect(api.models("upscale")[2]?.price).toEqual({ usd: 0.03, per: "second" });
   });
 
   it("needs no key", () => {
@@ -101,7 +112,7 @@ describe("createFalApi().models()", () => {
     const api = createFalApi(createTestCtx());
     // @ts-expect-error — "audio" is not a fal task
     expect(() => api.models("audio")).toThrow(
-      '[ai] Unknown fal task "audio".\n  Use one of: video, image, prompt-gen, music, sfx, sprite.'
+      '[ai] Unknown fal task "audio".\n  Use one of: video, image, prompt-gen, music, sfx, sprite, upscale.'
     );
   });
 
