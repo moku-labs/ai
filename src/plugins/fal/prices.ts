@@ -1,11 +1,11 @@
 /**
  * @file fal price table — merge and prefix only. The tables live in the task
  * directories (`video/prices.ts`, `image/prices.ts`, `llm/prices.ts`,
- * `music/prices.ts`, `sfx/prices.ts`, `sprite/prices.ts`, and `call/prices.ts` for
- * the `call` endpoints); this module merges them into the one table every task
+ * `music/prices.ts`, `sfx/prices.ts`, `sprite/prices.ts`, `upscale/prices.ts`, and
+ * `call/prices.ts` for the `call` endpoints); this module merges them into the one table every task
  * reads, with `config.priceOverrides` last.
  * Video keys stay unprefixed; the other tasks' keys carry `image:`, `music:`,
- * `llm:`, `sfx:` or `sprite:`, and the `call` endpoints carry `call:`. The merge
+ * `llm:`, `sfx:`, `sprite:` or `upscale:`, and the `call` endpoints carry `call:`. The merge
  * runs at call time, never at module load, so the import cycle with the task
  * price modules is safe.
  */
@@ -17,6 +17,7 @@ import { musicPrices } from "./music/prices";
 import { sfxPrices } from "./sfx/prices";
 import { spritePrices } from "./sprite/prices";
 import type { FalContext, FalTask } from "./types";
+import { upscalePrices } from "./upscale/prices";
 import { videoPrices } from "./video/prices";
 
 /** Status of a request refused before any charge. */
@@ -45,7 +46,7 @@ export function prefixKeys(
  * Merges every task's bundled table with config overrides (overrides win).
  *
  * @param overrides - `config.priceOverrides`.
- * @returns The effective price table of all six tasks and the `call` endpoints.
+ * @returns The effective price table of all seven tasks and the `call` endpoints.
  * @example
  * ```ts
  * mergePrices({ "image:gpt-image-2.5": 0.07 })["image:gpt-image-2.5"]; // => 0.07
@@ -60,6 +61,7 @@ export function mergePrices(overrides: Record<string, number>): Record<string, n
     ...prefixKeys("music", musicPrices),
     ...prefixKeys("sfx", sfxPrices),
     ...prefixKeys("sprite", spritePrices),
+    ...prefixKeys("upscale", upscalePrices),
     ...prefixKeys("call", callPrices),
     ...llmPriceRows(),
     ...overrides

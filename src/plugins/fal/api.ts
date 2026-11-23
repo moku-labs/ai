@@ -1,8 +1,8 @@
 /**
  * @file fal provider plugin — API factory (`app.fal.info()`, `app.fal.models(task)`).
  * `models` lists each task's catalog with its effective price from the merged
- * table; no network, no key. `models` lists the six fal tasks: the `call` handler is the
- * seventh registered handler but not a `FalTask`, so it has no lister.
+ * table; no network, no key. `models` lists the seven fal tasks: the `call` handler is the
+ * eighth registered handler but not a `FalTask`, so it has no lister.
  */
 import { resolveApiKey } from "./client/http";
 import { uploadPublic } from "./client/upload";
@@ -18,6 +18,8 @@ import { sfxRate } from "./sfx/prices";
 import { spriteAliases } from "./sprite/models";
 import { spritePriceOf } from "./sprite/prices";
 import type { FalApi, FalContext, FalInfo, FalModelInfo, FalTask } from "./types";
+import { upscaleAliases } from "./upscale/models";
+import { upscaleRate } from "./upscale/prices";
 import { falAliases, modelResolution, resolveFalModel } from "./video/models";
 import { lookupPrice } from "./video/prices";
 
@@ -131,6 +133,23 @@ function spriteModelInfos(prices: Readonly<Record<string, number>>): FalModelInf
   }));
 }
 
+/**
+ * Upscale models per second of source video.
+ *
+ * @param prices - The merged price table.
+ * @returns One entry per upscale alias, in catalog order.
+ * @example
+ * ```ts
+ * upscaleModelInfos(mergePrices({}))[2]; // => { id: "proteus", price: { usd: 0.02, per: "second" } }
+ * ```
+ */
+function upscaleModelInfos(prices: Readonly<Record<string, number>>): FalModelInfo[] {
+  return upscaleAliases().map(alias => ({
+    id: alias,
+    price: { usd: upscaleRate(prices, alias), per: "second" }
+  }));
+}
+
 /** The lister of each task. */
 const MODEL_LISTERS: Readonly<Record<FalTask, ModelLister>> = {
   video: videoModels,
@@ -138,14 +157,15 @@ const MODEL_LISTERS: Readonly<Record<FalTask, ModelLister>> = {
   "prompt-gen": promptGenModels,
   music: musicModelInfos,
   sfx: sfxModelInfos,
-  sprite: spriteModelInfos
+  sprite: spriteModelInfos,
+  upscale: upscaleModelInfos
 };
 
 /**
- * Whether a runtime string is one of the six fal tasks.
+ * Whether a runtime string is one of the seven fal tasks.
  *
  * @param task - Any string.
- * @returns True for video, image, prompt-gen, music, sfx or sprite.
+ * @returns True for video, image, prompt-gen, music, sfx, sprite or upscale.
  * @example
  * ```ts
  * isFalTask("audio"); // => false

@@ -35,7 +35,7 @@ the three-layer Moku model).
   dedups the item before anything is billed. The guarantee is
   `spend ≤ done items + items dispatching at kill`.
 - **Any task × any provider.** Task plugins own capability contracts
-  (`voiceover`, `dialogue`, `translate`, `prompt-gen`, `image`, `video`, `music`, `sfx`, `sprite`, `asset`); provider plugins
+  (`voiceover`, `dialogue`, `translate`, `prompt-gen`, `image`, `video`, `music`, `upscale`, `sfx`, `sprite`, `asset`); provider plugins
   (`elevenlabs`, `openai`, `codex`, `claude`, `fal`, `apimodels`, `ark`) register handlers with a dumb registry. Neither imports the other — consumer apps
   add both without touching the framework.
 - **Incremental by default.** Every item has an artifact key (`sha256` of task,
@@ -171,6 +171,7 @@ plugins mount their APIs on the app by name (`app.runner`, `app.cli`, …).
 | [`image`](./src/plugins/image/README.md) | Standard | regular (`app.image`) | Owns the `"image"` task contract + one-off facade. |
 | [`video`](./src/plugins/video/README.md) | Standard | regular (`app.video`) | Owns the `"video"` task contract (`execute` or `submit` + `poll`) + one-off facade. |
 | [`music`](./src/plugins/music/README.md) | Standard | regular (`app.music`) | Owns the `"music"` task contract (`execute` or `submit` + `poll`) + one-off facade. `MusicRequest.model` is required. |
+| [`upscale`](./src/plugins/upscale/README.md) | Standard | regular (`app.upscale`) | Owns the `"upscale"` task contract (`execute` or `submit` + `poll`): one video in, the same video upscaled out. One-off facade; `UpscaleRequest.model` is required, and `estimate` accepts a `$ref` / `$file` video. |
 | [`sfx`](./src/plugins/sfx/README.md) | Standard | regular (`app.sfx`) | Owns the `"sfx"` task contract (`execute` only, always mp3) + one-off facade. `SfxRequest.model` is required. |
 | [`sprite`](./src/plugins/sprite/README.md) | Standard | regular (`app.sprite`) | Owns the `"sprite"` task contract — cut a `$ref`'d image into a trimmed, transparent PNG — + one-off facade and the pixel step `processSprite`. |
 | [`asset`](./src/plugins/asset/README.md) | Standard | regular (`app.asset`) | Owns the `"asset"` task contract — register a portrait with a provider, get an `AssetRecord` that video items `$ref` — + one-off facade. |
@@ -368,6 +369,19 @@ default provider of `music` stays `fal`. The rules are in the
     task: music
     provider: elevenlabs
     input: { model: music_v2_5, prompt: "tense synth pulse", lengthMs: 30000 }
+```
+
+### Upscaling a finished video
+
+An `upscale` item takes one video and returns the same video at a higher resolution. `model`,
+`factor` (1 to 4) and `seconds` (the source length, which drives the price) are required. The
+`video` is a `$ref` to another item or a `$file` on disk:
+
+```yaml
+  - id: up
+    task: upscale
+    provider: fal
+    input: { model: starlight-fast-2, video: { $ref: clean }, factor: 1.5, seconds: 62.4 }
 ```
 
 ### Game assets: sound effects and sprites
@@ -571,6 +585,8 @@ Defaults below are the shipped values; see each plugin's README for full semanti
 | | `pollIntervalMs` | `number` | `5000` |
 | `music` | `defaultProvider` | `string` | `"fal"` |
 | | `pollIntervalMs` | `number` | `5000` |
+| `upscale` | `defaultProvider` | `string` | `"fal"` |
+| | `pollIntervalMs` | `number` | `5000` |
 | `sfx` | `defaultProvider` | `string` | `"elevenlabs"` |
 | `sprite` | `defaultProvider` | `string` | `"fal"` |
 | `asset` | `defaultProvider` | `string` | `"ark"` |
@@ -700,6 +716,7 @@ flowchart LR
     IM["image"]
     VI["video"]
     MU["music"]
+    UP["upscale"]
     AS["asset"]
   end
   subgraph PROV["provider plugins"]
@@ -721,17 +738,17 @@ flowchart LR
   classDef core fill:#0b7285,stroke:#08525f,color:#fff;
   classDef reg fill:#1864ab,stroke:#0d3d6e,color:#fff;
   class LOG,ENV,J,S,L core
-  class REG,BF,RN,VO,DL,TR,PG,IM,VI,MU,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
+  class REG,BF,RN,VO,DL,TR,PG,IM,VI,MU,UP,AS,EL,OA,CX,CL,FAL,AM,ARK,CO,CLI reg
 ```
 
 An arrow from a group means every plugin in it has that `depends` edge: each task and
 provider plugin depends on `registry` only.
 
 The five core plugins come first, from `src/config.ts`: `log → env → journal → store →
-limits`. They have no `depends`. The 23 regular plugins follow in `src/index.ts`, every
+limits`. They have no `depends`. The 24 regular plugins follow in `src/index.ts`, every
 plugin after its dependencies:
 `registry → buildfile → runner → voiceover → dialogue → translate → promptGen → image →
-video → music → sfx → sprite → asset → elevenlabs → openai → anthropic → codex → claude →
+video → music → upscale → sfx → sprite → asset → elevenlabs → openai → anthropic → codex → claude →
 fal → apimodels → ark → compose → cli`. Provider plugins register their handlers in `onInit`, so by
 the time `app.start()` resolves, every task facade sees its providers — and the
 *first*-registered provider is each task's implicit default.
@@ -789,6 +806,7 @@ bun run test:coverage      # unit + integration with coverage
   [image](./src/plugins/image/README.md) ·
   [video](./src/plugins/video/README.md) ·
   [music](./src/plugins/music/README.md) ·
+  [upscale](./src/plugins/upscale/README.md) ·
   [sfx](./src/plugins/sfx/README.md) ·
   [sprite](./src/plugins/sprite/README.md) ·
   [elevenlabs](./src/plugins/elevenlabs/README.md) ·

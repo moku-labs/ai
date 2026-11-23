@@ -29,6 +29,7 @@ export { sfxPlugin } from "./sfx";
 export { spritePlugin } from "./sprite";
 export { storePlugin } from "./store";
 export { translatePlugin } from "./translate";
+export { upscalePlugin } from "./upscale";
 export { videoPlugin } from "./video";
 export { voiceoverPlugin } from "./voiceover";
 
@@ -57,5 +58,6 @@ export * as Sfx from "./sfx/types";
 export * as Sprite from "./sprite/types";
 export * as Store from "./store/types";
 export * as Translate from "./translate/types";
+export * as Upscale from "./upscale/types";
 export * as Video from "./video/types";
 export * as Voiceover from "./voiceover/types";

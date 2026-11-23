@@ -5,6 +5,7 @@ import type { EnvProvider } from "@moku-labs/common";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { coreConfig, createCore } from "../../../../config";
+import { buildfilePlugin } from "../../../buildfile";
 import { imagePlugin } from "../../../image";
 import type { ImageHandler } from "../../../image/contract";
 import { musicPlugin } from "../../../music";
@@ -12,6 +13,7 @@ import type { MusicHandler } from "../../../music/contract";
 import { promptGenPlugin } from "../../../promptGen";
 import type { PromptGenHandler } from "../../../promptGen/contract";
 import { registryPlugin } from "../../../registry";
+import { runnerPlugin } from "../../../runner";
 import { sfxPlugin } from "../../../sfx";
 import type { SfxHandler } from "../../../sfx/contract";
 import { spritePlugin } from "../../../sprite";
@@ -28,7 +30,7 @@ import type { FalContext, FalModelInfo } from "../../types";
 import { createVideoHandler } from "../../video/handler";
 
 // ---------------------------------------------------------------------------
-// Integration: one fal plugin registers six tasks in onInit; the image,
+// Integration: one fal plugin registers seven tasks in onInit; the image,
 // prompt-gen, music, sfx and sprite facades drive them through a fake fal
 // queue and a fake OpenRouter endpoint. fetch is stubbed at the boundary; no
 // network. The sprite pixel step runs real sharp.
@@ -97,7 +99,72 @@ function buildFramework(dbPath: string, requestLog: string) {
   });
 }
 
-describe("fal six-task integration", () => {
+const UPSCALE_QUEUE = "https://queue.fal.run/topaz/upscale/video/generative";
+const UPSCALE_POST_URL = UPSCALE_QUEUE;
+const UPSCALE_UPLOAD_URL =
+  "https://rest.alpha.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3";
+
+/** The one-item upscale build file: the intake item, its source a local `$file`. */
+const UPSCALE_BUILD_FILE = `version: 1
+name: upscale
+items:
+  - id: up
+    task: upscale
+    provider: fal
+    input:
+      model: starlight-fast-2
+      video:
+        $file: clean.mp4
+      factor: 1.5
+      seconds: 62.4
+`;
+
+/** One fetch the fake fal saw. */
+type SeenCall = { method: string; url: string; body: RequestInit["body"] };
+
+/**
+ * Stubs fetch as a fake fal for one upscale job: storage upload, queue POST,
+ * status, result and the CDN download of `video`.
+ *
+ * @param video - The bytes the CDN serves.
+ * @returns Every request seen, in order.
+ */
+function stubUpscaleFal(video: Uint8Array): SeenCall[] {
+  const seen: SeenCall[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
+      seen.push({ method: init?.method ?? "GET", url, body: init?.body });
+
+      if (url === UPSCALE_UPLOAD_URL) {
+        return json(200, {
+          upload_url: "https://upload.fal.test/put/1",
+          file_url: "https://cdn.fal.test/file/clean.mp4"
+        });
+      }
+      if (url.startsWith("https://upload.fal.test/")) return new Response("", { status: 200 });
+      if (url === UPSCALE_POST_URL) {
+        return json(200, {
+          request_id: "up-1",
+          status_url: `${UPSCALE_QUEUE}/requests/up-1/status`,
+          response_url: `${UPSCALE_QUEUE}/requests/up-1`
+        });
+      }
+      if (url === `${UPSCALE_QUEUE}/requests/up-1/status`)
+        return json(200, { status: "COMPLETED" });
+      if (url === `${UPSCALE_QUEUE}/requests/up-1`) {
+        return json(200, { video: { url: "https://v3.fal.media/files/up.mp4" } });
+      }
+      if (url === "https://v3.fal.media/files/up.mp4") {
+        return new Response(video, { status: 200, headers: { "content-type": "video/mp4" } });
+      }
+      throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`);
+    })
+  );
+  return seen;
+}
+
+describe("fal seven-task integration", () => {
   let tempDir: string;
   let dbPath: string;
   let requestLog: string;
@@ -113,11 +180,20 @@ describe("fal six-task integration", () => {
     vi.unstubAllGlobals();
   });
 
-  it("registers video, image, prompt-gen, music, sfx, sprite and call under fal in onInit", async () => {
+  it("registers video, image, prompt-gen, music, sfx, sprite, upscale and call under fal in onInit", async () => {
     const app = buildFramework(dbPath, requestLog).createApp();
     await app.start();
 
-    for (const task of ["video", "image", "prompt-gen", "music", "sfx", "sprite", "call"]) {
+    for (const task of [
+      "video",
+      "image",
+      "prompt-gen",
+      "music",
+      "sfx",
+      "sprite",
+      "upscale",
+      "call"
+    ]) {
       expect(app.registry.providers(task)).toContain("fal");
       expect(app.registry.resolve(task, "fal")).toBeTypeOf("object");
     }
@@ -142,6 +218,11 @@ describe("fal six-task integration", () => {
     expect(music.map(model => model.id)).toEqual(["elevenlabs-music-v2.5", "stable-audio-2.5"]);
     expect(app.fal.models("sfx").map(model => model.id)).toEqual(["elevenlabs-sfx-v2"]);
     expect(app.fal.models("sprite").map(model => model.id)).toEqual(["birefnet", "none"]);
+    expect(app.fal.models("upscale").map(model => model.id)).toEqual([
+      "starlight-fast-2",
+      "starlight-precise-2.6",
+      "proteus"
+    ]);
 
     await app.stop();
   });
@@ -271,6 +352,55 @@ describe("fal six-task integration", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://fal.run/openrouter/router/openai/v1/chat/completions"
     );
+
+    await app.stop();
+  });
+
+  it("an upscale build item runs through app.runner: one upload, the Topaz body, the mp4 stored", async () => {
+    // Bug: the item plans at another price, the video is not uploaded to storage, or the stored bytes are not the returned video.
+    const source = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 1]);
+    const upscaled = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 2, 3]);
+    writeFileSync(path.join(tempDir, "clean.mp4"), source);
+    writeFileSync(path.join(tempDir, "up.moku.yaml"), UPSCALE_BUILD_FILE);
+    const seen = stubUpscaleFal(upscaled);
+    const probe = coreConfig.createPlugin("probe", {
+      api: ctx => ({ journal: ctx.journal })
+    });
+    const app = createCore(coreConfig, {
+      plugins: [registryPlugin, buildfilePlugin, runnerPlugin, falPlugin, probe],
+      pluginConfigs: {
+        journal: { path: dbPath },
+        store: { dir: path.join(tempDir, "store") },
+        env: { providers: [fixtureEnvProvider] },
+        runner: { retryBaseMs: 1, pollIntervalMs: 1 },
+        fal: { pollIntervalMs: 0 }
+      }
+    }).createApp();
+    await app.start();
+
+    const files = path.join(tempDir, "*.moku.yaml");
+    expect(await app.runner.estimate({ files })).toMatchObject({ totalUsd: 3.744 });
+    const result = await app.runner.run({ files });
+
+    expect(result).toMatchObject({ status: "done", totals: { total: 1, done: 1 } });
+    const [item] = app.probe.journal.listItems(result.runId, { status: "done" });
+    expect(item?.actualCostUsd).toBe(3.744);
+    expect(item?.mimeType).toBe("video/mp4");
+    const exported = await app.runner.export({ outDir: path.join(tempDir, "out") });
+    expect(new Uint8Array(readFileSync(exported.files[0]?.path ?? ""))).toEqual(upscaled);
+
+    // The source bytes went to storage once; the POST names the stored URL next to the fixed fields.
+    const put = seen.find(call => call.url.startsWith("https://upload.fal.test/"));
+    expect(put?.body).toEqual(source);
+    expect(seen.filter(call => call.url === UPSCALE_UPLOAD_URL)).toHaveLength(1);
+    const posts = seen.filter(call => call.method === "POST" && call.url === UPSCALE_POST_URL);
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0]?.body))).toEqual({
+      model: "Starlight Fast 2",
+      H264_output: true,
+      upscale_factor: 1.5,
+      video_url: "https://cdn.fal.test/file/clean.mp4"
+    });
 
     await app.stop();
   });

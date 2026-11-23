@@ -7,6 +7,16 @@ All notable changes to `@moku-labs/ai` are listed here. The format follows
 
 ### Added
 
+- **upscale: a new task, with the fal Topaz provider.** `task: upscale` takes one video and returns the
+  same video upscaled: input `{ model, video, factor (1 to 4), seconds, params? }`, where `video` is a
+  `$ref` or a `$file`. The new `upscale` plugin owns the contract (execute, or submit + poll) and the
+  one-off facade `app.upscale.generate / estimate / providers`; `estimate` also accepts a `$ref` /
+  `$file` video, as the runner estimates before references resolve. New types `Upscale.UpscaleFile`,
+  `Upscale.UpscaleRequest`, `Upscale.UpscaleEstimateRequest`, `Upscale.UpscaleResult`,
+  `Upscale.UpscaleJobPoll`, `Upscale.UpscaleHandler`. The fal handler `("upscale", "fal")` runs the
+  Topaz models `starlight-fast-2`, `starlight-precise-2.6` and `proteus`, priced per second of source
+  video (rows `upscale:<alias>`, overridable in `fal.priceOverrides`), and `app.fal.models("upscale")`
+  lists them. The runner, journal and store need no change.
 - **fal: Gemini Omni 1.2 Flash reference-to-video.** The alias `gemini-omni-1.2-flash-ref` posts to
   `google/gemini-omni-flash/v1.2/reference-to-video` with the 1.1 body: the first frame leads `image_urls`,
   then up to 9 refs, and one `reference_video_urls` clip of at most 3 s (Google's rule for an 11–15 s clip;

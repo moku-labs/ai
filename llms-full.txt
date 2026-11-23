@@ -11,7 +11,7 @@ Contents:
 3. Core plugins: journal, store, limits (full types + APIs)
 4. Regular plugins: registry, buildfile, runner, voiceover, dialogue, translate, promptGen,
    image, video, elevenlabs, openai, codex, claude, compose, cli, asset, ark, music, fal,
-   apimodels, sfx, sprite (full types + APIs)
+   apimodels, sfx, sprite, upscale (full types + APIs)
 5. Complete event catalog
 6. Config schema (every field, type, default)
 7. Complete usage examples
@@ -47,7 +47,7 @@ Layer 2 — src/index.ts:
 const framework = createCore(coreConfig, {
   plugins: [                                  // regular plugins, dependency order (dialogue after voiceover)
     registryPlugin, buildfilePlugin, runnerPlugin, voiceoverPlugin, dialoguePlugin, translatePlugin,
-    promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, sfxPlugin, spritePlugin, assetPlugin,
+    promptGenPlugin, imagePlugin, videoPlugin, musicPlugin, upscalePlugin, sfxPlugin, spritePlugin, assetPlugin,
     elevenlabsPlugin, openaiPlugin, codexPlugin, claudePlugin, falPlugin,
     apimodelsPlugin, arkPlugin, composePlugin, cliPlugin
   ],
@@ -97,7 +97,7 @@ stop → process.exit(code). Project config:
 Key facts:
 - Regular plugin APIs mount on the app BY NAME: app.registry, app.buildfile,
   app.runner, app.voiceover, app.dialogue, app.translate, app.promptGen, app.image, app.video,
-  app.music, app.sfx, app.sprite, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
+  app.music, app.upscale, app.sfx, app.sprite, app.asset, app.elevenlabs, app.openai, app.codex, app.claude, app.fal,
   app.apimodels, app.ark, app.compose, app.cli. Core APIs mount too (app.limits, ...).
   There is NO `app.plugins.<name>` indirection.
 - App base methods: start(), stop(), emit(), require(), has(). There is NO `app.on` —
@@ -120,7 +120,7 @@ Value exports:
   claudePlugin, cliPlugin, codexPlugin, composePlugin, dialoguePlugin, elevenlabsPlugin, falPlugin,
   imagePlugin, journalPlugin, limitsPlugin, musicPlugin, openaiPlugin, promptGenPlugin,
   registryPlugin, runnerPlugin, sfxPlugin, spritePlugin, storePlugin, translatePlugin,
-  videoPlugin, voiceoverPlugin
+  upscalePlugin, videoPlugin, voiceoverPlugin
 - Error classes as runtime values, for `instanceof` (src/index.ts, `export * as`):
   ElevenlabsErrors, OpenaiErrors, ArkErrors, FalErrors, ApimodelsErrors (each
   RetryableProviderError, TerminalProviderError, FlaggedProviderError; ElevenlabsErrors also
@@ -135,6 +135,9 @@ Value exports:
   ArkApi, ArkInfo, ArkRegion, EstimateRequest, error class types)
 - Type namespace Dialogue (DialogueLine, DialogueRequest, DialogueSettings, DialogueResult,
   DialogueLineTiming, DialogueHandler, DialogueApi, DialogueContext, Config, RegistryApi)
+- Type namespace Upscale (UpscaleFile, UpscaleRequest, UpscaleEstimateInput,
+  UpscaleEstimateRequest, UpscaleResult, UpscaleJobPoll, UpscaleHandler, UpscaleApi,
+  UpscaleContext, Config, RegistryApi)
 - Type namespaces Music (MusicChunk, MusicRequest, MusicResult, MusicJobPoll,
   MusicHandler, MusicApi, MusicContext, Config, RegistryApi) and Fal (Config, State,
   UploadMode, FalApi, FalInfo, FalTask, FalModelInfo, LocalFile, RetryHint,
@@ -161,7 +164,7 @@ Value exports:
 
 Type namespaces (import type { X } from "@moku-labs/ai"; access as X.TypeName):
 - Journal, Store, Limits, Buildfile, Runner, Voiceover, Dialogue, Translate, PromptGen, Image,
-  Video, Music, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose,
+  Video, Music, Upscale, Asset, Elevenlabs, Openai, Codex, Claude, Fal, Apimodels, Ark, Compose,
   Cli
 (registry is Nano tier and ships no types.ts — its 4-method surface is declared once as
 `RegistryApi` in `src/plugins/registry/index.ts`, and each dependent's types.ts
@@ -1952,14 +1955,106 @@ Errors: `[ai] No music provider named "<name>" is registered.\n  Available: <lis
 (also for a value that fails isMusicHandler).
 
 --------------------------------------------------------------------------------
+4.17.1 upscale — app.upscale (Standard tier; depends: [registryPlugin]; stateless)
+--------------------------------------------------------------------------------
+Owns the "upscale" task contract: one video file in, the same video upscaled out. A copy of
+music in shape. A handler has `estimate` plus either `execute`, or the async pair
+`submit` + `poll` (or both). The runner prefers `submit`/`poll` and journals the job id;
+the facade `generate` prefers `execute`, else submits and polls every `pollIntervalMs`.
+The ONE audited cast is behind `isUpscaleHandler` (module export, not on app.upscale).
+contract.ts imports nothing. The runner stores `video` and maps video/mp4 to `.mp4`.
+
+`UpscaleRequest.model` is REQUIRED (the runner hashes the input as written). At plan time
+the runner estimates before references resolve, so `UpscaleEstimateRequest.video` may still
+be `{ $ref }` or `{ $file }`; `generate`, `execute` and `submit` get a resolved file.
+
+Contract (src/plugins/upscale/contract.ts; `Upscale.*` namespace):
+
+```ts
+export type UpscaleFile = { path: string; mimeType: string; hash: string };
+
+export type UpscaleRequest = {
+  /** The source video. */
+  video: UpscaleFile;
+  /** Provider-scoped model alias, e.g. "starlight-fast-2". Required: price, endpoint and output depend on it. */
+  model: string;
+  /** Upscale factor, 1–4 (1.5 turns 720×1280 into 1080×1920). */
+  factor: number;
+  /** Source length in seconds; drives the estimate and `costUsd`. */
+  seconds: number;
+  /** Provider params; each provider documents which keys it reads. */
+  params?: Record<string, unknown>;
+};
+
+export type UpscaleEstimateInput = UpscaleFile | { $ref: string } | { $file: string };
+export type UpscaleEstimateRequest = Omit<UpscaleRequest, "video"> & { video: UpscaleEstimateInput };
+
+export type UpscaleResult = {
+  video: Uint8Array;
+  mimeType: string;
+  costUsd: number;
+  /** Metadata only, never a payload echo (model, endpoint, requestId, seconds, factor). */
+  meta?: Record<string, unknown>;
+};
+
+export type UpscaleJobPoll =
+  | { state: "pending" }
+  | ({ state: "done" } & UpscaleResult)
+  | { state: "failed"; error: unknown };
+
+export type UpscaleHandler = {
+  estimate(request: UpscaleEstimateRequest): { usd: number };
+  execute?(request: UpscaleRequest, opts: { signal?: AbortSignal }): Promise<UpscaleResult>;
+  submit?(request: UpscaleRequest, opts: { signal?: AbortSignal }): Promise<{ jobId: string }>;
+  poll?(
+    jobId: string,
+    request: UpscaleRequest,
+    opts: { signal?: AbortSignal }
+  ): Promise<UpscaleJobPoll>;
+};
+```
+
+Plugin types (src/plugins/upscale/types.ts):
+
+```ts
+export type Config = {
+  /** Provider used by the facade when the caller names none. Default: "fal". */
+  defaultProvider: string;
+  /** Facade poll cadence for submit/poll providers, ms. Default: 5000. */
+  pollIntervalMs: number;
+};
+
+export type UpscaleApi = {
+  // One-off, NOT journaled. execute when present, else submit + poll every
+  // config.pollIntervalMs; a failed job throws its error as-is; abort rejects with the reason.
+  generate(
+    request: UpscaleRequest,
+    opts?: { provider?: string; signal?: AbortSignal }
+  ): Promise<UpscaleResult>;
+  estimate(request: UpscaleEstimateRequest, opts?: { provider?: string }): { usd: number };
+  providers(): string[];     // registry.providers("upscale"), registration order
+};
+```
+
+Build file:
+
+```yaml
+- { id: up, task: upscale, provider: fal, input: { model: starlight-fast-2, video: { $ref: clean }, factor: 1.5, seconds: 62.4 } }
+```
+
+Errors: `[ai] No upscale provider named "<name>" is registered.\n  Available: <list or "none">.`
+(also for a value that fails isUpscaleHandler).
+
+--------------------------------------------------------------------------------
 4.18 fal — app.fal (Complex tier; depends: [registryPlugin])
 --------------------------------------------------------------------------------
 Every fal-hosted task over one client (client/http.ts, client/queue.ts,
 client/upload.ts), one FAL_KEY, one upload cache and one merged price table. onInit
-registers seven handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
-("music","fal"), ("sfx","fal"), ("sprite","fal"), ("call","fal"). Emits no events. Each
-task directory (video/, image/, llm/, music/, sfx/, sprite/, call/) owns its models and
-prices. `call` is a handler, not a FalTask: app.fal.models(task) stays at six tasks.
+registers eight handlers: ("video","fal"), ("image","fal"), ("prompt-gen","fal"),
+("music","fal"), ("sfx","fal"), ("sprite","fal"), ("upscale","fal"), ("call","fal"). Emits
+no events. Each task directory (video/, image/, llm/, music/, sfx/, sprite/, upscale/, call/)
+owns its models and prices. `call` is a handler, not a FalTask: app.fal.models(task) stays at
+seven tasks.
 
 - call: estimate + submit + poll. One fal queue endpoint, as it is. Request
   { endpoint, input }: endpoint is the path after the queue host
@@ -2092,7 +2187,7 @@ export type FalInfo = {
   models: string[];
 };
 
-export type FalTask = "video" | "image" | "prompt-gen" | "music" | "sfx" | "sprite";
+export type FalTask = "video" | "image" | "prompt-gen" | "music" | "sfx" | "sprite" | "upscale";
 
 export type FalModelInfo =
   | { id: string; price: { inputPerM: number; outputPerM: number } }
@@ -2430,6 +2525,10 @@ music:
   defaultProvider: string = "fal"
   pollIntervalMs: number = 5000                — facade poll cadence (the runner uses runner.pollIntervalMs)
 
+upscale:
+  defaultProvider: string = "fal"
+  pollIntervalMs: number = 5000                — facade poll cadence (the runner uses runner.pollIntervalMs)
+
 sfx:
   defaultProvider: string = "elevenlabs"
 
@@ -2748,6 +2847,7 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] Compose could not produce a valid build file after <n> attempts.\n  Refine the prompt or write the build file manually with "moku new".
 - [ai] No asset provider named "<name>" is registered.\n  Available: <list or "none">.
 - [ai] No music provider named "<name>" is registered.\n  Available: <list or "none">.
+- [ai] No upscale provider named "<name>" is registered.\n  Available: <list or "none">.
   (same shape for sfx / sprite)
 - [ai] No image provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not an ImageHandler)
 - [ai] No video provider named "<name>" is registered.\n  Available: <list or "none">.  (also for a registered value that is not a VideoHandler)
@@ -2777,7 +2877,7 @@ Pinned message catalog (verbatim, interpolations in <>):
 - [ai] Claude params.images must be image files.\n  Pass { path, mimeType, hash } for every image.
 - [ai] Claude params.responseSchema must be a JSON schema object.\n  Pass the schema as a plain object.
 - [ai] Claude params.reasoning must be off, low, medium or high.\n  Got "<value>".
-- [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music, sfx, sprite.
+- [ai] Unknown fal task "<task>".\n  Use one of: video, image, prompt-gen, music, sfx, sprite, upscale.
 - [ai] No price for fal <task> model "<id>".\n  Add it to fal.priceOverrides.  (image, music, sfx, sprite, prompt-gen)
 - [ai] Not an asset record: <reason>.\n  Expected JSON with assetId, provider, account, groupId, registeredAt.
 - [ai] ark refused an image with a face: <code>.\n  Use a Seedream image made by provider ark on this account, bytes unchanged, or an asset item.
@@ -2811,6 +2911,7 @@ everything it depends on):
   7. image         (deps: registry)                      Standard
   8. video         (deps: registry)                      Standard
   9. music         (deps: registry)                      Standard
+     upscale       (deps: registry), registered right after music  Standard
  10. sfx           (deps: registry)                      Standard
  11. sprite        (deps: registry)                      Standard
  12. asset         (deps: registry)                      Standard
@@ -2823,7 +2924,7 @@ everything it depends on):
  16. claude        (deps: registry) — ("prompt-gen","claude")                       Complex
  17. fal           (deps: registry) — ("video","fal"), ("image","fal"),
                     ("prompt-gen","fal"), ("music","fal"), ("sfx","fal"),
-                    ("sprite","fal")                                                 Complex
+                    ("sprite","fal"), ("upscale","fal")                              Complex
  18. apimodels     (deps: registry) — ("video","apimodels")                         Complex
  19. ark           (deps: registry) — ("video","ark"), ("asset","ark"),
                     ("image","ark")                                                  Complex
@@ -2833,7 +2934,7 @@ everything it depends on):
 ASCII graph (A --> B means A depends on B):
 
   runner ----> registry        runner ----> buildfile
-  voiceover, dialogue, translate, promptGen, image, video, music, sfx, sprite, asset -> registry
+  voiceover, dialogue, translate, promptGen, image, video, music, upscale, sfx, sprite, asset -> registry
   elevenlabs, openai, codex, claude, fal, apimodels, ark ---------------> registry
   compose ---> buildfile       compose ---> promptGen
   cli -------> runner          cli --------> buildfile    cli --------> compose
@@ -2851,7 +2952,8 @@ registers after fal and before ark (a second video provider; fal stays the defau
 asset; fal registers ("music","fal"), so fal is the default (and only) music provider.
 dialogue is registered right after voiceover; elevenlabs registers ("dialogue","elevenlabs") in onInit,
 so elevenlabs is the default (and only built-in) dialogue provider.
-sfx and sprite are registered right after music. elevenlabs registers ("sfx","elevenlabs")
+upscale is registered right after music; fal registers ("upscale","fal"), so fal is the default (and only built-in) upscale provider.
+sfx and sprite are registered right after upscale. elevenlabs registers ("sfx","elevenlabs")
 before fal registers ("sfx","fal"), so elevenlabs is the default sfx provider; fal is the
 only sprite provider.
 
