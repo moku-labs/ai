@@ -88,7 +88,11 @@ export const videoPrices: Readonly<Record<string, number>> = {
   "gemini-omni-1.1-flash-ref@360p": 0.03,
   "gemini-omni-1.1-flash-ref@720p": 0.1,
   "gemini-omni-1.1-flash-ref@1080p": 0.15,
-  "gemini-omni-1.1-flash-ref@4k": 0.3
+  "gemini-omni-1.1-flash-ref@4k": 0.3,
+  "gemini-omni-1.2-flash-ref@360p": 0.0273,
+  "gemini-omni-1.2-flash-ref@720p": 0.0819,
+  "gemini-omni-1.2-flash-ref@1080p": 0.1229,
+  "gemini-omni-1.2-flash-ref@4k": 0.2457
 };
 
 /** Cost precision: results are rounded to micro-dollars so 5 x 0.06 is 0.3, not 0.30000000000000004. */

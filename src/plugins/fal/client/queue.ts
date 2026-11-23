@@ -4,7 +4,12 @@
  * handlers; the video handler keeps its own poll and imports the codec through
  * `../video/job.ts`. fal's status and result URLs are used verbatim.
  */
-import { FlaggedProviderError, RetryableProviderError, TerminalProviderError } from "../errors";
+import {
+  FlaggedProviderError,
+  RegionBlockedError,
+  RetryableProviderError,
+  TerminalProviderError
+} from "../errors";
 import type { FalContext, FalProviderError } from "../types";
 import {
   falFetch,
@@ -403,7 +408,9 @@ export async function waitForJob(ctx: FalContext, job: FalJob, call: FalCall): P
 
 /**
  * Whether a result or download failure is fal's verdict on the job: a
- * content-policy flag, or a terminal 400 / 422.
+ * content-policy flag, a terminal 400 / 422, or fal's region answer (the job
+ * ends `failed` with a retryable error, so the next attempt re-submits it
+ * instead of polling the same job again).
  *
  * @param error - What the collect step threw.
  * @returns True when the job should end as `failed`.
@@ -412,8 +419,10 @@ export async function waitForJob(ctx: FalContext, job: FalJob, call: FalCall): P
  * isJobVerdict(new TerminalProviderError("[ai] fal rejected the request (HTTP 422).", 422)); // => true
  * ```
  */
-function isJobVerdict(error: unknown): error is FlaggedProviderError | TerminalProviderError {
-  if (error instanceof FlaggedProviderError) return true;
+function isJobVerdict(
+  error: unknown
+): error is FlaggedProviderError | TerminalProviderError | RegionBlockedError {
+  if (error instanceof FlaggedProviderError || error instanceof RegionBlockedError) return true;
   return error instanceof TerminalProviderError && JOB_VERDICT_STATUSES.has(error.status);
 }
 
